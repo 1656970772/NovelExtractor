@@ -11,7 +11,7 @@ paths:
 window:
   size: 5
   stride: 4
-  max_windows: 60
+  max_windows: 5
   overlap_commit_policy: "exclude_leading_overlap"
 
 llm:
@@ -62,7 +62,7 @@ template_groups:
     max_full_templates_per_call: 1
 
 write_policy:
-  require_chapter_evidence: true
+  require_chapter_evidence: false
   skip_empty_model_updates: true
   create_missing_output_file: true
   backup_before_write: true
@@ -72,6 +72,11 @@ console:
   verbose: false
   show_skipped: true
 
+logging:
+  enabled: true
+  log_dir: "E:/AI_Projects/CultivationWorld/docs/世界观参考/凡人修仙传/.novel_extractor/logs"
+  retention_files: 20
+
 token_saving:
   prompt_cache:
     enabled: true
@@ -79,7 +84,7 @@ token_saving:
     diagnose_prefix_changes: true
   tool_surface:
     profile: "economy"
-    economy_enabled_tools: ["grep", "read_file", "write_file", "edit_file", "multi_edit"]
+    economy_enabled_tools: ["grep", "read_file", "write_file", "edit_file"]
   tool_outputs:
     read_file_default_limit: 800
     grep_max_matches: 80

@@ -21,7 +21,7 @@ class Pricing:
     cache_hit: float
     input: float
     output: float
-    currency: str = "¥"
+    currency: str = "CNY"
 
     def cost(self, usage: Usage) -> float:
         cache_miss_tokens = usage.cache_miss_tokens
@@ -34,7 +34,7 @@ class Pricing:
         ) / 1_000_000
 
 
-DEFAULT_DEEPSEEK_PRICING = Pricing(cache_hit=0.02, input=1.0, output=2.0, currency="¥")
+DEFAULT_DEEPSEEK_PRICING = Pricing(cache_hit=0.02, input=1.0, output=2.0, currency="CNY")
 
 
 class TokenBudgetExceeded(RuntimeError):
@@ -131,8 +131,8 @@ class UsageTracker:
         avg_rate = _percent(session_hit, session_hit + session_miss)
 
         parts = [
-            f"本次命中 {turn_rate}",
-            f"平均命中 {avg_rate}",
+            f"本次缓存命中 {turn_rate}",
+            f"平均缓存命中 {avg_rate}",
             f"会话 tokens {session_total:,}",
             f"本次 tokens {usage.total_tokens:,}",
         ]
@@ -144,7 +144,7 @@ class UsageTracker:
         avg_rate = _percent(self.cache_hit_tokens, self.cache_hit_tokens + self.cache_miss_tokens)
         parts = [
             f"请求数 {self.request_count}",
-            f"平均命中 {avg_rate}",
+            f"平均缓存命中 {avg_rate}",
             f"会话 tokens {self.total_tokens:,}",
             f"缓存 {self.cache_hit_tokens:,} hit / {self.cache_miss_tokens:,} miss",
         ]

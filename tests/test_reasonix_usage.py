@@ -51,8 +51,8 @@ def test_usage_tracker_formats_reasonix_style_console_metrics():
     tracker.record(first)
     line = tracker.format_turn_line(second, pricing)
 
-    assert "本次命中 90.00%" in line
-    assert "平均命中 85.00%" in line
+    assert "本次缓存命中 90.00%" in line
+    assert "平均缓存命中 85.00%" in line
     assert "会话 tokens 2,150" in line
     assert "本次 tokens 1,050" in line
     assert "本次费用 ¥0.0002" in line

@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from novel_extractor.reasonix_compat.file_tools import WorkspaceTools
+from novel_extractor.reasonix_compat.tool_factory import WorkspaceTools
 from novel_extractor.reasonix_compat.tool_budget import ToolOutputBudget
 from novel_extractor.reasonix_compat.tooling import ToolExecutionLedger
 

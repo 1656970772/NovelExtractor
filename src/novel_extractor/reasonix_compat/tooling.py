@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from novel_extractor.reasonix_compat.tool_budget import ToolOutputBudget
 from novel_extractor.reasonix_compat.usage import Usage
@@ -90,6 +90,7 @@ class ToolRegistry:
         self._tools: dict[str, Tool] = {}
         self._order: list[str] = []
         self.output_budget = output_budget
+        self._event_callback: Callable[[str, dict[str, Any], str, bool], None] | None = None
 
     def add(self, tool: Tool) -> None:
         if tool.name not in self._tools:
@@ -107,9 +108,16 @@ class ToolRegistry:
             parsed = json.loads(args)
         else:
             parsed = args
-        result = self.get(name).execute(parsed)
-        if self.output_budget is not None:
-            return self.output_budget.apply(name, result)
+        try:
+            result = self.get(name).execute(parsed)
+            if self.output_budget is not None:
+                result = self.output_budget.apply(name, result)
+        except Exception as exc:
+            if self._event_callback is not None:
+                self._event_callback(name, parsed, f"error: {exc}", False)
+            raise
+        if self._event_callback is not None:
+            self._event_callback(name, parsed, result, True)
         return result
 
     def openai_tools(self) -> list[dict[str, Any]]:
@@ -131,3 +139,6 @@ class ToolRegistry:
 
     def names(self) -> list[str]:
         return list(self._order)
+
+    def set_event_callback(self, callback: Callable[[str, dict[str, Any], str, bool], None]) -> None:
+        self._event_callback = callback

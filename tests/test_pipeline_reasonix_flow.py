@@ -1,6 +1,8 @@
 """Pipeline tests for Reasonix-style tool writing."""
 
 import textwrap
+import json
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -11,6 +13,7 @@ from novel_extractor.ledger import ProgressLedger
 from novel_extractor.pipeline import run_pipeline
 from novel_extractor.progress import NullProgressReporter
 from novel_extractor.reasonix_compat.tooling import ToolLoopResult
+from novel_extractor.run_log import RunLogger
 
 
 class ScriptedToolClient:
@@ -71,6 +74,23 @@ class AuthenticationFailingToolClient:
             "Error code: 401 - {'error': {'message': 'Authentication Fails, Your api key is invalid', "
             "'type': 'authentication_error'}}"
         )
+
+
+class ActivityCapturingReporter(NullProgressReporter):
+    def __init__(self) -> None:
+        self.activities: list[tuple[str, str]] = []
+        self.failures: list[tuple[str, str]] = []
+
+    @contextmanager
+    def activity(self, message: str):
+        self.activities.append(("start", message))
+        try:
+            yield
+        finally:
+            self.activities.append(("end", message))
+
+    def group_failed(self, group_id: str, error: str) -> None:
+        self.failures.append((group_id, error))
 
 
 def make_config(tmp_path: Path, max_windows=1, token_saving: dict | None = None):
@@ -180,6 +200,74 @@ def test_pipeline_marks_explicit_no_update_as_no_update_status(tmp_path):
     assert result.completed_count == 1
     ledger = ProgressLedger(config.paths.state_db)
     assert ledger.get_status("凡人修仙传", "1-1", "resource_group") == "no-update"
+
+
+def test_pipeline_wraps_tool_model_call_in_activity(tmp_path):
+    config = make_config(tmp_path)
+    client = ScriptedToolClient([], final_text="NO_UPDATE")
+    reporter = ActivityCapturingReporter()
+
+    result = run_pipeline(config, client, reporter)
+
+    assert result.completed_count == 1
+    assert reporter.activities == [
+        ("start", "模型处理中：resource_group"),
+        ("end", "模型处理中：resource_group"),
+    ]
+
+
+def test_pipeline_reports_friendly_error_when_model_ignores_tool_protocol(tmp_path):
+    config = make_config(tmp_path)
+    client = ScriptedToolClient([], final_text="没有按协议返回")
+    reporter = ActivityCapturingReporter()
+
+    result = run_pipeline(config, client, reporter)
+
+    assert result.failed_count == 1
+    assert reporter.failures == [
+        (
+            "resource_group",
+            "模型没有按写入协议操作：未调用文件写入工具，也没有精确返回 NO_UPDATE。",
+        )
+    ]
+
+
+def test_pipeline_logs_model_io_and_tool_results(tmp_path):
+    config = make_config(tmp_path)
+    client = ScriptedToolClient(
+        [
+            ("read_file", {"path": "丹药分析.md"}),
+            (
+                "write_file",
+                {"path": "丹药分析.md", "content": "# 丹药分析\n\n## 抽髓丸\n证据章节：第 1 章\n"},
+            ),
+        ],
+        final_text="完成",
+    )
+    logger = RunLogger(tmp_path / "logs", retention_files=20)
+    try:
+        result = run_pipeline(config, client, NullProgressReporter(), run_logger=logger)
+        log_path = logger.path
+    finally:
+        logger.close()
+
+    assert result.completed_count == 1
+    events = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+    model_request = next(event for event in events if event["event"] == "model_request")
+    assert model_request["data"]["window_id"] == "1-1"
+    assert model_request["data"]["group_id"] == "resource_group"
+    assert "system_prompt" in model_request["data"]
+    assert "user_prompt" in model_request["data"]
+
+    tool_events = [event for event in events if event["event"] == "tool_call"]
+    assert tool_events[0]["data"]["name"] == "read_file"
+    assert tool_events[0]["data"]["args"] == {"path": "丹药分析.md"}
+    assert "# 丹药分析" in tool_events[0]["data"]["result"]
+    assert tool_events[1]["data"]["name"] == "write_file"
+    assert "wrote" in tool_events[1]["data"]["result"]
+
+    model_response = next(event for event in events if event["event"] == "model_response")
+    assert model_response["data"]["final_text"] == "完成"
 
 
 def test_pipeline_fails_when_written_content_lacks_required_evidence(tmp_path):

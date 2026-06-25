@@ -10,6 +10,7 @@ from novel_extractor.llm import create_llm_client_from_config
 from novel_extractor.pipeline import run_pipeline
 from novel_extractor.progress import ConsoleProgressReporter
 from novel_extractor.reasonix_compat.usage import DEFAULT_DEEPSEEK_PRICING, Pricing
+from novel_extractor.run_log import RunLogger
 
 
 def _resolve_config_path(config_path: str) -> Path:
@@ -88,7 +89,8 @@ def cmd_plan(args) -> None:
 
 def cmd_run(args) -> None:
     """Execute run command."""
-    config = load_config(_resolve_config_path(args.config))
+    config_path = _resolve_config_path(args.config)
+    config = load_config(config_path)
 
     reporter = ConsoleProgressReporter(
         enabled=not args.quiet,
@@ -96,14 +98,21 @@ def cmd_run(args) -> None:
         show_skipped=config.console.show_skipped,
         pricing=_pricing_from_config(config.llm.pricing),
         run_token_budget=config.token_saving.metrics.run_token_budget,
+        group_labels=_group_labels_from_config(config),
     )
+    run_logger = _create_run_logger(config)
 
     try:
+        if run_logger is not None:
+            run_logger.log(
+                "cli_run_started",
+                {"config_path": str(config_path), "metrics_path": args.metrics, "verbose": args.verbose},
+            )
         llm_client = create_llm_client_from_config(
             config.llm,
             enable_cache=config.token_saving.prompt_cache.enabled,
         )
-        result = run_pipeline(config, llm_client, reporter)
+        result = run_pipeline(config, llm_client, reporter, run_logger=run_logger)
         if args.metrics:
             _write_metrics(Path(args.metrics), reporter, result)
 
@@ -117,6 +126,9 @@ def cmd_run(args) -> None:
     except Exception as e:
         print(f"\n错误：{e}", file=sys.stderr)
         sys.exit(1)
+    finally:
+        if run_logger is not None:
+            run_logger.close()
 
 
 def cmd_resume(args) -> None:
@@ -164,6 +176,26 @@ def _pricing_from_config(pricing_config) -> Pricing:
         output=pricing_config.output,
         currency=pricing_config.currency,
     )
+
+
+def _group_labels_from_config(config) -> dict[str, str]:
+    templates = {
+        template.id: Path(template.output_filename).stem
+        for template in getattr(config, "templates", [])
+    }
+    labels = {}
+    for group in getattr(config, "template_groups", []):
+        names = [templates[template_id] for template_id in getattr(group, "template_ids", []) if template_id in templates]
+        if names:
+            labels[group.id] = "、".join(names)
+    return labels
+
+
+def _create_run_logger(config) -> RunLogger | None:
+    logging_config = getattr(config, "logging", None)
+    if logging_config is None or not getattr(logging_config, "enabled", False):
+        return None
+    return RunLogger(logging_config.log_dir, retention_files=logging_config.retention_files)
 
 
 def _write_metrics(path: Path, reporter: ConsoleProgressReporter, result) -> None:

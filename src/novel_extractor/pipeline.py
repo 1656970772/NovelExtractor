@@ -2,6 +2,7 @@
 
 import hashlib
 import re
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,10 +13,11 @@ from novel_extractor.ledger import ProgressLedger
 from novel_extractor.llm import LLMClient
 from novel_extractor.progress import NullProgressReporter, ProgressReporter
 from novel_extractor.prompts import build_extraction_prompt, build_system_prompt, build_user_prompt
-from novel_extractor.reasonix_compat.file_tools import WorkspaceTools
+from novel_extractor.reasonix_compat.tool_factory import WorkspaceTools
 from novel_extractor.reasonix_compat.tool_budget import ToolOutputBudget
 from novel_extractor.reasonix_compat.tooling import ToolExecutionLedger
 from novel_extractor.reasonix_compat.usage import TokenBudgetExceeded
+from novel_extractor.run_log import RunLogger
 from novel_extractor.templates import TemplateCatalog, route_groups_by_cards
 from novel_extractor.token_saving import PromptBudgetExceeded, PromptBudgeter
 from novel_extractor.verifier import verify_written_file
@@ -45,6 +47,7 @@ def run_pipeline(
     config: ExtractorConfig,
     llm_client: LLMClient,
     reporter: ProgressReporter | None = None,
+    run_logger: RunLogger | None = None,
 ) -> PipelineResult:
     """Run the extraction pipeline."""
     if reporter is None:
@@ -69,6 +72,19 @@ def run_pipeline(
         stride=config.window.stride,
         output_dir=str(config.paths.output_dir),
     )
+    _log_event(
+        run_logger,
+        "run_started",
+        {
+            "novel_id": config.novel.id,
+            "total_chapters": len(chapters),
+            "total_windows": len(windows),
+            "template_count": len(config.templates),
+            "window_size": config.window.size,
+            "stride": config.window.stride,
+            "output_dir": str(config.paths.output_dir),
+        },
+    )
 
     completed_count = 0
     skipped_count = 0
@@ -77,6 +93,17 @@ def run_pipeline(
     # Process each window
     for window_idx, window in enumerate(windows, 1):
         reporter.start_window(window_idx, len(windows), window.window_id)
+        _log_event(
+            run_logger,
+            "window_started",
+            {
+                "index": window_idx,
+                "total": len(windows),
+                "window_id": window.window_id,
+                "context_chapters": [chapter.title for chapter in window.context_chapters],
+                "commit_chapters": [chapter.title for chapter in window.commit_chapters],
+            },
+        )
 
         # Combine context chapters
         context_text = "\n\n".join(f"{ch.title}\n{ch.body}" for ch in window.context_chapters)
@@ -85,6 +112,11 @@ def run_pipeline(
         template_cards = {t.id: t.card for t in config.templates}
         selected_groups = route_groups_by_cards(context_text, config.template_groups, template_cards)
         reporter.routed_groups([g.id for g in selected_groups])
+        _log_event(
+            run_logger,
+            "groups_routed",
+            {"window_id": window.window_id, "group_ids": [group.id for group in selected_groups]},
+        )
 
         # Process each group
         for group in selected_groups:
@@ -101,6 +133,11 @@ def run_pipeline(
                 # Check if should skip
                 if ledger.should_skip(config.novel.id, window.window_id, group.id, chapter_hash, template_hash):
                     reporter.group_skipped(group.id, "已完成且 hash 未变化")
+                    _log_event(
+                        run_logger,
+                        "group_skipped",
+                        {"window_id": window.window_id, "group_id": group.id, "reason": "已完成且 hash 未变化"},
+                    )
                     skipped_count += 1
                     continue
 
@@ -108,6 +145,11 @@ def run_pipeline(
                 ledger.mark_running(config.novel.id, window.window_id, group.id, chapter_hash, template_hash)
                 output_files = list(template_texts)
                 reporter.group_running(group.id, output_files)
+                _log_event(
+                    run_logger,
+                    "group_started",
+                    {"window_id": window.window_id, "group_id": group.id, "output_files": output_files},
+                )
 
                 existing_snippets = find_relevant_snippets(
                     config.paths.output_dir,
@@ -144,13 +186,46 @@ def run_pipeline(
                     registry = WorkspaceTools(config.paths.output_dir, tool_ledger, tool_budget).registry(
                         enabled_tools_for_profile(config)
                     )
-                    tool_result = llm_client.run_with_tools(
+                    if run_logger is not None:
+                        registry.set_event_callback(
+                            lambda name, args, result, success: run_logger.log(
+                                "tool_call",
+                                {
+                                    "window_id": window.window_id,
+                                    "group_id": group.id,
+                                    "name": name,
+                                    "args": args,
+                                    "result": result,
+                                    "success": success,
+                                },
+                            )
+                        )
+                    _log_model_request(
+                        run_logger,
+                        window.window_id,
+                        group.id,
                         system_prompt,
                         user_prompt,
-                        registry,
-                        reporter,
-                        tool_budget=tool_budget,
-                        diagnose_cache_shape=config.token_saving.prompt_cache.diagnose_prefix_changes,
+                        registry.openai_tools(),
+                    )
+                    with _reporter_activity(reporter, f"模型处理中：{group.id}"):
+                        tool_result = llm_client.run_with_tools(
+                            system_prompt,
+                            user_prompt,
+                            registry,
+                            reporter,
+                            tool_budget=tool_budget,
+                            diagnose_cache_shape=config.token_saving.prompt_cache.diagnose_prefix_changes,
+                        )
+                    _log_event(
+                        run_logger,
+                        "model_response",
+                        {
+                            "window_id": window.window_id,
+                            "group_id": group.id,
+                            "final_text": tool_result.final_text,
+                            "usage_events": tool_result.usage_events,
+                        },
                     )
                     written_files = _validate_tool_loop_result(
                         final_text=tool_result.final_text,
@@ -163,11 +238,21 @@ def run_pipeline(
                     output_hash = _compute_hash(tool_result.final_text + "".join(written_files))
                     if written_files:
                         reporter.group_completed(group.id, written_files)
+                        _log_event(
+                            run_logger,
+                            "group_completed",
+                            {"window_id": window.window_id, "group_id": group.id, "written_files": written_files},
+                        )
                         ledger.mark_completed(
                             config.novel.id, window.window_id, group.id, chapter_hash, template_hash, output_hash
                         )
                     else:
                         reporter.group_completed(group.id, [])
+                        _log_event(
+                            run_logger,
+                            "group_no_update",
+                            {"window_id": window.window_id, "group_id": group.id},
+                        )
                         ledger.mark_no_update(
                             config.novel.id, window.window_id, group.id, chapter_hash, template_hash, output_hash
                         )
@@ -175,19 +260,26 @@ def run_pipeline(
                     continue
 
                 # Legacy fallback for old clients.
-                if hasattr(llm_client, "complete_with_cache"):
-                    response = llm_client.complete_with_cache(system_prompt, user_prompt)
-                else:
-                    # Fallback for clients without cache support
-                    prompt = build_extraction_prompt(
-                        novel_id=config.novel.id,
-                        window_id=window.window_id,
-                        context_chapters=window.context_chapters,
-                        commit_chapters=window.commit_chapters,
-                        template_texts=template_texts,
-                        existing_snippets=existing_snippets,
-                    )
-                    response = llm_client.complete(prompt)
+                with _reporter_activity(reporter, f"模型处理中：{group.id}"):
+                    _log_model_request(run_logger, window.window_id, group.id, system_prompt, user_prompt, [])
+                    if hasattr(llm_client, "complete_with_cache"):
+                        response = llm_client.complete_with_cache(system_prompt, user_prompt)
+                    else:
+                        # Fallback for clients without cache support
+                        prompt = build_extraction_prompt(
+                            novel_id=config.novel.id,
+                            window_id=window.window_id,
+                            context_chapters=window.context_chapters,
+                            commit_chapters=window.commit_chapters,
+                            template_texts=template_texts,
+                            existing_snippets=existing_snippets,
+                        )
+                        response = llm_client.complete(prompt)
+                _log_event(
+                    run_logger,
+                    "model_response",
+                    {"window_id": window.window_id, "group_id": group.id, "final_text": response, "usage_events": []},
+                )
 
                 # Parse and apply updates
                 updates = parse_doc_updates(response)
@@ -205,9 +297,15 @@ def run_pipeline(
 
                     output_hash = _compute_hash(response)
                     reporter.group_completed(group.id, written_files)
+                    _log_event(
+                        run_logger,
+                        "group_completed",
+                        {"window_id": window.window_id, "group_id": group.id, "written_files": written_files},
+                    )
                 else:
                     output_hash = "no-update"
                     reporter.group_completed(group.id, [])
+                    _log_event(run_logger, "group_no_update", {"window_id": window.window_id, "group_id": group.id})
 
                 # Mark completed
                 ledger.mark_completed(config.novel.id, window.window_id, group.id, chapter_hash, template_hash, output_hash)
@@ -217,24 +315,43 @@ def run_pipeline(
                 # User interrupted
                 ledger.mark_failed(config.novel.id, window.window_id, group.id, chapter_hash, template_hash, "interrupted by user")
                 reporter.group_failed(group.id, "interrupted by user")
+                _log_event(
+                    run_logger,
+                    "group_failed",
+                    {"window_id": window.window_id, "group_id": group.id, "error": "interrupted by user"},
+                )
                 raise
 
             except TokenBudgetExceeded as e:
                 ledger.mark_failed(config.novel.id, window.window_id, group.id, chapter_hash, template_hash, str(e))
                 reporter.group_failed(group.id, str(e))
+                _log_event(
+                    run_logger,
+                    "group_failed",
+                    {"window_id": window.window_id, "group_id": group.id, "error": str(e)},
+                )
                 raise
 
             except Exception as e:
                 if _is_authentication_failure(e):
                     ledger.mark_failed(config.novel.id, window.window_id, group.id, chapter_hash, template_hash, str(e))
                     reporter.group_failed(group.id, str(e))
+                    _log_event(
+                        run_logger,
+                        "group_failed",
+                        {"window_id": window.window_id, "group_id": group.id, "error": str(e)},
+                    )
                     raise
                 # Other error
-                ledger.mark_failed(config.novel.id, window.window_id, group.id, chapter_hash, template_hash, str(e))
-                reporter.group_failed(group.id, str(e))
+                error = _format_user_error(e)
+                ledger.mark_failed(config.novel.id, window.window_id, group.id, chapter_hash, template_hash, error)
+                reporter.group_failed(group.id, error)
+                _log_event(run_logger, "group_failed", {"window_id": window.window_id, "group_id": group.id, "error": error})
                 failed_count += 1
 
-    return PipelineResult(completed_count=completed_count, skipped_count=skipped_count, failed_count=failed_count)
+    result = PipelineResult(completed_count=completed_count, skipped_count=skipped_count, failed_count=failed_count)
+    _log_event(run_logger, "run_finished", result.__dict__)
+    return result
 
 
 def _is_authentication_failure(exc: Exception) -> bool:
@@ -242,6 +359,48 @@ def _is_authentication_failure(exc: Exception) -> bool:
         return True
     message = str(exc).lower()
     return "authentication_error" in message or "authentication fails" in message or "api key" in message and "invalid" in message
+
+
+def _reporter_activity(reporter: ProgressReporter, message: str):
+    activity = getattr(reporter, "activity", None)
+    if callable(activity):
+        return activity(message)
+    return nullcontext()
+
+
+def _format_user_error(exc: Exception) -> str:
+    message = str(exc)
+    if message == "model finished without writer tool calls and did not output exact NO_UPDATE":
+        return "模型没有按写入协议操作：未调用文件写入工具，也没有精确返回 NO_UPDATE。"
+    if message.startswith("tool loop exceeded"):
+        return f"模型工具调用轮次超过上限：{message}"
+    return message
+
+
+def _log_model_request(
+    run_logger: RunLogger | None,
+    window_id: str,
+    group_id: str,
+    system_prompt: str,
+    user_prompt: str,
+    tools: list[dict] | None,
+) -> None:
+    _log_event(
+        run_logger,
+        "model_request",
+        {
+            "window_id": window_id,
+            "group_id": group_id,
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+            "tools": tools or [],
+        },
+    )
+
+
+def _log_event(run_logger: RunLogger | None, event: str, data: dict) -> None:
+    if run_logger is not None:
+        run_logger.log(event, data)
 
 
 def _validate_tool_loop_result(

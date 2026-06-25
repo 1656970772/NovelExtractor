@@ -141,6 +141,13 @@ class PlannerConfig:
 
 
 @dataclass(frozen=True)
+class RunLoggingConfig:
+    enabled: bool
+    log_dir: Path
+    retention_files: int
+
+
+@dataclass(frozen=True)
 class TokenSavingConfig:
     prompt_cache: PromptCacheConfig
     tool_surface: ToolSurfaceConfig
@@ -163,6 +170,7 @@ class ExtractorConfig:
     tools: ToolsConfig
     template_discovery: TemplateDiscoveryConfig
     token_saving: TokenSavingConfig
+    logging: RunLoggingConfig
 
     def template_by_id(self, template_id: str) -> TemplateConfig:
         """Get template config by ID."""
@@ -292,6 +300,7 @@ def load_config(path: Path) -> ExtractorConfig:
     )
 
     token_saving = _load_token_saving(_section(data, "token_saving", "token_saving"))
+    run_logging = _load_run_logging(_section(data, "logging", "logging"), paths)
 
     return ExtractorConfig(
         novel=novel,
@@ -305,6 +314,7 @@ def load_config(path: Path) -> ExtractorConfig:
         tools=tools,
         template_discovery=template_discovery,
         token_saving=token_saving,
+        logging=run_logging,
     )
 
 
@@ -448,4 +458,12 @@ def _load_token_saving(data: dict[str, Any]) -> TokenSavingConfig:
             enabled=planner_data.get("enabled", False),
             model_env=planner_data.get("model_env"),
         ),
+    )
+
+
+def _load_run_logging(data: dict[str, Any], paths: PathsConfig) -> RunLoggingConfig:
+    return RunLoggingConfig(
+        enabled=bool(data.get("enabled", True)),
+        log_dir=Path(data.get("log_dir", paths.state_db.parent / "logs")),
+        retention_files=_positive_int(data.get("retention_files", 20), "logging.retention_files"),
     )

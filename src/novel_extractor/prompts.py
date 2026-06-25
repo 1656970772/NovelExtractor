@@ -20,7 +20,7 @@ def build_system_prompt(template_texts: dict[str, str]) -> str:
     parts.append("- 所有新增事实必须来自当前窗口章节，不允许凭印象补全")
     parts.append("- **不要输出业务 JSON**；需要修改时必须调用写入工具")
     parts.append("- 写入前必须使用 grep 或 read_file 查询目标文档，确认是否已有重复条目")
-    parts.append("- 使用 write_file、edit_file 或 multi_edit 直接写入 Markdown 文档")
+    parts.append("- 使用 write_file 或 edit_file 直接写入 Markdown 文档")
     parts.append("- 如果没有任何可写内容，最终回答必须精确输出 NO_UPDATE")
     parts.append("\n---\n")
 

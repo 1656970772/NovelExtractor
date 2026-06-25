@@ -68,7 +68,13 @@ class FakeLLMClient:
 
 
 class OpenAICompatibleClient:
-    """OpenAI-compatible LLM client with cache support."""
+    """OpenAI-compatible LLM client with cache support.
+
+    Follows DeepSeek-Reasonix implementation standards:
+    - Uses OpenAI SDK with base_url pointing to DeepSeek API
+    - Supports prompt caching via system/user message split
+    - Compatible with OpenAI chat completions API
+    """
 
     def __init__(
         self,
@@ -81,6 +87,18 @@ class OpenAICompatibleClient:
         enable_cache: bool = True,
         max_tool_rounds: int = 12,
     ) -> None:
+        """Initialize OpenAI-compatible client.
+
+        Args:
+            base_url: API base URL (e.g., https://api.deepseek.com)
+            api_key: API key for authentication
+            model: Model identifier (e.g., deepseek-v4-flash)
+            temperature: Sampling temperature
+            timeout_seconds: Request timeout
+            max_retries: Maximum retry attempts
+            enable_cache: Enable prompt caching optimization
+            max_tool_rounds: Maximum tool calling rounds
+        """
         self.model = model
         self.temperature = temperature
         self.timeout_seconds = timeout_seconds
@@ -89,6 +107,8 @@ class OpenAICompatibleClient:
         self.max_tool_rounds = max_tool_rounds
         self._previous_cache_shape = None
 
+        # Initialize OpenAI client with DeepSeek-compatible configuration
+        # Reference: DeepSeek API is OpenAI-compatible
         self.client = OpenAI(
             api_key=api_key,
             base_url=base_url,
@@ -197,15 +217,30 @@ class OpenAICompatibleClient:
     def complete_with_cache(self, system_prompt: str, user_prompt: str) -> str:
         """Send prompt to LLM with cache optimization.
 
-        DeepSeek caches the system message prefix, so:
-        - system_prompt contains templates (cacheable, ~5000 tokens)
-        - user_prompt contains current chapters (non-cacheable, ~20000 tokens)
+        DeepSeek automatically caches the system message prefix when using
+        the standard OpenAI chat completions API format. This method splits
+        the prompt into system and user messages to maximize cache hits.
 
-        Expected cache hit rate: ~20% tokens
-        Expected cost savings: ~20%
+        Reference: DeepSeek-Reasonix implementation
+        - System message contains stable, reusable content (templates, instructions)
+        - User message contains variable content (current chapters, queries)
+        - DeepSeek's auto-cache triggers on repeated system message prefixes
+
+        Expected cache behavior:
+        - First call: full prompt tokens billed as input
+        - Subsequent calls with same system prompt: system tokens billed as cache hits
+        - Cache hit rate typically 10-30% depending on system/user prompt ratio
+
+        Args:
+            system_prompt: Stable content for caching (templates, instructions)
+            user_prompt: Variable content (current data, queries)
+
+        Returns:
+            Model's text response
         """
         if self.enable_cache:
-            # Split into system + user for cache optimization
+            # Use system/user split for optimal caching
+            # DeepSeek caches system messages automatically
             messages = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -229,17 +264,37 @@ def create_llm_client_from_config(llm_config, enable_cache: bool = True) -> LLMC
     Args:
         llm_config: LLM configuration from config file
         enable_cache: Enable DeepSeek cache optimization (default: True)
+
+    Returns:
+        Configured LLM client
+
+    Raises:
+        ValueError: If API key is missing or invalid
     """
-    base_url = os.getenv(llm_config.base_url_env) or "https://api.deepseek.com"
+    # Resolve base_url from environment or use DeepSeek default
+    # Reference: DeepSeek-Reasonix uses https://api.deepseek.com (without /v1)
+    # The OpenAI SDK automatically appends /v1/chat/completions
+    base_url = os.getenv(llm_config.base_url_env)
+    if not base_url:
+        base_url = "https://api.deepseek.com"
+
+    # Ensure no trailing slash or /v1 suffix (SDK handles this)
+    base_url = base_url.rstrip("/").removesuffix("/v1")
+
+    # Resolve API key from credentials file or environment
     api_key = _resolve_api_key(llm_config.api_key_env, getattr(llm_config, "credentials_file", None))
+
+    # Resolve model from environment or use default
     model = os.getenv(llm_config.model_env, llm_config.default_model)
 
+    # Validate API key
     if not api_key:
         if getattr(llm_config, "credentials_file", None):
             raise ValueError(
                 f"API key {llm_config.api_key_env} is not set in {llm_config.credentials_file} or environment"
             )
         raise ValueError(f"Environment variable {llm_config.api_key_env} is not set")
+
     if _is_placeholder_api_key(api_key):
         source = f" in {llm_config.credentials_file}" if getattr(llm_config, "credentials_file", None) else ""
         raise ValueError(f"API key {llm_config.api_key_env}{source} is still a placeholder; replace it with a valid key")
@@ -252,6 +307,7 @@ def create_llm_client_from_config(llm_config, enable_cache: bool = True) -> LLMC
         timeout_seconds=llm_config.timeout_seconds,
         max_retries=llm_config.max_retries,
         enable_cache=enable_cache,
+        max_tool_rounds=30,  # Increased from default 12 for complex extraction tasks
     )
 
 
