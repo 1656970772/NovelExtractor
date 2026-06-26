@@ -6,6 +6,44 @@
 
 参考项目是 `E:\Github_Projects\DeepSeek-Reasonix`，主要借鉴它的事件流、配置驱动、长任务运行和桌面壳经验。多模型接入参考 [farion1231/cc-switch](https://github.com/farion1231/cc-switch) 的供应商预设、模型切换和 OpenAI-compatible 路由思路。界面布局参考 Meshy 工作区页面：顶部功能入口、右上用户入口、左侧窄功能栏、资产抽屉、资产类型列表、内容列表和右侧大预览区域。
 
+## 参考截图
+
+截图统一保存到 `docs/superpowers/reference/desktop-architecture/`。这些图只作为布局、信息层级、交互方式和视觉气质参考，最终界面需要结合本项目的书香气风格重绘。
+
+### 资产页与功能入口
+
+![资产页区域标注](../reference/desktop-architecture/01-assets-overview.png)
+
+![资产侧栏参考](../reference/desktop-architecture/02-assets-sidebar.png)
+
+![功能菜单悬浮参考](../reference/desktop-architecture/03-function-menu-hover.png)
+
+### 小说提取页
+
+![小说提取页浅色结构草图](../reference/desktop-architecture/04-extraction-sketch-light.png)
+
+![小说提取页深色结构草图](../reference/desktop-architecture/05-extraction-layout-dark.png)
+
+![小说提取参数侧栏参考](../reference/desktop-architecture/06-extraction-parameter-sidebar.png)
+
+### 用户菜单
+
+![用户下拉菜单参考](../reference/desktop-architecture/07-user-dropdown-model-entry.png)
+
+### 大模型配置弹窗
+
+![CC Switch 供应商列表参考](../reference/desktop-architecture/08-cc-switch-provider-list.png)
+
+![CC Switch 添加供应商预设参考](../reference/desktop-architecture/09-cc-switch-add-provider-presets.png)
+
+![CC Switch 供应商基础表单参考](../reference/desktop-architecture/10-cc-switch-provider-basic-form.png)
+
+![CC Switch 高级 JSON 配置参考](../reference/desktop-architecture/11-cc-switch-provider-advanced-json.png)
+
+![CC Switch 模型测试配置参考](../reference/desktop-architecture/12-cc-switch-model-test-config.png)
+
+![CC Switch 计费配置参考](../reference/desktop-architecture/13-cc-switch-billing-config.png)
+
 ## 目标
 
 第一版目标是把当前 CLI 能力产品化为桌面应用，不做完整世界观设计平台。
