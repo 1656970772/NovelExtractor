@@ -7,8 +7,20 @@ export class ConfigInvariantError extends Error {
   }
 }
 
-const ALLOWED_TASK_ACTIONS = new Set<TaskAction>(["start", "pause", "resume", "delete"]);
-const REQUIRED_TASK_ACTIONS: TaskAction[] = ["start", "pause", "resume", "delete"];
+const ALLOWED_TASK_ACTIONS = new Set<TaskAction>([
+  "start",
+  "pause",
+  "resume",
+  "viewReport",
+  "delete"
+]);
+const REQUIRED_TASK_ACTIONS: TaskAction[] = [
+  "start",
+  "pause",
+  "resume",
+  "viewReport",
+  "delete"
+];
 
 function assertNonEmpty(value: string, label: string): void {
   if (!value.trim()) {

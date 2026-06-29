@@ -43,7 +43,7 @@ export interface ReportFileNameInput {
   outputFileName?: string;
 }
 
-export type TaskAction = "start" | "pause" | "resume" | "delete";
+export type TaskAction = "start" | "pause" | "resume" | "viewReport" | "delete";
 
 export type TaskStatus = "pending" | "running" | "paused" | "completed" | "failed";
 

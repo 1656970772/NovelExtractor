@@ -8,15 +8,23 @@ export interface JobListProps {
   jobs: readonly ExtractionJob[];
   onJobAction?: (jobId: string, action: TaskAction) => Promise<void>;
   onDeleteJob?: (jobId: string) => Promise<void>;
+  onOpenJobResult?: (job: ExtractionJob) => Promise<void> | void;
 }
 
 const STATUS_CONFIG = getTaskStatusConfig();
 const TASK_ACTION_CONFIG = getTaskActionConfig();
 
-export function JobList({ jobs, onJobAction, onDeleteJob }: JobListProps) {
+export function JobList({ jobs, onJobAction, onDeleteJob, onOpenJobResult }: JobListProps) {
   const [deleteCandidate, setDeleteCandidate] = useState<ExtractionJob | null>(null);
 
   function runAction(job: ExtractionJob, action: TaskAction): void {
+    if (action === "viewReport") {
+      if (job.resultReportId) {
+        void Promise.resolve(onOpenJobResult?.(job)).catch(() => undefined);
+      }
+      return;
+    }
+
     if (action === "delete") {
       setDeleteCandidate(job);
       return;
@@ -55,6 +63,9 @@ export function JobList({ jobs, onJobAction, onDeleteJob }: JobListProps) {
         <ul className="job-list">
           {jobs.map((job) => {
             const statusConfig = STATUS_CONFIG[job.status];
+            const allowedActions = statusConfig.allowedActions.filter(
+              (action) => action !== "viewReport" || job.resultReportId
+            );
             return (
               <li className="job-row" key={job.id}>
                 <div className="job-row__main">
@@ -69,8 +80,9 @@ export function JobList({ jobs, onJobAction, onDeleteJob }: JobListProps) {
                   <JobLogPanel logs={job.logs} />
                 </div>
                 <div className="job-row__actions">
-                  {statusConfig.allowedActions.map((action) => (
+                  {allowedActions.map((action) => (
                     <button
+                      className={action === "viewReport" ? "button button--secondary" : undefined}
                       key={action}
                       onClick={() => runAction(job, action)}
                       type="button"

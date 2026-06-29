@@ -220,7 +220,12 @@ describe("desktop IPC contract", () => {
       providerConfigId: string;
       modelId: string;
     }>();
-    expectTypeOf<JobDto>().toMatchTypeOf<{ status: JobStatus; allowedActions: Array<"start" | "pause" | "resume" | "delete"> }>();
+    expectTypeOf<JobDto>().toMatchTypeOf<{
+      status: JobStatus;
+      resultReportId?: string;
+      resultReportDisplayName?: string;
+      allowedActions: Array<"start" | "pause" | "resume" | "viewReport" | "delete">;
+    }>();
     expectTypeOf<DeleteJobDto>().toMatchTypeOf<{ jobId: string; confirm: true }>();
   });
 

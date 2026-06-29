@@ -3,7 +3,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ProjectDto, TemplateDto } from "../shared/ipcTypes";
+import type { JobDto, ProjectDto, TemplateDto } from "../shared/ipcTypes";
 import { App } from "./App";
 import { getDefaultTemplateViews } from "./features/templates/templateViewModel";
 import { applyThemeTokens } from "./theme";
@@ -48,6 +48,17 @@ function installDesktopApiMock() {
   });
 
   return api;
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+
+  return { promise, resolve, reject };
 }
 
 const appGlobalTemplate: TemplateDto = {
@@ -255,6 +266,104 @@ describe("desktop workbench shell", () => {
     await user.click(screen.getByRole("button", { name: "开始" }));
 
     expect(api.startJob).toHaveBeenCalledWith({ jobId: "job-1" });
+  });
+
+  it("shows running feedback immediately and opens the completed job report from the task row", async () => {
+    const user = userEvent.setup();
+    const api = installDesktopApiMock();
+    const startJob = createDeferred<JobDto>();
+    api.listProviders.mockResolvedValue([
+      {
+        id: "provider-1",
+        presetId: "deepseek",
+        displayName: "DeepSeek",
+        kind: "openai-compatible",
+        baseUrl: "https://api.deepseek.com",
+        models: [{ id: "model-a", displayName: "模型 A", enabled: true, isDefault: true }],
+        hasApiKey: true,
+        enabled: true
+      }
+    ]);
+    api.uploadTxt.mockResolvedValue({
+      bookId: "book-1",
+      displayName: "凡人修仙传",
+      sourceAssetId: "asset-1",
+      fileName: "凡人修仙传.txt",
+      byteSize: 2048,
+      encoding: "utf-8",
+      chapterCount: 3
+    });
+    api.createJob.mockResolvedValue({
+      id: "job-1",
+      bookId: "book-1",
+      status: "created",
+      progressText: "窗口 0/3",
+      tokenText: "Token 0 / 费用 0",
+      allowedActions: ["start", "delete"],
+      createdAt: "2026-06-27T00:00:00.000Z",
+      updatedAt: "2026-06-27T00:00:00.000Z"
+    });
+    api.startJob.mockReturnValue(startJob.promise);
+    api.listReports.mockResolvedValue([
+      {
+        id: "report-1",
+        bookId: "book-1",
+        fileName: "丹药分析.md",
+        displayName: "丹药分析",
+        byteSize: 1024,
+        createdAt: "2026-06-27T00:00:00.000Z",
+        updatedAt: "2026-06-27T00:00:00.000Z"
+      }
+    ]);
+    api.previewReport.mockResolvedValue({
+      reportId: "report-1",
+      html: '<h1 id="heading-1">丹药分析</h1><p>紫霜丹</p>',
+      headings: [{ id: "heading-1", depth: 1, text: "丹药分析" }],
+      generatedAt: "2026-06-27T00:00:00.000Z"
+    });
+    render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
+
+    await user.click(screen.getByRole("button", { name: "功能" }));
+    await user.click(
+      within(screen.getByRole("navigation", { name: "功能入口" })).getByRole("button", {
+        name: "小说提取"
+      })
+    );
+    await screen.findByText("DeepSeek / 模型 A");
+
+    await user.upload(
+      screen.getByLabelText("选择 .txt 文件"),
+      new File(["第一章 初入仙途"], "凡人修仙传.txt", { type: "text/plain" })
+    );
+    await screen.findByText("凡人修仙传.txt");
+    await user.click(screen.getByRole("button", { name: "创建任务" }));
+    await screen.findByText("待开始");
+
+    await user.click(screen.getByRole("button", { name: "开始" }));
+
+    expect(api.startJob).toHaveBeenCalledWith({ jobId: "job-1" });
+    expect(await screen.findByText("运行中")).toBeInTheDocument();
+    expect(screen.getByText("正在请求模型")).toBeInTheDocument();
+
+    startJob.resolve({
+      id: "job-1",
+      bookId: "book-1",
+      status: "completed",
+      progressText: "已完成 3/3 章",
+      tokenText: "Token 37 / 费用 0",
+      resultReportId: "report-1",
+      resultReportDisplayName: "丹药分析",
+      allowedActions: ["viewReport", "delete"],
+      createdAt: "2026-06-27T00:00:00.000Z",
+      updatedAt: "2026-06-27T00:00:01.000Z"
+    });
+
+    await user.click(await screen.findByRole("button", { name: "查看结果" }));
+
+    expect(api.listReports).toHaveBeenCalledWith({ bookId: "book-1" });
+    expect(api.previewReport).toHaveBeenCalledWith({ reportId: "report-1" });
+    expect(await screen.findByRole("heading", { name: "丹药分析" })).toBeInTheDocument();
+    expect(screen.getByText("紫霜丹")).toBeInTheDocument();
   });
 
   it("loads project template selection, saves changes, and opens template management", async () => {

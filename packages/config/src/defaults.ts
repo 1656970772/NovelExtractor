@@ -110,6 +110,9 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
     resume: {
       label: "继续"
     },
+    viewReport: {
+      label: "查看结果"
+    },
     delete: {
       label: "删除任务"
     }
@@ -129,7 +132,7 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
     },
     completed: {
       label: "已完成",
-      allowedActions: ["delete"]
+      allowedActions: ["viewReport", "delete"]
     },
     failed: {
       label: "失败",

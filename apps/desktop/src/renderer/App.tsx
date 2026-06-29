@@ -73,6 +73,33 @@ function appendJobLog(job: ExtractionJob, line: string): ExtractionJob {
   };
 }
 
+function getJobUpdateLog(action: TaskAction, job: ExtractionJob): string {
+  if (job.status === "completed") {
+    return job.resultReportDisplayName
+      ? `任务已完成，报告：${job.resultReportDisplayName}`
+      : "任务已完成";
+  }
+
+  if (job.status === "failed") {
+    return job.failureReason ? `任务失败：${job.failureReason}` : "任务失败";
+  }
+
+  switch (action) {
+    case "pause":
+      return "任务已暂停";
+    case "resume":
+      return "任务已继续";
+    case "start":
+      return "任务状态已更新";
+    case "delete":
+      return "任务已删除";
+    case "viewReport":
+      return "已打开任务结果";
+    default:
+      return "任务状态已更新";
+  }
+}
+
 export function App({ initialState = DEFAULT_STATE }: AppProps) {
   const [project, setProject] = useState<ProjectSummary | null>(initialState.project);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -419,6 +446,25 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
     setExtractionError(undefined);
 
     let updatedJob: JobDto | void = undefined;
+    const shouldShowRunningFeedback = action === "start" || action === "resume";
+
+    if (shouldShowRunningFeedback) {
+      setJobs((currentJobs) =>
+        currentJobs.map((job) =>
+          job.id === jobId
+            ? appendJobLog(
+                {
+                  ...job,
+                  status: "running",
+                  progressText: "正在请求模型",
+                  failureReason: undefined
+                },
+                action === "start" ? "任务已开始，正在请求模型" : "任务已继续，正在请求模型"
+              )
+            : job
+        )
+      );
+    }
 
     try {
       switch (action) {
@@ -434,19 +480,31 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
         case "delete":
           await api.deleteJob({ jobId, confirm: true });
           break;
+        case "viewReport":
+          return;
         default:
           return;
       }
 
       if (updatedJob) {
-        const mappedJob = mapJobDtoToExtractionJob(updatedJob, [
-          action === "start" ? "任务已完成" : "任务状态已更新"
-        ]);
+        const mappedJob = mapJobDtoToExtractionJob(updatedJob);
         if (mappedJob) {
+          const logLine = getJobUpdateLog(action, mappedJob);
           setJobs((currentJobs) =>
-            currentJobs.map((job) => (job.id === jobId ? mappedJob : job))
+            currentJobs.map((job) =>
+              job.id === jobId
+                ? {
+                    ...mappedJob,
+                    logs: [...(job.logs ?? []), logLine]
+                  }
+                : job
+            )
           );
         }
+        return;
+      }
+
+      if (shouldShowRunningFeedback) {
         return;
       }
 
@@ -456,7 +514,7 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
         return;
       }
 
-      const logLineByAction: Record<TaskAction, string> = {
+      const logLineByAction: Partial<Record<TaskAction, string>> = {
         start: "任务已开始",
         pause: "任务已暂停",
         resume: "任务已继续",
@@ -466,17 +524,48 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
       setJobs((currentJobs) =>
         currentJobs.map((job) =>
           job.id === jobId
-            ? appendJobLog({ ...job, status: nextStatus }, logLineByAction[action])
+            ? appendJobLog({ ...job, status: nextStatus }, logLineByAction[action] ?? "任务状态已更新")
             : job
         )
       );
     } catch (error) {
-      setExtractionError(getErrorMessage(error, "任务操作失败"));
+      const message = getErrorMessage(error, "任务操作失败");
+      setExtractionError(message);
+
+      if (shouldShowRunningFeedback) {
+        setJobs((currentJobs) =>
+          currentJobs.map((job) =>
+            job.id === jobId
+              ? appendJobLog(
+                  {
+                    ...job,
+                    status: "failed",
+                    progressText: "任务失败",
+                    failureReason: message
+                  },
+                  `任务失败：${message}`
+                )
+              : job
+          )
+        );
+      }
     }
   }
 
   async function deleteJob(jobId: string): Promise<void> {
     await runJobAction(jobId, "delete");
+  }
+
+  async function openJobResult(job: ExtractionJob): Promise<void> {
+    if (!job.bookId || !job.resultReportId) {
+      setExtractionError("任务结果尚未就绪");
+      return;
+    }
+
+    setExtractionError(undefined);
+    setActivePage("assets");
+    await selectAssetBook(job.bookId);
+    await selectReport(job.resultReportId);
   }
 
   function openTemplateManager(): void {
@@ -549,6 +638,7 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
             onCreateJob={createJob}
             onDeleteJob={deleteJob}
             onJobAction={runJobAction}
+            onOpenJobResult={openJobResult}
             onTemplateSelectionChange={(templateIds) => {
               void saveTemplateSelection(templateIds);
             }}

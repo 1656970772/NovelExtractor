@@ -1,8 +1,12 @@
-import type { ProviderKind as ConfigProviderKind } from "@novel-extractor/config";
+import type {
+  ProviderKind as ConfigProviderKind,
+  TaskAction as ConfigTaskAction
+} from "@novel-extractor/config";
 import type { JobStatus as DomainJobStatus } from "@novel-extractor/domain";
 
 export type ProviderKind = ConfigProviderKind;
 export type JobStatus = DomainJobStatus;
+export type TaskAction = ConfigTaskAction;
 
 export const DESKTOP_IPC_CHANNELS = [
   "project:create",
@@ -144,7 +148,9 @@ export interface JobDto {
   progressText: string;
   tokenText?: string;
   failureReason?: string;
-  allowedActions: Array<"start" | "pause" | "resume" | "delete">;
+  resultReportId?: string;
+  resultReportDisplayName?: string;
+  allowedActions: TaskAction[];
   createdAt: string;
   updatedAt: string;
 }

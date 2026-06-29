@@ -57,6 +57,8 @@ interface P0JobRecord {
   progressText: string;
   tokenText?: string;
   failureReason?: string;
+  resultReportId?: string;
+  resultReportDisplayName?: string;
   input: CreateJobDto;
   createdAt: string;
   updatedAt: string;
@@ -80,6 +82,7 @@ export interface P0IpcHandlersOptions {
 const TASK_STATUS_CONFIG = getTaskStatusConfig();
 const PILL_TEMPLATE = getBuiltInTemplates().find((template) => template.id === "pill-analysis");
 const DEFAULT_REPORT_FILE_NAME = PILL_TEMPLATE?.defaultOutputFileName ?? "丹药分析.md";
+const MAX_BOOK_ID_ALLOCATION_ATTEMPTS = 1000;
 
 const systemClock: Clock = {
   now: () => new Date().toISOString()
@@ -171,6 +174,8 @@ function toJobDto(job: P0JobRecord): JobDto {
     progressText: job.progressText,
     tokenText: job.tokenText,
     failureReason: job.failureReason,
+    resultReportId: job.resultReportId,
+    resultReportDisplayName: job.resultReportDisplayName,
     allowedActions: getAllowedActions(job.status),
     createdAt: job.createdAt,
     updatedAt: job.updatedAt
@@ -229,6 +234,48 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
 
   async function ensureProject(projectId: string): Promise<Project> {
     return projectStore.ensureProject(projectId);
+  }
+
+  async function collectUsedBookAssetIds(project: Project): Promise<Set<string>> {
+    const usedBookIds = new Set(
+      [...booksById.values()]
+        .filter((book) => book.projectId === project.id)
+        .map((book) => book.id)
+    );
+    const booksRoot = path.join(project.rootPath, "assets", "books");
+
+    try {
+      const entries = await fs.readdir(booksRoot, { withFileTypes: true });
+      for (const entry of entries) {
+        usedBookIds.add(entry.name);
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+
+    return usedBookIds;
+  }
+
+  function createUploadIdGenerator(usedBookIds: Set<string>): IdGenerator {
+    return {
+      createId(prefix = "id") {
+        if (prefix !== "book") {
+          return idGenerator.createId(prefix);
+        }
+
+        for (let attempt = 0; attempt < MAX_BOOK_ID_ALLOCATION_ATTEMPTS; attempt += 1) {
+          const nextId = idGenerator.createId(prefix);
+          if (!usedBookIds.has(nextId)) {
+            usedBookIds.add(nextId);
+            return nextId;
+          }
+        }
+
+        throw new Error("无法生成唯一书籍资产 ID");
+      }
+    };
   }
 
   function createUniqueTemplateId(usedTemplateIds: Set<string>): string {
@@ -556,12 +603,14 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
 
     try {
       const completion = await requestModelReport(runningJob);
-      await writeModelReport(runningJob, completion.content);
+      const report = await writeModelReport(runningJob, completion.content);
       return toJobDto(
         updateJob(runningJob, {
           status: "completed",
           progressText: `已完成 ${book.chapterCount}/${book.chapterCount} 章`,
-          tokenText: formatTokenText(completion.usage)
+          tokenText: formatTokenText(completion.usage),
+          resultReportId: report.id,
+          resultReportDisplayName: report.displayName
         })
       );
     } catch (error) {
@@ -605,13 +654,14 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     "books:uploadTxt": async (input) => {
       const project = await ensureProject(input.projectId);
       const sourceStat = await fs.stat(input.filePath);
+      const uploadIdGenerator = createUploadIdGenerator(await collectUsedBookAssetIds(project));
       const upload = await uploadBook({
         project,
         sourcePath: input.filePath,
         repository: uploadedBookRepository,
         displayName: input.displayName,
         clock,
-        idGenerator
+        idGenerator: uploadIdGenerator
       });
       return {
         bookId: upload.book.id,

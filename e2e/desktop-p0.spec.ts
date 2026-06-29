@@ -100,12 +100,10 @@ async function runExtractionLoop(page: Page): Promise<void> {
   await expect(page.getByText("已完成", { exact: true })).toBeVisible();
 }
 
-async function previewReport(page: Page): Promise<void> {
-  await openAssets(page);
+async function previewReportFromCompletedJob(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "查看结果" }).click();
   await expect(page.getByRole("heading", { name: "资产", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: /utf8-novel\.txt/ }).click();
   await expect(page.getByRole("button", { name: /丹药分析/ })).toBeVisible();
-  await page.getByRole("button", { name: /丹药分析/ }).click();
   const preview = page.getByRole("article", { name: "安全 Markdown 预览" });
   await expect(preview.getByRole("heading", { name: "丹药分析" })).toBeVisible();
   await expect(preview).toContainText("凝气丹");
@@ -225,7 +223,7 @@ test("P0 desktop extraction loop", async () => {
       url: "/v1/chat/completions"
     });
     expect(mockServer.requests[0].body).toMatchObject({ model: "mock-model" });
-    await previewReport(page);
+    await previewReportFromCompletedJob(page);
     await openFunction(page, "关系图谱");
     await expect(page.getByRole("heading", { name: "关系图谱" })).toBeVisible();
     await expect(page.getByText("当前书籍暂无图谱资产")).toBeVisible();

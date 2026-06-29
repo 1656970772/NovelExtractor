@@ -32,6 +32,8 @@ export interface ExtractionJob {
   progressText?: string;
   tokenText?: string;
   failureReason?: string;
+  resultReportId?: string;
+  resultReportDisplayName?: string;
   logs?: string[];
 }
 
@@ -190,6 +192,8 @@ export function mapJobDtoToExtractionJob(
     progressText: job.progressText,
     tokenText: job.tokenText,
     failureReason: job.failureReason,
+    resultReportId: job.resultReportId,
+    resultReportDisplayName: job.resultReportDisplayName,
     logs: [...logs]
   };
 }
@@ -201,6 +205,8 @@ export function getNextTaskStatusForAction(action: TaskAction): TaskStatus | nul
       return "running";
     case "pause":
       return "paused";
+    case "viewReport":
+      return null;
     case "delete":
       return null;
     default:

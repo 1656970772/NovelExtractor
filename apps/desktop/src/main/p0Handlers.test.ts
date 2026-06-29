@@ -279,12 +279,14 @@ describe("P0 desktop IPC handlers", () => {
         status: "completed",
         progressText: "已完成 3/3 章",
         tokenText: "Token 37 / 费用 0",
-        allowedActions: ["delete"]
+        resultReportDisplayName: "丹药分析",
+        allowedActions: ["viewReport", "delete"]
       });
 
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
 
       expect(reports).toHaveLength(1);
+      expect(completedJob?.resultReportId).toBe(reports[0].id);
       expect(reports[0]).toMatchObject({
         bookId: book.bookId,
         fileName: "丹药分析.md",
@@ -330,6 +332,34 @@ describe("P0 desktop IPC handlers", () => {
         })
       ])
     );
+  });
+
+  it("avoids stale on-disk book asset ids after restarting handlers", async () => {
+    const contract = createIpcContract();
+    const firstHandlers = createHandlers();
+
+    const firstBook = await contract.invoke(firstHandlers, "books:uploadTxt", {
+      projectId: "project-a",
+      filePath: utf8FixturePath,
+      displayName: "凡人修仙传.txt"
+    });
+
+    expect(firstBook.bookId).toBe("book-1");
+
+    const restartedHandlers = createHandlers();
+    const secondBook = await contract.invoke(restartedHandlers, "books:uploadTxt", {
+      projectId: "project-a",
+      filePath: utf8FixturePath,
+      displayName: "凡人修仙传.txt"
+    });
+
+    expect(secondBook.bookId).toBe("book-2");
+    await expect(
+      fs.stat(path.join(tempRoot, "projects", "project-a", "assets", "books", "book-1"))
+    ).resolves.toBeTruthy();
+    await expect(
+      fs.stat(path.join(tempRoot, "projects", "project-a", "assets", "books", "book-2"))
+    ).resolves.toBeTruthy();
   });
 
   it("redacts raw API keys echoed by successful model content before writing reports", async () => {
