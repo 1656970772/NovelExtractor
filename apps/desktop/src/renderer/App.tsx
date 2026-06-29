@@ -105,6 +105,7 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
     getDefaultTemplateViews().map((template) => template.id)
   );
   const [isTemplateModalOpen, setTemplateModalOpen] = useState(false);
+  const [templateModalInitialAction, setTemplateModalInitialAction] = useState<"new" | undefined>();
   const [templateSaveState, setTemplateSaveState] = useState<TemplateSaveState>("idle");
   const [templateSaveError, setTemplateSaveError] = useState<string | undefined>();
 
@@ -478,6 +479,21 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
     await runJobAction(jobId, "delete");
   }
 
+  function openTemplateManager(): void {
+    setTemplateModalInitialAction(undefined);
+    setTemplateModalOpen(true);
+  }
+
+  function openNewTemplateDialog(): void {
+    setTemplateModalInitialAction("new");
+    setTemplateModalOpen(true);
+  }
+
+  function closeTemplateManager(): void {
+    setTemplateModalOpen(false);
+    setTemplateModalInitialAction(undefined);
+  }
+
   if (!project) {
     return (
       <main className="project-gate-shell" data-testid="desktop-shell">
@@ -525,8 +541,11 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
             errorMessage={extractionError}
             jobs={jobs}
             models={extractionModels}
+            projectId={project.id}
+            onSaveTemplate={saveTemplate}
             onOpenProviderConfig={() => setProviderModalOpen(true)}
-            onOpenTemplateManager={() => setTemplateModalOpen(true)}
+            onOpenNewTemplate={openNewTemplateDialog}
+            onOpenTemplateManager={openTemplateManager}
             onCreateJob={createJob}
             onDeleteJob={deleteJob}
             onJobAction={runJobAction}
@@ -554,13 +573,14 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
         onSaveProvider={saveProvider}
       />
       <TemplateManagementModal
+        initialAction={templateModalInitialAction}
         open={isTemplateModalOpen}
         projectId={project.id}
         saveError={templateSaveError}
         saveState={templateSaveState}
         selectedTemplateIds={selectedTemplateIds}
         templates={templates}
-        onClose={() => setTemplateModalOpen(false)}
+        onClose={closeTemplateManager}
         onDeleteTemplate={deleteTemplate}
         onSelectionChange={saveTemplateSelection}
         onSaveTemplate={saveTemplate}

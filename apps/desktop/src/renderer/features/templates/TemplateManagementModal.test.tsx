@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState, type ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -51,6 +51,7 @@ function renderTemplateModal(overrides: Partial<ComponentProps<typeof TemplateMa
 function renderStatefulTemplateModal() {
   const savedAt = "2026-06-28T00:00:00.000Z";
   const onSaveTemplate = vi.fn();
+  const onDeleteTemplate = vi.fn();
   const onSelectionChange = vi.fn();
 
   function StatefulTemplateModal() {
@@ -88,6 +89,15 @@ function renderStatefulTemplateModal() {
       setSelectedTemplateIds(templateIds);
     });
 
+    onDeleteTemplate.mockImplementation(async (templateId: string) => {
+      setTemplates((currentTemplates) =>
+        currentTemplates.filter((template) => template.id !== templateId)
+      );
+      setSelectedTemplateIds((currentTemplateIds) =>
+        currentTemplateIds.filter((currentTemplateId) => currentTemplateId !== templateId)
+      );
+    });
+
     return (
       <>
         <button onClick={() => setOpen(true)} type="button">
@@ -99,7 +109,7 @@ function renderStatefulTemplateModal() {
           selectedTemplateIds={selectedTemplateIds}
           templates={templates}
           onClose={() => setOpen(false)}
-          onDeleteTemplate={vi.fn().mockResolvedValue(undefined)}
+          onDeleteTemplate={onDeleteTemplate}
           onSaveTemplate={onSaveTemplate}
           onSelectionChange={onSelectionChange}
         />
@@ -109,7 +119,7 @@ function renderStatefulTemplateModal() {
 
   render(<StatefulTemplateModal />);
 
-  return { onSaveTemplate, onSelectionChange };
+  return { onDeleteTemplate, onSaveTemplate, onSelectionChange };
 }
 
 describe("TemplateManagementModal", () => {
@@ -289,5 +299,111 @@ describe("TemplateManagementModal", () => {
       2,
       expect.objectContaining({ name: "2222", scope: "global" })
     );
+  });
+
+  it("shows editor actions beside the current template and deletes the active template", async () => {
+    const user = userEvent.setup();
+    const props = renderStatefulTemplateModal();
+    const editor = screen.getByRole("region", { name: "模板预览编辑" });
+
+    expect(within(editor).getByRole("button", { name: "保存" })).toBeInTheDocument();
+    expect(within(editor).getByRole("button", { name: "删除模板" })).toHaveClass("button--danger");
+
+    await user.clear(screen.getByRole("textbox", { name: "模板正文" }));
+    await user.type(screen.getByRole("textbox", { name: "模板正文" }), "还没保存的模板正文");
+
+    expect(within(editor).getByText("未保存")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "重置模板" }));
+    await user.click(screen.getByRole("button", { name: "预览编辑 伏笔模板" }));
+    await user.click(within(editor).getByRole("button", { name: "删除模板" }));
+
+    expect(props.onDeleteTemplate).toHaveBeenCalledWith("project-foreshadow");
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "预览编辑 伏笔模板" })).not.toBeInTheDocument()
+    );
+    expect(screen.getByRole("textbox", { name: "模板正文" })).toHaveValue("记录势力、地名与修炼体系。");
+  });
+
+  it("uploads selected and dropped template files only after confirmation", async () => {
+    const user = userEvent.setup();
+    const props = renderStatefulTemplateModal();
+
+    await user.click(screen.getByRole("button", { name: "新增模板" }));
+    const nameDialog = screen.getByRole("dialog", { name: "新增模板" });
+
+    expect(within(nameDialog).getByRole("tab", { name: "手动创建" })).toHaveAttribute("aria-selected", "true");
+    await user.click(within(nameDialog).getByRole("tab", { name: "上传模板" }));
+    expect(within(nameDialog).getByRole("tab", { name: "上传模板" })).toHaveAttribute("aria-selected", "true");
+
+    const fileInput = within(nameDialog).getByLabelText("选择模板文件");
+    expect(fileInput).toHaveAttribute("multiple");
+
+    await user.upload(
+      fileInput,
+      [
+        new File(["# 文件选择模板\n字段要求"], "文件选择模板.md", { type: "text/markdown" }),
+        new File(["拖拽前正文"], "批量模板.txt", { type: "text/plain" })
+      ]
+    );
+
+    expect(props.onSaveTemplate).not.toHaveBeenCalled();
+    expect(within(nameDialog).getByText("文件选择模板.md")).toBeInTheDocument();
+    expect(within(nameDialog).getByText("批量模板.txt")).toBeInTheDocument();
+
+    fireEvent.drop(within(nameDialog).getByRole("button", { name: "拖拽上传模板" }), {
+      dataTransfer: {
+        files: [new File(["拖拽正文"], "拖拽模板.txt", { type: "text/plain" })]
+      }
+    });
+
+    expect(props.onSaveTemplate).not.toHaveBeenCalled();
+    expect(within(nameDialog).getByText("拖拽模板.txt")).toBeInTheDocument();
+
+    await user.click(within(nameDialog).getByRole("checkbox", { name: "是否全局模板" }));
+    await user.click(within(nameDialog).getByRole("button", { name: "上传模板" }));
+
+    await waitFor(() =>
+      expect(props.onSaveTemplate).toHaveBeenCalledWith({
+        projectId: "project-a",
+        scope: "global",
+        name: "文件选择模板",
+        fileName: "文件选择模板.md",
+        body: "# 文件选择模板\n字段要求"
+      })
+    );
+    expect(props.onSaveTemplate).toHaveBeenCalledWith({
+      projectId: "project-a",
+      scope: "global",
+      name: "批量模板",
+      fileName: "批量模板.txt",
+      body: "拖拽前正文"
+    });
+    expect(props.onSaveTemplate).toHaveBeenCalledWith({
+      projectId: "project-a",
+      scope: "global",
+        name: "拖拽模板",
+        fileName: "拖拽模板.txt",
+        body: "拖拽正文"
+    });
+    expect(await within(nameDialog).findByText("已上传 3 个模板")).toBeInTheDocument();
+  });
+
+  it("rejects unsupported uploaded template files", async () => {
+    const user = userEvent.setup();
+    const props = renderStatefulTemplateModal();
+
+    await user.click(screen.getByRole("button", { name: "新增模板" }));
+    const nameDialog = screen.getByRole("dialog", { name: "新增模板" });
+    await user.click(within(nameDialog).getByRole("tab", { name: "上传模板" }));
+
+    fireEvent.drop(within(nameDialog).getByRole("button", { name: "拖拽上传模板" }), {
+      dataTransfer: {
+        files: [new File(["PDF"], "错误模板.pdf", { type: "application/pdf" })]
+      }
+    });
+
+    expect(await within(nameDialog).findByRole("alert")).toHaveTextContent("仅支持 .txt 或 .md 文件");
+    expect(props.onSaveTemplate).not.toHaveBeenCalled();
   });
 });

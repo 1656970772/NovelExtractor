@@ -322,6 +322,52 @@ describe("desktop workbench shell", () => {
     expect(api.listTemplates).toHaveBeenCalledWith({ projectId: "project-a" });
   });
 
+  it("opens the template manager with the new-template dialog from the extraction upload panel", async () => {
+    const user = userEvent.setup();
+    const api = installDesktopApiMock();
+    api.listTemplates.mockResolvedValue({
+      templates: [appGlobalTemplate, appProjectTemplate]
+    });
+    api.saveTemplate.mockResolvedValue({
+      id: "template-manual",
+      scope: "project",
+      projectId: "project-a",
+      name: "手动新增模板",
+      fileName: "手动新增模板.md",
+      body: "",
+      createdAt: "2026-06-28T00:00:00.000Z",
+      updatedAt: "2026-06-28T00:00:00.000Z"
+    });
+    render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
+
+    await user.click(screen.getByRole("button", { name: "功能" }));
+    await user.click(
+      within(screen.getByRole("navigation", { name: "功能入口" })).getByRole("button", {
+        name: "小说提取"
+      })
+    );
+
+    await user.click(await screen.findByRole("button", { name: "手动新增模板" }));
+
+    const templateDialog = screen.getByRole("dialog", { name: "模板选择与编辑" });
+    const nameDialog = within(templateDialog).getByRole("dialog", { name: "新增模板" });
+    expect(nameDialog).toBeInTheDocument();
+
+    await user.type(within(nameDialog).getByRole("textbox", { name: "新模板名字" }), "手动新增模板");
+    await user.click(within(nameDialog).getByRole("button", { name: "创建模板" }));
+
+    await waitFor(() => {
+      expect(api.saveTemplate).toHaveBeenCalledWith({
+        projectId: "project-a",
+        scope: "project",
+        name: "手动新增模板",
+        fileName: "手动新增模板.md",
+        body: ""
+      });
+    });
+    expect(screen.getByRole("dialog", { name: "模板选择与编辑" })).toBeInTheDocument();
+  });
+
   it("loads uploaded book reports and previews safe report html through the desktop api", async () => {
     const user = userEvent.setup();
     const api = installDesktopApiMock();

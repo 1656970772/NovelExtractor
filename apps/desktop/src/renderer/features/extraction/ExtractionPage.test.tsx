@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TemplateDto } from "../../../shared/ipcTypes";
@@ -65,12 +65,22 @@ describe("ExtractionPage", () => {
 
     const file = new File(["第一章 初入仙途"], "凡人修仙传.txt", { type: "text/plain" });
     const fileInput = screen.getByLabelText("选择 .txt 文件");
+    const dropZone = screen.getByRole("button", { name: "拖拽上传小说原文" });
 
     expect(fileInput).toHaveAttribute("accept", ".txt,text/plain");
+    expect(fileInput).not.toHaveAttribute("multiple");
 
     await user.upload(fileInput, file);
 
     expect(onUploadTxt).toHaveBeenCalledWith(file);
+
+    fireEvent.drop(dropZone, {
+      dataTransfer: {
+        files: [new File(["第二本"], "第二本.txt", { type: "text/plain" })]
+      }
+    });
+
+    expect(onUploadTxt).toHaveBeenCalledWith(expect.objectContaining({ name: "第二本.txt" }));
 
     rerender(
       <ExtractionPage
@@ -86,6 +96,31 @@ describe("ExtractionPage", () => {
     expect(screen.getByText("2 KB")).toBeInTheDocument();
     expect(screen.getByText("utf-8")).toBeInTheDocument();
     expect(screen.getByText("章节数 3")).toBeInTheDocument();
+  });
+
+  it("rejects dropping more than one novel file at a time", () => {
+    const onUploadTxt = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ExtractionPage
+        models={[modelForTest]}
+        books={[]}
+        jobs={[]}
+        state="ready"
+        onUploadTxt={onUploadTxt}
+      />
+    );
+
+    fireEvent.drop(screen.getByRole("button", { name: "拖拽上传小说原文" }), {
+      dataTransfer: {
+        files: [
+          new File(["第一本"], "第一本.txt", { type: "text/plain" }),
+          new File(["第二本"], "第二本.txt", { type: "text/plain" })
+        ]
+      }
+    });
+
+    expect(screen.getByRole("alert")).toHaveTextContent("每次只能上传一本小说");
+    expect(onUploadTxt).not.toHaveBeenCalled();
   });
 
   it("builds createJob dto from configured templates, editable windows, and selected model", async () => {
@@ -141,6 +176,103 @@ describe("ExtractionPage", () => {
 
     expect(onOpenTemplateManager).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("region", { name: "模板选择" })).not.toBeInTheDocument();
+  });
+
+  it("previews selected templates after hovering the selector for half a second", () => {
+    vi.useFakeTimers();
+    try {
+      render(
+        <ExtractionPage
+          models={[modelForTest]}
+          books={[uploadedBookForTest]}
+          jobs={[]}
+          state="ready"
+          templates={[globalTemplateForTest, projectTemplateForTest]}
+          selectedTemplateIds={[globalTemplateForTest.id, projectTemplateForTest.id]}
+        />
+      );
+
+      const trigger = screen.getByRole("button", { name: /选择模板/ });
+      const selector = trigger.closest(".template-selector");
+      expect(selector).toBeInstanceOf(HTMLElement);
+
+      fireEvent.mouseEnter(selector as HTMLElement);
+      act(() => {
+        vi.advanceTimersByTime(499);
+      });
+      expect(screen.queryByRole("region", { name: "已选模板预览" })).not.toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+
+      const preview = screen.getByRole("region", { name: "已选模板预览" });
+      expect(within(preview).getByText("世界观模板")).toBeInTheDocument();
+      expect(within(preview).getByText("伏笔模板")).toBeInTheDocument();
+      expect(preview).toHaveTextContent("仅预览");
+
+      fireEvent.mouseLeave(selector as HTMLElement);
+      expect(screen.queryByRole("region", { name: "已选模板预览" })).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uploads templates from the extraction page after explicit confirmation", async () => {
+    const user = userEvent.setup();
+    const onSaveTemplate = vi.fn().mockResolvedValue(undefined);
+    const onOpenNewTemplate = vi.fn();
+    render(
+      <ExtractionPage
+        projectId="project-a"
+        models={[modelForTest]}
+        books={[uploadedBookForTest]}
+        jobs={[]}
+        state="ready"
+        templates={[globalTemplateForTest]}
+        selectedTemplateIds={[]}
+        onOpenNewTemplate={onOpenNewTemplate}
+        onSaveTemplate={onSaveTemplate}
+      />
+    );
+
+    const uploadPanel = screen.getByRole("region", { name: "上传模板" });
+    const fileInput = within(uploadPanel).getByLabelText("选择模板文件");
+
+    expect(fileInput).toHaveAttribute("multiple");
+    expect(within(uploadPanel).getByRole("button", { name: "上传模板" })).toBeDisabled();
+
+    await user.upload(fileInput, [
+      new File(["# 世界规则"], "世界规则.md", { type: "text/markdown" }),
+      new File(["伏笔字段"], "伏笔字段.txt", { type: "text/plain" })
+    ]);
+
+    expect(onSaveTemplate).not.toHaveBeenCalled();
+    expect(within(uploadPanel).getByText("世界规则.md")).toBeInTheDocument();
+    expect(within(uploadPanel).getByText("伏笔字段.txt")).toBeInTheDocument();
+
+    await user.click(within(uploadPanel).getByRole("checkbox", { name: "是否全局模板" }));
+    await user.click(within(uploadPanel).getByRole("button", { name: "上传模板" }));
+
+    await screen.findByText("已上传 2 个模板");
+    expect(onSaveTemplate).toHaveBeenNthCalledWith(1, {
+      projectId: "project-a",
+      scope: "global",
+      name: "世界规则",
+      fileName: "世界规则.md",
+      body: "# 世界规则"
+    });
+    expect(onSaveTemplate).toHaveBeenNthCalledWith(2, {
+      projectId: "project-a",
+      scope: "global",
+      name: "伏笔字段",
+      fileName: "伏笔字段.txt",
+      body: "伏笔字段"
+    });
+
+    await user.click(within(uploadPanel).getByRole("button", { name: "手动新增模板" }));
+
+    expect(onOpenNewTemplate).toHaveBeenCalledTimes(1);
   });
 
   it("shows empty books, empty models, empty jobs, and opens provider config", async () => {

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { ChangeEvent } from "react";
+import type { ChangeEvent, DragEvent } from "react";
 import { formatByteSize, type ExtractionBook } from "./extractionViewModel";
 
 export type UploadState = "idle" | "uploading" | "error";
@@ -18,16 +18,10 @@ export function UploadNovelPanel({
   onUploadTxt
 }: UploadNovelPanelProps) {
   const [localError, setLocalError] = useState<string | undefined>();
+  const [isNovelDragActive, setNovelDragActive] = useState(false);
   const isUploading = uploadState === "uploading";
 
-  async function handleFileChange(event: ChangeEvent<HTMLInputElement>): Promise<void> {
-    const file = event.currentTarget.files?.[0];
-    event.currentTarget.value = "";
-
-    if (!file) {
-      return;
-    }
-
+  async function uploadFile(file: File): Promise<void> {
     if (!file.name.toLowerCase().endsWith(".txt")) {
       setLocalError("请选择 .txt 文件");
       return;
@@ -47,6 +41,40 @@ export function UploadNovelPanel({
     }
   }
 
+  async function handleSelectedFiles(fileList: FileList | readonly File[] | null): Promise<void> {
+    const files = Array.from(fileList ?? []);
+
+    if (files.length === 0) {
+      return;
+    }
+
+    if (files.length > 1) {
+      setLocalError("每次只能上传一本小说");
+      return;
+    }
+
+    await uploadFile(files[0]);
+  }
+
+  async function handleFileChange(event: ChangeEvent<HTMLInputElement>): Promise<void> {
+    const input = event.currentTarget;
+    await handleSelectedFiles(input.files);
+    input.value = "";
+  }
+
+  function handleNovelDrop(event: DragEvent<HTMLDivElement>): void {
+    event.preventDefault();
+    setNovelDragActive(false);
+    void handleSelectedFiles(event.dataTransfer.files);
+  }
+
+  function handleNovelDragEnter(event: DragEvent<HTMLDivElement>): void {
+    event.preventDefault();
+    if (!isUploading) {
+      setNovelDragActive(true);
+    }
+  }
+
   return (
     <section className="tool-panel upload-panel" aria-labelledby="upload-title">
       <div className="panel-heading">
@@ -54,17 +82,32 @@ export function UploadNovelPanel({
         <span>.txt</span>
       </div>
 
-      <label className="file-upload-field">
-        <span>选择 .txt 文件</span>
-        <input
-          accept=".txt,text/plain"
-          disabled={isUploading}
-          onChange={(event) => {
-            void handleFileChange(event);
-          }}
-          type="file"
-        />
-      </label>
+      <div
+        aria-label="拖拽上传小说原文"
+        className={`template-modal__upload-zone novel-upload__zone${
+          isNovelDragActive ? " template-modal__upload-zone--active" : ""
+        }`}
+        onDragEnter={handleNovelDragEnter}
+        onDragLeave={() => setNovelDragActive(false)}
+        onDragOver={(event) => event.preventDefault()}
+        onDrop={handleNovelDrop}
+        role="button"
+        tabIndex={0}
+      >
+        <span>拖拽 .txt 小说文件到这里</span>
+        <label className="button button--secondary button--compact template-modal__upload-picker">
+          <span>选择小说文件</span>
+          <input
+            accept=".txt,text/plain"
+            aria-label="选择 .txt 文件"
+            disabled={isUploading}
+            onChange={(event) => {
+              void handleFileChange(event);
+            }}
+            type="file"
+          />
+        </label>
+      </div>
 
       {uploadError || localError ? (
         <p className="form-error" role="alert">

@@ -5,11 +5,13 @@ import {
   groupTemplatesByScope,
   type TemplateView
 } from "./templateViewModel";
+import { TemplateUploadPanel } from "./TemplateUploadPanel";
 
 export type TemplateSaveState = "idle" | "saving" | "error";
 
 export interface TemplateManagementModalProps {
   open: boolean;
+  initialAction?: "new";
   projectId: string;
   templates: readonly TemplateDto[];
   selectedTemplateIds: readonly string[];
@@ -33,6 +35,8 @@ type PendingAction =
   | { type: "close" }
   | { type: "new" }
   | { type: "select"; templateId: string };
+
+type NameDialogTab = "manual" | "upload";
 
 const EMPTY_DRAFT: TemplateDraft = {
   name: "",
@@ -100,6 +104,7 @@ function getInitialTemplate(
 
 export function TemplateManagementModal({
   open,
+  initialAction,
   projectId,
   templates,
   selectedTemplateIds,
@@ -107,6 +112,7 @@ export function TemplateManagementModal({
   saveError,
   onClose,
   onSaveTemplate,
+  onDeleteTemplate,
   onSelectionChange
 }: TemplateManagementModalProps) {
   const [activeTemplateId, setActiveTemplateId] = useState<string | null>(null);
@@ -119,6 +125,7 @@ export function TemplateManagementModal({
   const [localNewTemplate, setLocalNewTemplate] = useState<TemplateDto | null>(null);
   const [localNewSelected, setLocalNewSelected] = useState(false);
   const [isNameDialogOpen, setIsNameDialogOpen] = useState(false);
+  const [nameDialogTab, setNameDialogTab] = useState<NameDialogTab>("manual");
   const [newTemplateName, setNewTemplateName] = useState("");
   const [isNewTemplateGlobal, setIsNewTemplateGlobal] = useState(false);
   const [nameDialogError, setNameDialogError] = useState<string | undefined>();
@@ -161,11 +168,12 @@ export function TemplateManagementModal({
     setPendingAction(null);
     setLocalNewTemplate(null);
     setLocalNewSelected(false);
-    setIsNameDialogOpen(false);
+    setIsNameDialogOpen(initialAction === "new");
+    setNameDialogTab("manual");
     setNewTemplateName("");
     setIsNewTemplateGlobal(false);
     setNameDialogError(undefined);
-  }, [open]);
+  }, [initialAction, open]);
 
   if (!open) {
     return null;
@@ -200,6 +208,7 @@ export function TemplateManagementModal({
 
   function openNameDialog(): void {
     setIsNameDialogOpen(true);
+    setNameDialogTab("manual");
     setNewTemplateName("");
     setIsNewTemplateGlobal(false);
     setNameDialogError(undefined);
@@ -208,9 +217,23 @@ export function TemplateManagementModal({
 
   function closeNameDialog(): void {
     setIsNameDialogOpen(false);
+    setNameDialogTab("manual");
     setNewTemplateName("");
     setIsNewTemplateGlobal(false);
     setNameDialogError(undefined);
+  }
+
+  function applyCreatedTemplate(savedTemplate: TemplateDto, fallbackDraft: TemplateDraft): void {
+    const nextDraft = savedTemplate ? createDraftFromTemplate(savedTemplate) : fallbackDraft;
+
+    setLocalNewTemplate(null);
+    setLocalNewSelected(false);
+    setActiveTemplateId(savedTemplate.id);
+    setDraft(nextDraft);
+    setSavedDraft(nextDraft);
+    setSearchQuery("");
+    setShowSelectedOnly(false);
+    closeNameDialog();
   }
 
   async function createLocalTemplateFromName(): Promise<void> {
@@ -252,29 +275,25 @@ export function TemplateManagementModal({
           createdAt: now,
           updatedAt: now
         };
-      const nextDraft: TemplateDraft = savedTemplate
-        ? createDraftFromTemplate(savedTemplate)
-        : {
-            name,
-            fileName,
-            body: "",
-            scope
-          };
+      const fallbackDraft: TemplateDraft = {
+        name,
+        fileName,
+        body: "",
+        scope
+      };
 
       if (savedTemplate) {
-        setLocalNewTemplate(null);
-        setLocalNewSelected(false);
+        applyCreatedTemplate(savedTemplate, fallbackDraft);
       } else {
         setLocalNewTemplate(nextTemplate);
         setLocalNewSelected(false);
+        setActiveTemplateId(nextTemplate.id);
+        setDraft(fallbackDraft);
+        setSavedDraft(fallbackDraft);
+        setSearchQuery("");
+        setShowSelectedOnly(false);
+        closeNameDialog();
       }
-
-      setActiveTemplateId(nextTemplate.id);
-      setDraft(nextDraft);
-      setSavedDraft(nextDraft);
-      setSearchQuery("");
-      setShowSelectedOnly(false);
-      closeNameDialog();
     } catch (error) {
       setNameDialogError(error instanceof Error ? error.message : "创建模板失败");
     }
@@ -395,6 +414,39 @@ export function TemplateManagementModal({
     return true;
   }
 
+  async function deleteActiveTemplate(): Promise<void> {
+    const templateId = activeTemplateId;
+
+    if (!templateId) {
+      return;
+    }
+
+    const remainingTemplates = displayedTemplates.filter((template) => template.id !== templateId);
+    const remainingSelectedTemplateIds = effectiveSelectedTemplateIds.filter(
+      (selectedTemplateId) => selectedTemplateId !== templateId
+    );
+    const nextTemplate = getInitialTemplate(remainingTemplates, remainingSelectedTemplateIds);
+    const nextDraft = nextTemplate ? createDraftFromTemplate(nextTemplate) : EMPTY_DRAFT;
+
+    setLocalError(undefined);
+
+    try {
+      if (localNewTemplate?.id === templateId && !draft.templateId) {
+        setLocalNewTemplate(null);
+        setLocalNewSelected(false);
+      } else {
+        await onDeleteTemplate(templateId);
+      }
+
+      setActiveTemplateId(nextTemplate?.id ?? null);
+      setDraft(nextDraft);
+      setSavedDraft(nextDraft);
+      setPendingAction(null);
+    } catch (error) {
+      setLocalError(error instanceof Error ? error.message : "删除模板失败");
+    }
+  }
+
   async function saveAndRunPendingAction(): Promise<void> {
     const action = pendingAction;
     if (!action) {
@@ -508,31 +560,13 @@ export function TemplateManagementModal({
               <h2 id="template-modal-title">模板选择与编辑</h2>
             </div>
             <div className="template-modal__header-actions">
-              <button className="button button--secondary button--compact" onClick={() => requestAction({ type: "new" })} type="button">
+              <button
+                className="button button--secondary button--compact"
+                onClick={() => requestAction({ type: "new" })}
+                type="button"
+              >
                 新增模板
               </button>
-              <button
-                className="button button--quiet button--compact"
-                disabled={!isDirty}
-                onClick={() => {
-                  setDraft(savedDraft);
-                  setLocalError(undefined);
-                }}
-                type="button"
-              >
-                重置模板
-              </button>
-              <button
-                className="button button--primary button--compact"
-                disabled={isSaving}
-                onClick={() => {
-                  void saveDraft();
-                }}
-                type="button"
-              >
-                保存
-              </button>
-              {isDirty ? <span className="status-chip">未保存</span> : null}
             </div>
           </div>
           <button
@@ -577,6 +611,41 @@ export function TemplateManagementModal({
               <p className="template-modal__editor-title">
                 当前模板：<strong>{activeTemplateId ? draft.name || "未命名模板" : "请选择或新增模板"}</strong>
               </p>
+              <div className="template-modal__editor-actions">
+                <button
+                  aria-label="删除模板"
+                  className="button button--danger button--compact"
+                  disabled={!activeTemplateId || isSaving}
+                  onClick={() => {
+                    void deleteActiveTemplate();
+                  }}
+                  type="button"
+                >
+                  删除
+                </button>
+                <button
+                  className="button button--quiet button--compact"
+                  disabled={!isDirty}
+                  onClick={() => {
+                    setDraft(savedDraft);
+                    setLocalError(undefined);
+                  }}
+                  type="button"
+                >
+                  重置模板
+                </button>
+                <button
+                  className="button button--primary button--compact"
+                  disabled={isSaving}
+                  onClick={() => {
+                    void saveDraft();
+                  }}
+                  type="button"
+                >
+                  保存
+                </button>
+                {isDirty ? <span className="status-chip">未保存</span> : null}
+              </div>
             </div>
 
             <div className="template-modal__editor-form">
@@ -632,55 +701,106 @@ export function TemplateManagementModal({
               role="dialog"
             >
               <h3>新增模板</h3>
-              <label className="provider-form__field">
-                <span>新模板名字</span>
-                <input
-                  autoFocus
-                  onChange={(event) => {
-                    setNewTemplateName(event.currentTarget.value);
+              <div className="template-modal__name-tabs" role="tablist" aria-label="新增模板方式">
+                <button
+                  aria-controls="manual-template-panel"
+                  aria-selected={nameDialogTab === "manual"}
+                  className="template-modal__name-tab"
+                  onClick={() => {
+                    setNameDialogTab("manual");
                     setNameDialogError(undefined);
                   }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      void createLocalTemplateFromName();
-                    }
-                    if (event.key === "Escape") {
-                      closeNameDialog();
-                    }
+                  role="tab"
+                  type="button"
+                >
+                  手动创建
+                </button>
+                <button
+                  aria-controls="upload-template-panel"
+                  aria-selected={nameDialogTab === "upload"}
+                  className="template-modal__name-tab"
+                  onClick={() => {
+                    setNameDialogTab("upload");
+                    setNameDialogError(undefined);
                   }}
-                  placeholder="输入模板名字"
-                  value={newTemplateName}
-                />
-              </label>
-              <label className="provider-form__radio">
-                <input
-                  checked={isNewTemplateGlobal}
-                  onChange={(event) => setIsNewTemplateGlobal(event.currentTarget.checked)}
-                  type="checkbox"
-                />
-                <span>是否全局模板</span>
-              </label>
+                  role="tab"
+                  type="button"
+                >
+                  上传模板
+                </button>
+              </div>
+
+              {nameDialogTab === "manual" ? (
+                <div id="manual-template-panel" role="tabpanel">
+                  <label className="provider-form__field">
+                    <span>新模板名字</span>
+                    <input
+                      autoFocus
+                      onChange={(event) => {
+                        setNewTemplateName(event.currentTarget.value);
+                        setNameDialogError(undefined);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          void createLocalTemplateFromName();
+                        }
+                        if (event.key === "Escape") {
+                          closeNameDialog();
+                        }
+                      }}
+                      placeholder="输入模板名字"
+                      value={newTemplateName}
+                    />
+                  </label>
+                </div>
+              ) : (
+                <div id="upload-template-panel" role="tabpanel">
+                  <TemplateUploadPanel
+                    footerActions={
+                      <button className="button button--quiet button--compact" onClick={closeNameDialog} type="button">
+                        取消
+                      </button>
+                    }
+                    isSaving={isSaving}
+                    projectId={projectId}
+                    templates={displayedTemplates}
+                    onSaveTemplate={onSaveTemplate}
+                  />
+                </div>
+              )}
+              {nameDialogTab === "manual" ? (
+                <label className="provider-form__radio">
+                  <input
+                    checked={isNewTemplateGlobal}
+                    onChange={(event) => setIsNewTemplateGlobal(event.currentTarget.checked)}
+                    type="checkbox"
+                  />
+                  <span>是否全局模板</span>
+                </label>
+              ) : null}
               {nameDialogError ? (
                 <p className="form-error" role="alert">
                   {nameDialogError}
                 </p>
               ) : null}
-              <div className="provider-form__actions">
-                <button
-                  className="button button--primary button--compact"
-                  disabled={isSaving}
-                  onClick={() => {
-                    void createLocalTemplateFromName();
-                  }}
-                  type="button"
-                >
-                  创建模板
-                </button>
-                <button className="button button--quiet button--compact" onClick={closeNameDialog} type="button">
-                  取消
-                </button>
-              </div>
+              {nameDialogTab === "manual" ? (
+                <div className="provider-form__actions template-modal__name-actions">
+                  <button
+                    className="button button--primary button--compact"
+                    disabled={isSaving}
+                    onClick={() => {
+                      void createLocalTemplateFromName();
+                    }}
+                    type="button"
+                  >
+                    创建模板
+                  </button>
+                  <button className="button button--quiet button--compact" onClick={closeNameDialog} type="button">
+                    取消
+                  </button>
+                </div>
+              ) : null}
             </section>
           </div>
         ) : null}

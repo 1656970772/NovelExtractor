@@ -3,7 +3,7 @@ import {
   getExtractionParameterDefaults,
   type TaskAction
 } from "@novel-extractor/config";
-import type { CreateJobDto } from "../../../shared/ipcTypes";
+import type { CreateJobDto, SaveTemplateDto, TemplateDto } from "../../../shared/ipcTypes";
 import type { ResourceState } from "../assets/AssetsPage";
 import { ExtractionParameters, type CreateJobState } from "./ExtractionParameters";
 import { JobList } from "./JobList";
@@ -18,10 +18,12 @@ import {
   type ExtractionModel
 } from "./extractionViewModel";
 import { getDefaultTemplateViews, type TemplateView } from "../templates/templateViewModel";
+import { TemplateUploadPanel } from "../templates/TemplateUploadPanel";
 
 export type { ExtractionBook, ExtractionJob, ExtractionModel } from "./extractionViewModel";
 
 export interface ExtractionPageProps {
+  projectId?: string;
   models: ExtractionModel[];
   books: ExtractionBook[];
   jobs: ExtractionJob[];
@@ -38,7 +40,9 @@ export interface ExtractionPageProps {
   onJobAction?: (jobId: string, action: TaskAction) => Promise<void>;
   onDeleteJob?: (jobId: string) => Promise<void>;
   onOpenProviderConfig?: () => void;
+  onOpenNewTemplate?: () => void;
   onOpenTemplateManager?: () => void;
+  onSaveTemplate?: (input: SaveTemplateDto) => Promise<TemplateDto | void>;
   onTemplateSelectionChange?: (templateIds: string[]) => void;
 }
 
@@ -47,6 +51,7 @@ function toErrorMessage(error: unknown, fallback: string): string {
 }
 
 export function ExtractionPage({
+  projectId,
   models,
   books,
   jobs,
@@ -63,7 +68,9 @@ export function ExtractionPage({
   onJobAction,
   onDeleteJob,
   onOpenProviderConfig,
+  onOpenNewTemplate,
   onOpenTemplateManager,
+  onSaveTemplate,
   onTemplateSelectionChange
 }: ExtractionPageProps) {
   const templates = useMemo(() => templatesProp ?? getDefaultTemplateViews(), [templatesProp]);
@@ -135,12 +142,31 @@ export function ExtractionPage({
       ) : null}
 
       <div className="extraction-layout">
-        <UploadNovelPanel
-          books={books}
-          uploadError={uploadError}
-          uploadState={uploadState}
-          onUploadTxt={onUploadTxt}
-        />
+        <div className="extraction-layout__stack">
+          <UploadNovelPanel
+            books={books}
+            uploadError={uploadError}
+            uploadState={uploadState}
+            onUploadTxt={onUploadTxt}
+          />
+          {projectId && onSaveTemplate ? (
+            <section
+              aria-labelledby="template-upload-title"
+              className="tool-panel template-upload-panel"
+            >
+              <div className="panel-heading">
+                <h2 id="template-upload-title">上传模板</h2>
+                <span>.txt / .md</span>
+              </div>
+              <TemplateUploadPanel
+                projectId={projectId}
+                templates={templates}
+                onOpenNewTemplate={onOpenNewTemplate}
+                onSaveTemplate={onSaveTemplate}
+              />
+            </section>
+          ) : null}
+        </div>
         <ExtractionParameters
           books={books}
           createError={createError ?? localCreateError}
