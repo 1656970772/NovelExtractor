@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "include": [
+    "../../vitest.workspace.ts",
+    "electron.vite.config.ts",
+    "src/**/*.ts",
+    "src/**/*.tsx"
+  ]
+}

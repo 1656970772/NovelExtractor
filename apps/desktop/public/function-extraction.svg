@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 120" role="img" aria-labelledby="title desc">
+  <title id="title">Extraction function artwork</title>
+  <desc id="desc">A notebook page and a pen for novel extraction.</desc>
+  <rect width="180" height="120" rx="16" fill="#edf5f2"/>
+  <rect x="32" y="20" width="76" height="86" rx="8" fill="#ffffff" stroke="#2f7d6d" stroke-width="4"/>
+  <path d="M48 40h42M48 56h42M48 72h30" stroke="#8fb8ae" stroke-width="6" stroke-linecap="round"/>
+  <path d="M122 32l24 24-45 45-27 6 6-27 42-48z" fill="#f6c85f" stroke="#1f2528" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M115 39l24 24" stroke="#1f2528" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="132" cy="86" r="13" fill="#d9ebe6" stroke="#2f7d6d" stroke-width="4"/>
+</svg>

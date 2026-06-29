@@ -10,6 +10,21 @@ from pathlib import Path
 from typing import Any
 
 
+def _confine_to_roots(path: str, roots: list[str] | None) -> None:
+    """Check if path is within one of the allowed roots."""
+    if not roots:
+        return
+
+    resolved_path = Path(path).resolve()
+    for root in roots:
+        try:
+            resolved_path.relative_to(Path(root).resolve())
+            return
+        except ValueError:
+            continue
+    raise ValueError(f"path is outside workspace: {path}")
+
+
 @dataclass
 class ReadFileTool:
     """Read a text file with optional line offset/limit."""
@@ -124,7 +139,7 @@ class ReadFileTool:
 class WriteFileTool:
     """Write content to a file at the given path."""
 
-    roots: list[str] = None
+    roots: list[str] | None = None
     work_dir: str = ""
     ledger: Any = None
 
@@ -205,25 +220,14 @@ class WriteFileTool:
 
     def _confine(self, path: str) -> None:
         """Check if path is within allowed roots."""
-        if not self.roots:
-            return
-        abs_path = os.path.abspath(path)
-        for root in self.roots:
-            abs_root = os.path.abspath(root)
-            try:
-                os.path.relpath(abs_path, abs_root)
-                if abs_path.startswith(abs_root):
-                    return
-            except ValueError:
-                continue
-        raise ValueError(f"path is outside workspace: {path}")
+        _confine_to_roots(path, self.roots)
 
 
 @dataclass
 class EditFileTool:
     """Replace an exact string in a file with another."""
 
-    roots: list[str] = None
+    roots: list[str] | None = None
     work_dir: str = ""
     ledger: Any = None
 
@@ -314,18 +318,7 @@ class EditFileTool:
 
     def _confine(self, path: str) -> None:
         """Check if path is within allowed roots."""
-        if not self.roots:
-            return
-        abs_path = os.path.abspath(path)
-        for root in self.roots:
-            abs_root = os.path.abspath(root)
-            try:
-                os.path.relpath(abs_path, abs_root)
-                if abs_path.startswith(abs_root):
-                    return
-            except ValueError:
-                continue
-        raise ValueError(f"path is outside workspace: {path}")
+        _confine_to_roots(path, self.roots)
 
     def _match_line_endings(self, content: str, old_string: str, new_string: str) -> tuple[str, str]:
         """Match line endings between content and strings."""
@@ -341,6 +334,148 @@ class EditFileTool:
             old_normalized = old_string.replace('\r\n', '\n')
 
         # Normalize new_string
+        new_normalized = new_string
+        if has_crlf and '\n' in new_string and '\r\n' not in new_string:
+            new_normalized = new_string.replace('\n', '\r\n')
+        elif has_lf and '\r\n' in new_string:
+            new_normalized = new_string.replace('\r\n', '\n')
+
+        return old_normalized, new_normalized
+
+
+@dataclass
+class MultiEditTool:
+    """Apply multiple exact string replacements to one file in order."""
+
+    roots: list[str] | None = None
+    work_dir: str = ""
+    ledger: Any = None
+
+    def __post_init__(self):
+        if self.roots is None:
+            self.roots = []
+
+    @property
+    def name(self) -> str:
+        return "multi_edit"
+
+    @property
+    def description(self) -> str:
+        return "Apply multiple exact old_string/new_string replacements to one file in order."
+
+    @property
+    def schema(self) -> str:
+        return json.dumps({
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "File path"},
+                "edits": {
+                    "type": "array",
+                    "description": "Ordered replacements to apply",
+                    "minItems": 1,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "old_string": {"type": "string", "description": "Exact text to replace"},
+                            "new_string": {"type": "string", "description": "Replacement text"},
+                            "replace_all": {"type": "boolean", "description": "Replace all occurrences when true"}
+                        },
+                        "required": ["old_string", "new_string"]
+                    }
+                }
+            },
+            "required": ["path", "edits"]
+        })
+
+    @property
+    def read_only(self) -> bool:
+        return False
+
+    def execute(self, args: dict[str, Any]) -> str:
+        path_str = args.get("path", "")
+        if not path_str:
+            raise ValueError("path is required")
+
+        edits = args.get("edits", [])
+        if not isinstance(edits, list):
+            raise ValueError("edits must be a list")
+        if not edits:
+            raise ValueError("edits must contain at least one edit")
+
+        path = self._resolve_in(path_str)
+
+        if self.roots:
+            self._confine(path)
+
+        try:
+            with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                content = f.read()
+        except Exception as e:
+            raise ValueError(f"read {path}: {e}")
+
+        updated = content
+        written_parts = []
+        for edit in edits:
+            if not isinstance(edit, dict):
+                raise ValueError("each edit must be an object")
+
+            old_string = edit.get("old_string", "")
+            if not old_string:
+                raise ValueError("old_string is required")
+
+            if "new_string" not in edit or not isinstance(edit["new_string"], str):
+                raise ValueError("new_string is required and must be a string")
+
+            new_string = edit["new_string"]
+            replace_all = edit.get("replace_all", False)
+            if not isinstance(replace_all, bool):
+                raise ValueError("replace_all must be a boolean")
+            old, new = self._match_line_endings(updated, old_string, new_string)
+
+            count = updated.count(old)
+            if count == 0:
+                raise ValueError(f"old_string not found in {path}")
+            if count > 1 and not replace_all:
+                raise ValueError(f"old_string is not unique in {path}; set replace_all=true or add more context")
+
+            updated = updated.replace(old, new, -1 if replace_all else 1)
+            written_parts.append(new)
+
+        try:
+            with open(path, 'w', encoding='utf-8', newline='') as f:
+                f.write(updated)
+        except Exception as e:
+            raise ValueError(f"write {path}: {e}")
+
+        if self.ledger is not None:
+            self.ledger.record_write(self.name, path, "\n".join(written_parts))
+
+        return f"applied {len(written_parts)} edits to {path}"
+
+    def _resolve_in(self, path: str) -> str:
+        """Resolve path relative to work_dir."""
+        if not self.work_dir:
+            return os.path.abspath(path)
+        p = Path(path)
+        if p.is_absolute():
+            return str(p)
+        return str(Path(self.work_dir) / p)
+
+    def _confine(self, path: str) -> None:
+        """Check if path is within allowed roots."""
+        _confine_to_roots(path, self.roots)
+
+    def _match_line_endings(self, content: str, old_string: str, new_string: str) -> tuple[str, str]:
+        """Match line endings between content and strings."""
+        has_crlf = '\r\n' in content
+        has_lf = '\n' in content and not has_crlf
+
+        old_normalized = old_string
+        if has_crlf and '\n' in old_string and '\r\n' not in old_string:
+            old_normalized = old_string.replace('\n', '\r\n')
+        elif has_lf and '\r\n' in old_string:
+            old_normalized = old_string.replace('\r\n', '\n')
+
         new_normalized = new_string
         if has_crlf and '\n' in new_string and '\r\n' not in new_string:
             new_normalized = new_string.replace('\n', '\r\n')
@@ -728,6 +863,7 @@ BUILTIN_TOOLS = {
     "read_file": ReadFileTool,
     "write_file": WriteFileTool,
     "edit_file": EditFileTool,
+    "multi_edit": MultiEditTool,
     "grep": GrepTool,
     "glob": GlobTool,
     "ls": LsTool,

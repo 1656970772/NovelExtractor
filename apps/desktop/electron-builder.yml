@@ -1,0 +1,17 @@
+appId: com.novelextractor.desktop
+productName: NovelExtractor
+directories:
+  output: release
+files:
+  - dist/**
+  - package.json
+asar: true
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true

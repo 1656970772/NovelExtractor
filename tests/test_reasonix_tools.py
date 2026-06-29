@@ -70,6 +70,29 @@ def test_workspace_tools_write_file_is_confined_to_workspace(tmp_path):
         registry.execute("write_file", {"path": "../escape.md", "content": "# bad"})
 
 
+@pytest.mark.parametrize(
+    ("tool_name", "args"),
+    [
+        ("write_file", {"content": "# bad"}),
+        ("edit_file", {"old_string": "old", "new_string": "new"}),
+        ("multi_edit", {"edits": [{"old_string": "old", "new_string": "new"}]}),
+    ],
+)
+def test_workspace_write_tools_reject_sibling_prefix_escape(tmp_path, tool_name, args):
+    workspace = tmp_path / "root"
+    sibling = tmp_path / "root2"
+    workspace.mkdir()
+    sibling.mkdir()
+    target = sibling / "escape.md"
+    if tool_name != "write_file":
+        target.write_text("old", encoding="utf-8")
+    ledger = ToolExecutionLedger(workspace)
+    registry = WorkspaceTools(workspace, ledger).registry(["write_file", "edit_file", "multi_edit"])
+
+    with pytest.raises(ValueError, match="outside workspace"):
+        registry.execute(tool_name, {"path": str(target), **args})
+
+
 def test_workspace_tools_write_file_records_write_after_prior_query(tmp_path):
     workspace = tmp_path
     (workspace / "丹药分析.md").write_text("# 丹药分析\n", encoding="utf-8")
@@ -84,6 +107,88 @@ def test_workspace_tools_write_file_records_write_after_prior_query(tmp_path):
 
     assert ledger.was_queried_before_write("丹药分析.md")
     assert ledger.written_files == {"丹药分析.md"}
+
+
+def test_workspace_tools_multi_edit_applies_ordered_edits_and_records_write(tmp_path):
+    workspace = tmp_path
+    target = workspace / "丹药分析.md"
+    target.write_text("# 丹药分析\n旧名称\n旧用途\n", encoding="utf-8")
+    ledger = ToolExecutionLedger(workspace)
+    registry = WorkspaceTools(workspace, ledger).registry(["multi_edit"])
+
+    output = registry.execute(
+        "multi_edit",
+        {
+            "path": "丹药分析.md",
+            "edits": [
+                {"old_string": "旧名称", "new_string": "## 抽髓丸\n证据章节：第 1 章"},
+                {"old_string": "旧用途", "new_string": "用途：淬炼"},
+            ],
+        },
+    )
+
+    assert "applied 2 edits" in output
+    assert target.read_text(encoding="utf-8") == "# 丹药分析\n## 抽髓丸\n证据章节：第 1 章\n用途：淬炼\n"
+    assert ledger.written_files == {"丹药分析.md"}
+    assert ledger.write_contents["丹药分析.md"] == ["## 抽髓丸\n证据章节：第 1 章\n用途：淬炼"]
+
+
+def test_workspace_tools_multi_edit_rejects_empty_edits(tmp_path):
+    workspace = tmp_path
+    target = workspace / "丹药分析.md"
+    target.write_text("# 丹药分析\n", encoding="utf-8")
+    ledger = ToolExecutionLedger(workspace)
+    registry = WorkspaceTools(workspace, ledger).registry(["multi_edit"])
+
+    schema = json.loads(registry.get("multi_edit").schema)
+    assert schema["properties"]["edits"]["minItems"] == 1
+    with pytest.raises(ValueError, match="edits"):
+        registry.execute("multi_edit", {"path": "丹药分析.md", "edits": []})
+
+    assert target.read_text(encoding="utf-8") == "# 丹药分析\n"
+    assert ledger.written_files == set()
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        {"old_string": "旧名称"},
+        {"old_string": "旧名称", "new_string": None},
+        {"old_string": "旧名称", "new_string": 42},
+    ],
+)
+def test_workspace_tools_multi_edit_requires_new_string_to_be_string(tmp_path, edit):
+    workspace = tmp_path
+    target = workspace / "丹药分析.md"
+    target.write_text("# 丹药分析\n旧名称\n", encoding="utf-8")
+    ledger = ToolExecutionLedger(workspace)
+    registry = WorkspaceTools(workspace, ledger).registry(["multi_edit"])
+
+    with pytest.raises(ValueError, match="new_string"):
+        registry.execute("multi_edit", {"path": "丹药分析.md", "edits": [edit]})
+
+    assert target.read_text(encoding="utf-8") == "# 丹药分析\n旧名称\n"
+    assert ledger.written_files == set()
+
+
+def test_workspace_tools_multi_edit_requires_replace_all_to_be_boolean(tmp_path):
+    workspace = tmp_path
+    target = workspace / "丹药分析.md"
+    target.write_text("# 丹药分析\n旧名称\n旧名称\n", encoding="utf-8")
+    ledger = ToolExecutionLedger(workspace)
+    registry = WorkspaceTools(workspace, ledger).registry(["multi_edit"])
+
+    with pytest.raises(ValueError, match="replace_all"):
+        registry.execute(
+            "multi_edit",
+            {
+                "path": "丹药分析.md",
+                "edits": [{"old_string": "旧名称", "new_string": "新名称", "replace_all": "false"}],
+            },
+        )
+
+    assert target.read_text(encoding="utf-8") == "# 丹药分析\n旧名称\n旧名称\n"
+    assert ledger.written_files == set()
 
 
 def test_registry_exports_openai_tool_schema():

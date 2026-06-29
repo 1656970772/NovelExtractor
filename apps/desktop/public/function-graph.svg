@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 120" role="img" aria-labelledby="title desc">
+  <title id="title">Graph function artwork</title>
+  <desc id="desc">Connected nodes for a relationship graph.</desc>
+  <rect width="180" height="120" rx="16" fill="#eef3f7"/>
+  <path d="M58 72l33-34 36 17-17 34-52-17z" fill="none" stroke="#416f91" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="58" cy="72" r="17" fill="#ffffff" stroke="#2f7d6d" stroke-width="5"/>
+  <circle cx="91" cy="38" r="15" fill="#ffffff" stroke="#416f91" stroke-width="5"/>
+  <circle cx="127" cy="55" r="17" fill="#ffffff" stroke="#a0473d" stroke-width="5"/>
+  <circle cx="110" cy="89" r="15" fill="#ffffff" stroke="#936a24" stroke-width="5"/>
+  <circle cx="58" cy="72" r="5" fill="#2f7d6d"/>
+  <circle cx="91" cy="38" r="5" fill="#416f91"/>
+  <circle cx="127" cy="55" r="5" fill="#a0473d"/>
+  <circle cx="110" cy="89" r="5" fill="#936a24"/>
+</svg>

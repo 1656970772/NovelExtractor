@@ -1,0 +1,30 @@
+:root {
+  --app-color-ink: #1f2528;
+  --app-color-ink-muted: #5e686d;
+  --app-color-ink-soft: #7c878b;
+  --app-color-background: #edf1f0;
+  --app-color-surface: #ffffff;
+  --app-color-surface-paper: #f7f8f8;
+  --app-color-surface-raised: #fbfcfc;
+  --app-color-border: #ccd4d6;
+  --app-color-border-strong: #aebbbf;
+  --app-color-accent: #2f7d6d;
+  --app-color-accent-hover: #286f61;
+  --app-color-on-accent: #ffffff;
+  --app-color-accent-soft: #d9ebe6;
+  --app-color-info-soft: #edf5f8;
+  --app-color-graph-line: #d6e6e2;
+  --app-color-selected: #e9f3ef;
+  --app-color-progress: #416f91;
+  --app-color-success: #28724d;
+  --app-color-warning: #936a24;
+  --app-color-danger: #a0473d;
+  --app-color-danger-soft: #f6e5e1;
+  --app-radius-card: 8px;
+  --app-radius-control: 6px;
+  --app-radius-panel: 8px;
+  --app-shadow-panel: 0 14px 34px rgb(36 52 54 / 0.1);
+  --app-shadow-control: 0 1px 0 rgb(31 37 40 / 0.08);
+  --app-motion-duration: 160ms;
+  --app-motion-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}

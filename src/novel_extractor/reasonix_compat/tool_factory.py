@@ -37,7 +37,7 @@ def create_tool_registry(
     roots = [str(workspace)] if workspace else []
 
     # Default to all built-in tools if not specified
-    default_tools = ["read_file", "write_file", "edit_file", "grep", "glob", "ls"]
+    default_tools = ["read_file", "write_file", "edit_file", "multi_edit", "grep", "glob", "ls"]
     enabled_set = set(default_tools if enabled is None else enabled)
 
     # Check for unknown tools
@@ -52,7 +52,7 @@ def create_tool_registry(
         tool_class = BUILTIN_TOOLS[tool_name]
 
         # Instantiate with appropriate parameters
-        if tool_name in {"write_file", "edit_file"}:
+        if tool_name in {"write_file", "edit_file", "multi_edit"}:
             tool = tool_class(roots=roots, work_dir=work_dir, ledger=ledger)
         elif tool_name == "grep":
             # Pass budget's grep_max_matches to grep tool
