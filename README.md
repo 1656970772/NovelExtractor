@@ -1,10 +1,8 @@
 # NovelExtractor - 小说信息提取工具
 
-[![Tests](https://img.shields.io/badge/tests-passing-brightgreen)](tests/)
-[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-基于 LLM 的小说世界观信息自动提取工具，支持章节批次、模板路由、中断续跑。
+基于 LLM 的桌面端小说世界观信息提取工具，支持章节批次、模板路由、中断续跑。
 
 ## 特性
 
@@ -21,10 +19,7 @@
 
 ### 安装
 
-```bash
-cd E:\AI_Projects\NovelExtractor
-pip install -e .
-```
+请参考项目构建流程启动桌面端。CLI 安装方式已移除。
 
 ### 配置环境变量
 
@@ -42,26 +37,7 @@ export DEEPSEEK_MODEL="deepseek-v4-flash"
 
 ### 使用
 
-```bash
-# 查看执行计划（不调用模型）
-novel-extractor plan --config config/novel_extractor.mvp.yaml
-
-# 执行提取任务
-novel-extractor run --config config/novel_extractor.mvp.yaml
-
-# 执行并写出机器可读 metrics
-novel-extractor run --config config/novel_extractor.mvp.yaml --metrics metrics.json
-
-# 中断后恢复
-novel-extractor resume --config config/novel_extractor.mvp.yaml
-
-# 查看任务状态
-novel-extractor status --config config/novel_extractor.mvp.yaml
-
-# 重置指定窗口
-novel-extractor reset-window --config config/novel_extractor.mvp.yaml \
-  --window 5-9 --group resource_group
-```
+桌面端为主入口，启动后在任务页完成配置与执行。
 
 ## 配置示例
 
@@ -99,24 +75,13 @@ token_saving:
 ## 架构
 
 ### 核心模块
-
-- **config.py** - 配置加载和验证
-- **chapters.py** - 章节解析和窗口生成
-- **templates.py** - 模板管理和路由
-- **ledger.py** - SQLite 进度账本
-- **reasonix_compat/** - Reasonix 风格工具调用、文件工具、缓存用量统计
-- **prompts.py** - Prompt 构建
-- **llm.py** - LLM 客户端
-- **writer.py** - Markdown 写入
-- **verifier.py** - 文件校验
-- **pipeline.py** - 主循环
-- **progress.py** - 进度报告
-- **cli.py** - 命令行接口
+ 
+桌面端由 `@novel-extractor/*` 工作区包与主进程/渲染进程模块共同构成（配置、任务、模型、提取、模板、持久化、工具链）。
 
 ### 数据流
 
 ```
-CLI
+桌面端启动流程
   -> load config
   -> parse chapters
   -> build windows: 1-5, 5-9, 9-13
@@ -135,16 +100,16 @@ CLI
 
 ```bash
 # 运行所有测试
-pytest -v
+pnpm test
 
-# 运行特定测试
-pytest tests/test_config.py -v
+# 运行桌面端测试
+pnpm --filter @novel-extractor/desktop test
 
 # 查看覆盖率
-pytest --cov=novel_extractor --cov-report=html
+pnpm --filter @novel-extractor/desktop test -- --coverage
 ```
 
-**测试结果**：使用 `pytest -q` 验证。
+**测试结果**：使用 `pnpm test` 与桌面端专项命令验证。
 
 ## 文档
 
