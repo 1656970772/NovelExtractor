@@ -123,7 +123,7 @@ describe("ExtractionPage", () => {
     expect(onUploadTxt).not.toHaveBeenCalled();
   });
 
-  it("builds createJob dto from configured templates, editable windows, and selected model", async () => {
+  it("builds createJob dto from configured templates, editable windows, ledger strategy, and selected model", async () => {
     const user = userEvent.setup();
     const onCreateJob = vi.fn().mockResolvedValue(undefined);
     render(
@@ -142,6 +142,10 @@ describe("ExtractionPage", () => {
     await user.type(screen.getByRole("spinbutton", { name: "单次运行章节数" }), "4");
     await user.clear(screen.getByRole("spinbutton", { name: "提取章节窗口" }));
     await user.type(screen.getByRole("spinbutton", { name: "提取章节窗口" }), "12");
+    expect(screen.getByRole("checkbox", { name: "跳过已提取章节" })).toBeChecked();
+    await user.clear(screen.getByRole("spinbutton", { name: "重叠章节数" }));
+    await user.type(screen.getByRole("spinbutton", { name: "重叠章节数" }), "0");
+    await user.click(screen.getByRole("checkbox", { name: "跳过已提取章节" }));
     await user.selectOptions(screen.getByLabelText("模型"), "provider-1:model-a");
     await user.click(screen.getByRole("button", { name: "创建任务" }));
 
@@ -151,7 +155,9 @@ describe("ExtractionPage", () => {
       providerConfigId: "provider-1",
       modelId: "model-a",
       singleRunChapterCount: 4,
-      extractionChapterCount: 12
+      extractionChapterCount: 12,
+      overlapChapterCount: 0,
+      skipAlreadyExtracted: false
     });
   });
 
@@ -400,7 +406,8 @@ describe("ExtractionPage", () => {
       ],
       getExtractionParameterDefaults: () => ({
         singleRunChapterCount: 3,
-        extractionChapterCount: 9
+        extractionChapterCount: 9,
+        overlapChapterCount: 1
       })
     }));
     const { ExtractionPage: ConfiguredExtractionPage } = await import("./ExtractionPage");

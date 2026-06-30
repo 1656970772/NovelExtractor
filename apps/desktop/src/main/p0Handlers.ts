@@ -1,27 +1,32 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
   getBuiltInTemplates,
-  getProviderPresets,
+  getDefaultConfig,
   getTaskStatusConfig,
-  type TaskAction
+  type TaskAction,
+  type TemplateGroupFallbackStrategy
 } from "@novel-extractor/config";
 import type { Book, Chapter, Clock, IdGenerator, Project, ReportAsset } from "@novel-extractor/domain";
 import { toTaskStatus, type JobStatus } from "@novel-extractor/domain/job";
-import { uploadBook, type UploadedBookRepository } from "@novel-extractor/extraction/uploadBook";
 import {
-  createProviderRegistry,
-  OpenAiCompatibleClient,
-  type ChatCompletionResult,
-  type CredentialStore as LlmCredentialStore,
-  type FetchLike
-} from "@novel-extractor/llm";
+  ExtractionRulesError,
+  generateExtractionRules,
+  type GenerateExtractionRulesResult,
+  type TemplateGroupRulesSnapshot,
+  type TemplateRulesSnapshot
+} from "@novel-extractor/extraction/extractionRules";
+import { generateRuntimeWindows, type GenerateRuntimeWindowsResult } from "@novel-extractor/extraction/runtimeWindows";
+import { uploadBook, type UploadedBookRepository } from "@novel-extractor/extraction/uploadBook";
+import type { JobRuntimeError, JobRuntimeState, TokenUsage } from "@novel-extractor/jobs";
+import type { FetchLike } from "@novel-extractor/llm";
 import { renderSafeMarkdown } from "@novel-extractor/markdown/preview";
-import { createReportWriter } from "@novel-extractor/markdown/reportWriter";
-import { createMemoryCredentialStore, redactSecrets, type MemoryCredentialStore } from "./credentials";
+import { createMemoryCredentialStore, type MemoryCredentialStore } from "./credentials";
 import type { DesktopIpcHandlers } from "./ipc";
 import { createFileProjectStore, type MainProjectStore } from "./projectStore";
 import { createMemoryProviderStore, type MainProviderStore } from "./providerStore";
+import { createWindowRunService, type WindowRunArtifacts } from "./windowRunService";
 import type {
   CreateJobDto,
   JobDto,
@@ -67,6 +72,14 @@ interface TemplateStoreState {
   selectionsByProjectId: Record<string, string[]>;
 }
 
+interface PreparedPreRunArtifacts extends WindowRunArtifacts {
+  rulesLatestPath: string;
+  rulesSnapshotAbsolutePath: string;
+  rulesLatestAbsolutePath: string;
+  windowsManifestPath: string;
+  windowsRoot: string;
+}
+
 export interface P0IpcHandlersOptions {
   workspaceRoot?: string;
   clock?: Clock;
@@ -78,8 +91,7 @@ export interface P0IpcHandlersOptions {
 }
 
 const TASK_STATUS_CONFIG = getTaskStatusConfig();
-const PILL_TEMPLATE = getBuiltInTemplates().find((template) => template.id === "pill-analysis");
-const DEFAULT_REPORT_FILE_NAME = PILL_TEMPLATE?.defaultOutputFileName ?? "丹药分析.md";
+const RULES_FILE_NAME = "提取规则.md";
 
 const systemClock: Clock = {
   now: () => new Date().toISOString()
@@ -114,6 +126,25 @@ function toReportDisplayName(fileName: string): string {
 
 function toTemplateFileName(name: string): string {
   return `${toSafeSegment(name)}.md`;
+}
+
+function sha256(value: string): string {
+  return crypto.createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJson).join(",")}]`;
+  }
+
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
+      .join(",")}}`;
+  }
+
+  return JSON.stringify(value);
 }
 
 function assertSupportedTemplateFile(fileName: string): void {
@@ -183,6 +214,7 @@ function toReportDto(report: ReportAsset): ReportDto {
     bookId: report.bookId,
     fileName: report.fileName,
     displayName: report.displayName,
+    reportKind: report.reportKind,
     byteSize: report.byteSize,
     createdAt: report.createdAt,
     updatedAt: report.updatedAt
@@ -200,6 +232,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
   const booksById = new Map<string, Book>();
   const chaptersByBookId = new Map<string, Chapter[]>();
   const jobsById = new Map<string, P0JobRecord>();
+  const activeJobRuns = new Map<string, Promise<JobDto>>();
   const reportsById = new Map<string, ReportAsset>();
   const reportPathById = new Map<string, string>();
   const providerStore = options.providerStore ?? createMemoryProviderStore();
@@ -211,11 +244,6 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       clock,
       idGenerator
     });
-  const llmCredentialStore: LlmCredentialStore = {
-    async resolveApiKey(ref) {
-      return credentialStore.readApiKey(ref) ?? null;
-    }
-  };
   const templateStorePath = path.join(workspaceRoot, "templates.json");
   let templateStorePromise: Promise<TemplateStoreState> | null = null;
 
@@ -388,6 +416,178 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     return templates;
   }
 
+  function createTemplateGroupId(prefix: string, value: string): string {
+    const safeValue = toSafeSegment(value);
+    const hash = sha256(value).slice(0, 12);
+    return `${prefix}-${safeValue}-${hash}`;
+  }
+
+  function createTemplateHash(template: TemplateDto): string {
+    return sha256(
+      stableJson({
+        outputFileName: template.fileName,
+        templateBody: template.body,
+        templateId: template.id,
+        templateName: template.name
+      })
+    );
+  }
+
+  function createGroupHash(group: {
+    groupDisplayName: string;
+    groupId: string;
+    maxFullTemplatesPerCall: number;
+    templates: TemplateDto[];
+  }): string {
+    return sha256(
+      stableJson({
+        groupDisplayName: group.groupDisplayName,
+        groupId: group.groupId,
+        maxFullTemplatesPerCall: group.maxFullTemplatesPerCall,
+        templates: group.templates.map((template) => ({
+          outputFileName: template.fileName,
+          templateBody: template.body,
+          templateId: template.id,
+          templateName: template.name
+        }))
+      })
+    );
+  }
+
+  function buildRuleSnapshots(
+    templates: TemplateDto[],
+    strategy: TemplateGroupFallbackStrategy,
+    maxFullTemplatesPerCall: number
+  ): {
+    templates: TemplateRulesSnapshot[];
+    groups: TemplateGroupRulesSnapshot[];
+  } {
+    const groupTemplates = new Map<string, TemplateDto[]>();
+    const groupDisplayNames = new Map<string, string>();
+
+    for (const template of templates) {
+      const groupId =
+        strategy === "one-template-per-group"
+          ? createTemplateGroupId("template", template.id)
+          : createTemplateGroupId("output", path.basename(template.fileName, path.extname(template.fileName)));
+      const groupDisplayName =
+        strategy === "one-template-per-group" ? template.name : toReportDisplayName(template.fileName);
+
+      groupTemplates.set(groupId, [...(groupTemplates.get(groupId) ?? []), template]);
+      groupDisplayNames.set(groupId, groupDisplayName);
+    }
+
+    const snapshotTemplates: TemplateRulesSnapshot[] = templates.map((template) => {
+      const groupId =
+        strategy === "one-template-per-group"
+          ? createTemplateGroupId("template", template.id)
+          : createTemplateGroupId("output", path.basename(template.fileName, path.extname(template.fileName)));
+
+      return {
+        templateId: template.id,
+        templateName: template.name,
+        templateBody: template.body,
+        outputFileName: template.fileName,
+        routeDescription: "按模板名称、输出文件名和模板正文判断当前窗口是否相关。",
+        groupId,
+        templateHash: createTemplateHash(template)
+      };
+    });
+    const groups: TemplateGroupRulesSnapshot[] = [...groupTemplates.entries()].map(
+      ([groupId, groupedTemplates]) => ({
+        groupId,
+        groupDisplayName: groupDisplayNames.get(groupId) ?? groupId,
+        templateIds: groupedTemplates.map((template) => template.id),
+        maxFullTemplatesPerCall,
+        groupHash: createGroupHash({
+          groupDisplayName: groupDisplayNames.get(groupId) ?? groupId,
+          groupId,
+          maxFullTemplatesPerCall,
+          templates: groupedTemplates
+        })
+      })
+    );
+
+    return {
+      templates: snapshotTemplates,
+      groups
+    };
+  }
+
+  async function preparePreRunArtifacts(job: P0JobRecord): Promise<PreparedPreRunArtifacts> {
+    const book = requireBook(job.bookId);
+    const project = await ensureProject(book.projectId);
+    const extractionRuleDefaults = getDefaultConfig().extractionRuleDefaults;
+    const templates = await resolveJobTemplates(job);
+    const ruleSnapshots = buildRuleSnapshots(
+      templates,
+      extractionRuleDefaults.templateGroupFallbackStrategy,
+      extractionRuleDefaults.maxFullTemplatesPerCall
+    );
+
+    const runtimeWindows = await generateRuntimeWindows({
+      projectRoot: project.rootPath,
+      jobId: job.id,
+      bookId: book.id,
+      sourceTextPath: book.sourceTextPath,
+      singleRunChapterCount: job.input.singleRunChapterCount,
+      overlapChapterCount: job.input.overlapChapterCount,
+      extractionChapterCount: job.input.extractionChapterCount,
+      generatedAt: clock.now()
+    });
+
+    const createArtifacts = (
+      windowsResult: GenerateRuntimeWindowsResult,
+      rulesResult: Pick<GenerateExtractionRulesResult, "rulesLatestPath" | "rulesSnapshotPath">
+    ): PreparedPreRunArtifacts => ({
+      book,
+      project,
+      runtimeWindowManifest: windowsResult.manifest,
+      rulesLatestPath: rulesResult.rulesLatestPath,
+      rulesSnapshotPath: rulesResult.rulesSnapshotPath,
+      rulesSnapshotAbsolutePath: path.join(project.rootPath, rulesResult.rulesSnapshotPath),
+      rulesLatestAbsolutePath: path.join(project.rootPath, rulesResult.rulesLatestPath),
+      templates,
+      windowsManifestPath: windowsResult.manifestPath,
+      windowsRoot: windowsResult.windowsRoot
+    });
+
+    try {
+      const rulesResult = await generateExtractionRules({
+        projectRoot: project.rootPath,
+        jobId: job.id,
+        bookId: book.id,
+        bookDisplayName: book.displayName,
+        templates: ruleSnapshots.templates,
+        groups: ruleSnapshots.groups,
+        routeFailurePolicy: { ...extractionRuleDefaults.routeFailurePolicy },
+        ruleSections: {
+          commonExtractionRules: [...extractionRuleDefaults.ruleSections.commonExtractionRules],
+          writeRules: [...extractionRuleDefaults.ruleSections.writeRules],
+          skipAlreadyExtractedRules: [...extractionRuleDefaults.ruleSections.skipAlreadyExtractedRules]
+        },
+        generatedAt: clock.now()
+      });
+      return createArtifacts(runtimeWindows, rulesResult);
+    } catch (error) {
+      if (error instanceof ExtractionRulesError && error.code === "SNAPSHOT_ALREADY_EXISTS") {
+        const rulesSnapshotPath = ["runs", job.id, "rules", RULES_FILE_NAME].join("/");
+        const rulesLatestPath = ["rules", RULES_FILE_NAME].join("/");
+        const snapshotRulesPath = path.join(project.rootPath, "runs", job.id, "rules", RULES_FILE_NAME);
+        const latestRulesPath = path.join(project.rootPath, "rules", RULES_FILE_NAME);
+        const snapshotRules = await fs.readFile(snapshotRulesPath, "utf8");
+
+        await fs.mkdir(path.dirname(latestRulesPath), { recursive: true });
+        await fs.writeFile(latestRulesPath, snapshotRules, "utf8");
+        return createArtifacts(runtimeWindows, {
+          rulesLatestPath,
+          rulesSnapshotPath
+        });
+      }
+      throw error;
+    }
+  }
+
   function requireBook(bookId: string): Book {
     const book = booksById.get(bookId);
     if (!book) {
@@ -408,162 +608,180 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     return error instanceof Error ? error.message : "任务失败";
   }
 
-  function getTotalTokens(usage: unknown): number {
-    if (typeof usage !== "object" || usage === null) {
-      return 0;
-    }
-
-    const usageRecord = usage as Record<string, unknown>;
-    const totalTokens = usageRecord.total_tokens ?? usageRecord.totalTokens;
-    return typeof totalTokens === "number" && Number.isFinite(totalTokens) ? totalTokens : 0;
+  function getRuntimeErrorReason(error: JobRuntimeError): string {
+    return error.code === "job_failed" ? error.message : `任务运行失败：${error.code}`;
   }
 
-  function formatTokenText(usage: unknown): string {
-    return `Token ${getTotalTokens(usage)} / 费用 0`;
+  function formatTokenText(usage: Pick<TokenUsage, "totalTokens"> | null | undefined): string {
+    return `Token ${usage?.totalTokens ?? 0} / 费用 0`;
   }
 
-  async function readChapterText(project: Project, chapter: Chapter): Promise<string> {
-    return fs.readFile(path.join(project.rootPath, chapter.textPath), "utf8");
+  function formatRuntimeProgress(state: Pick<JobRuntimeState, "completedWindowCount" | "totalWindowCount">): string {
+    return `窗口 ${state.completedWindowCount}/${state.totalWindowCount}`;
   }
 
-  async function buildExtractionPrompt(job: P0JobRecord): Promise<string> {
-    const book = requireBook(job.bookId);
-    const project = await ensureProject(book.projectId);
-    const templates = await resolveJobTemplates(job);
-    const chapters = chaptersByBookId.get(book.id) ?? [];
-    const chapterLimit = Math.min(job.input.extractionChapterCount, chapters.length);
-    const selectedChapters = chapters.slice(0, chapterLimit);
-    const chapterTexts = await Promise.all(
-      selectedChapters.map(async (chapter) => {
-        const text = await readChapterText(project, chapter);
-        return [`## ${chapter.title}`, text.trim()].join("\n");
-      })
-    );
-
-    return [
-      `小说：${book.displayName}`,
-      `模板：${templates.map((template) => template.name).join("、")}`,
-      `单次窗口章节数：${job.input.singleRunChapterCount}`,
-      `提取章节数：${job.input.extractionChapterCount}`,
-      "",
-      "请按以下模板要求提取信息，使用 Markdown 返回。",
-      "",
-      templates
-        .map((template) => [`### ${template.name}`, template.body.trim()].join("\n"))
-        .join("\n\n"),
-      "",
-      chapterTexts.join("\n\n")
-    ].join("\n");
+  function toJobStatusFromRuntime(status: JobRuntimeState["status"]): JobStatus {
+    return status === "cancelled" ? "failed" : status;
   }
 
-  async function requestModelReport(job: P0JobRecord): Promise<ChatCompletionResult> {
-    const registry = createProviderRegistry({
-      presets: getProviderPresets(),
-      providerConfigs: await providerStore.listProviderConfigs()
-    });
-    const { provider, modelId } = registry.resolveModelRef(
-      `${job.input.providerConfigId}/${job.input.modelId}`
-    );
-    const client = new OpenAiCompatibleClient(provider, llmCredentialStore, {
-      fetch: options.fetch
-    });
-
-    return client.chatCompletion({
-      providerId: provider.id,
-      modelId,
-      messages: [
-        {
-          role: "system",
-          content: "你是小说资料抽取助手，只返回可写入报告的 Markdown 内容。"
-        },
-        {
-          role: "user",
-          content: await buildExtractionPrompt(job)
-        }
-      ]
-    });
-  }
-
-  async function getReportRedactionSecrets(job: P0JobRecord): Promise<string[]> {
-    const providerConfig = (await providerStore.listProviderConfigs()).find(
-      (config) => config.id === job.input.providerConfigId
-    );
-    const apiKey = providerConfig?.apiKeyRef ? credentialStore.readApiKey(providerConfig.apiKeyRef) : undefined;
-    return apiKey ? [apiKey] : [];
-  }
-
-  async function writeModelReport(job: P0JobRecord, modelContent: string): Promise<ReportAsset> {
-    const trimmedModelContent = modelContent.trim();
-    if (!trimmedModelContent) {
-      throw new Error("模型返回内容为空");
-    }
-    const safeModelContent = redactSecrets(trimmedModelContent, await getReportRedactionSecrets(job));
-
-    const book = requireBook(job.bookId);
-    const project = await ensureProject(book.projectId);
-    const chapters = chaptersByBookId.get(book.id) ?? [];
-    const reportsRoot = path.join(project.rootPath, "assets", "books", book.id, "reports");
-    await fs.mkdir(reportsRoot, { recursive: true });
-    const templates = await resolveJobTemplates(job);
-    const firstTemplate = templates[0];
-    const reportFileName =
-      firstTemplate.id === PILL_TEMPLATE?.id
-        ? DEFAULT_REPORT_FILE_NAME
-        : toTemplateFileName(firstTemplate.name);
-
-    const writer = createReportWriter({ reportsRoot });
-    const reportContent = [
-      `小说：${book.displayName}`,
-      "",
-      safeModelContent,
-      "",
-      `已读取章节：${chapters.map((chapter) => chapter.title).join("、")}`
-    ].join("\n");
-
-    const writeResult = writer.writeReport({
-      path: reportFileName,
-      title: toReportDisplayName(reportFileName),
-      content: reportContent
-    });
-    const stat = await fs.stat(writeResult.path);
-    const existingReport = [...reportsById.values()].find(
-      (report) => report.bookId === book.id && report.fileName === reportFileName
-    );
-    const now = clock.now();
-    const report: ReportAsset = {
-      id: existingReport?.id ?? idGenerator.createId("report"),
-      bookId: book.id,
-      fileName: reportFileName,
-      displayName: toReportDisplayName(reportFileName),
-      relativePath: path.relative(project.rootPath, writeResult.path),
-      byteSize: stat.size,
-      createdAt: existingReport?.createdAt ?? now,
-      updatedAt: now
+  function toJobPatchFromRuntimeState(state: JobRuntimeState): Partial<P0JobRecord> {
+    return {
+      status: toJobStatusFromRuntime(state.status),
+      progressText: formatRuntimeProgress(state),
+      tokenText: formatTokenText(state.usage),
+      failureReason: state.failureReason
     };
+  }
 
-    reportsById.set(report.id, report);
-    reportPathById.set(report.id, writeResult.path);
-    return report;
+  function isPlainRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null;
+  }
+
+  function requireStringField(input: Record<string, unknown>, fieldName: string, label: string): string {
+    const value = input[fieldName];
+    if (typeof value !== "string" || value.trim() === "") {
+      throw new Error(`${label}不能为空`);
+    }
+    return value;
+  }
+
+  function requireStringArrayField(
+    input: Record<string, unknown>,
+    fieldName: string,
+    label: string
+  ): string[] {
+    const value = input[fieldName];
+    if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || item.trim() === "")) {
+      throw new Error(`${label}不能为空`);
+    }
+    return [...value];
+  }
+
+  function requirePositiveIntegerField(
+    input: Record<string, unknown>,
+    fieldName: string,
+    label: string
+  ): number {
+    const value = input[fieldName];
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+      throw new Error(`${label}必须是正整数`);
+    }
+    return value;
+  }
+
+  function requireNonNegativeIntegerField(
+    input: Record<string, unknown>,
+    fieldName: string,
+    label: string
+  ): number {
+    const value = input[fieldName];
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+      throw new Error(`${label}必须是非负整数`);
+    }
+    return value;
+  }
+
+  function requireBooleanField(input: Record<string, unknown>, fieldName: string, label: string): boolean {
+    const value = input[fieldName];
+    if (typeof value !== "boolean") {
+      throw new Error(`${label}必须是布尔值`);
+    }
+    return value;
+  }
+
+  function normalizeCreateJobInput(input: CreateJobDto): CreateJobDto {
+    if (!isPlainRecord(input)) {
+      throw new Error("任务参数不能为空");
+    }
+
+    const singleRunChapterCount = requirePositiveIntegerField(
+      input,
+      "singleRunChapterCount",
+      "单次窗口章节数"
+    );
+    const extractionChapterCount = requirePositiveIntegerField(
+      input,
+      "extractionChapterCount",
+      "提取章节数"
+    );
+    const overlapChapterCount = requireNonNegativeIntegerField(
+      input,
+      "overlapChapterCount",
+      "重叠章节数"
+    );
+
+    if (extractionChapterCount < singleRunChapterCount) {
+      throw new Error("提取章节数必须大于或等于单次窗口章节数");
+    }
+
+    if (overlapChapterCount >= singleRunChapterCount) {
+      throw new Error("重叠章节数必须小于单次窗口章节数");
+    }
+
+    return {
+      bookId: requireStringField(input, "bookId", "小说"),
+      templateIds: requireStringArrayField(input, "templateIds", "模板"),
+      providerConfigId: requireStringField(input, "providerConfigId", "模型供应商"),
+      modelId: requireStringField(input, "modelId", "模型"),
+      singleRunChapterCount,
+      extractionChapterCount,
+      overlapChapterCount,
+      skipAlreadyExtracted: requireBooleanField(input, "skipAlreadyExtracted", "跳过已提取")
+    };
   }
 
   async function runModelBackedJob(job: P0JobRecord): Promise<JobDto> {
-    const book = requireBook(job.bookId);
-    const runningJob = updateJob(job, {
+    let runningJob = updateJob(job, {
       status: "running",
-      progressText: `正在请求模型 0/${book.chapterCount} 章`,
+      progressText: "正在准备运行窗口",
+      tokenText: formatTokenText(null),
       failureReason: undefined
     });
 
     try {
-      const completion = await requestModelReport(runningJob);
-      await writeModelReport(runningJob, completion.content);
-      return toJobDto(
-        updateJob(runningJob, {
-          status: "completed",
-          progressText: `已完成 ${book.chapterCount}/${book.chapterCount} 章`,
-          tokenText: formatTokenText(completion.usage)
-        })
-      );
+      const artifacts = await preparePreRunArtifacts(runningJob);
+      runningJob = updateJob(runningJob, {
+        progressText: `窗口 0/${artifacts.runtimeWindowManifest.windows.length}`
+      });
+
+      const windowRunService = createWindowRunService({
+        clock,
+        credentialStore,
+        fetch: options.fetch,
+        findExistingReport({ bookId, fileName }) {
+          return [...reportsById.values()].find(
+            (report) => report.bookId === bookId && report.fileName === fileName
+          );
+        },
+        idGenerator,
+        async onRuntimeState(state) {
+          const currentJob = requireJob(state.jobId);
+          updateJob(currentJob, toJobPatchFromRuntimeState(state));
+        },
+        providerStore,
+        registerReport({ path: reportPath, report }) {
+          reportsById.set(report.id, report);
+          reportPathById.set(report.id, reportPath);
+        }
+      });
+      const result = await windowRunService.runJobWindows({
+        artifacts,
+        job: runningJob
+      });
+
+      if (!result.ok) {
+        const latestJob = requireJob(runningJob.id);
+        return toJobDto(
+          latestJob.status === "failed"
+            ? latestJob
+            : updateJob(latestJob, {
+                status: "failed",
+                failureReason: getRuntimeErrorReason(result.error)
+              })
+        );
+      }
+
+      return toJobDto(requireJob(runningJob.id));
     } catch (error) {
       return toJobDto(
         updateJob(runningJob, {
@@ -573,6 +791,19 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
         })
       );
     }
+  }
+
+  function runOrReuseModelBackedJob(job: P0JobRecord): Promise<JobDto> {
+    const activeRun = activeJobRuns.get(job.id);
+    if (activeRun) {
+      return activeRun;
+    }
+
+    const runPromise = runModelBackedJob(job).finally(() => {
+      activeJobRuns.delete(job.id);
+    });
+    activeJobRuns.set(job.id, runPromise);
+    return runPromise;
   }
 
   function updateJob(job: P0JobRecord, patch: Partial<P0JobRecord>): P0JobRecord {
@@ -617,6 +848,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
         bookId: upload.book.id,
         displayName: upload.book.displayName,
         sourceAssetId: upload.book.sourceAssetId,
+        sourceTextPath: upload.book.sourceTextPath,
         fileName: path.basename(input.filePath),
         byteSize: sourceStat.size,
         encoding: upload.encoding,
@@ -685,7 +917,8 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       return { projectId: input.projectId, templateIds };
     },
     "jobs:create": async (input) => {
-      const book = requireBook(input.bookId);
+      const normalizedInput = normalizeCreateJobInput(input);
+      const book = requireBook(normalizedInput.bookId);
       const now = clock.now();
       const job: P0JobRecord = {
         id: idGenerator.createId("job"),
@@ -693,7 +926,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
         status: "created",
         progressText: `窗口 0/${book.chapterCount}`,
         tokenText: "Token 0 / 费用 0",
-        input,
+        input: normalizedInput,
         createdAt: now,
         updatedAt: now
       };
@@ -702,7 +935,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     },
     "jobs:start": async (input) => {
       const job = requireJob(input.jobId);
-      return runModelBackedJob(job);
+      return runOrReuseModelBackedJob(job);
     },
     "jobs:pause": async (input) => {
       const job = requireJob(input.jobId);
@@ -710,7 +943,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     },
     "jobs:resume": async (input) => {
       const job = requireJob(input.jobId);
-      return runModelBackedJob(job);
+      return runOrReuseModelBackedJob(job);
     },
     "jobs:delete": async (input) => {
       if (!input.confirm) {

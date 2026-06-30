@@ -3,3 +3,5 @@ export * from "./chapterParser";
 export * from "./uploadBook";
 export * from "./windowPlanner";
 export * from "./templateRouter";
+export * from "./runtimeWindows";
+export * from "./extractionRules";

@@ -26,6 +26,15 @@ function updateNumber(value: string): number {
   return Number.isFinite(parsed) ? parsed : 1;
 }
 
+function updateNonNegativeNumber(value: string): number {
+  if (value === "") {
+    return Number.NaN;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function renderNumberValue(value: number): number | "" {
   return Number.isNaN(value) ? "" : value;
 }
@@ -112,6 +121,37 @@ export function ExtractionParameters({
             type="number"
             value={renderNumberValue(formState.extractionChapterCount)}
           />
+        </label>
+        <label className="provider-form__field">
+          <span>重叠章节数</span>
+          <input
+            min={0}
+            onChange={(event) => {
+              onFormChange({
+                ...formState,
+                overlapChapterCount: updateNonNegativeNumber(event.currentTarget.value)
+              });
+            }}
+            type="number"
+            value={renderNumberValue(formState.overlapChapterCount)}
+          />
+        </label>
+      </div>
+
+      <div className="provider-form__toggles">
+        <label>
+          <input
+            checked={formState.skipAlreadyExtracted}
+            disabled={isCreating}
+            onChange={(event) => {
+              onFormChange({
+                ...formState,
+                skipAlreadyExtracted: event.currentTarget.checked
+              });
+            }}
+            type="checkbox"
+          />
+          <span>跳过已提取章节</span>
         </label>
       </div>
 

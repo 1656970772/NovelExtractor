@@ -68,7 +68,7 @@ const BUILTIN_TOOLS: ToolSchema[] = [
   },
   {
     name: "write_file",
-    description: "Create or overwrite a Markdown report file under the reports root.",
+    description: "Create a new Markdown report file under the reports root.",
     parameters: {
       type: "object",
       properties: {

@@ -10,9 +10,11 @@ export default defineConfig({
           "@novel-extractor/config",
           "@novel-extractor/domain",
           "@novel-extractor/extraction",
+          "@novel-extractor/jobs",
           "@novel-extractor/llm",
           "@novel-extractor/markdown",
           "@novel-extractor/persistence",
+          "@novel-extractor/tools",
           "iconv-lite"
         ]
       })

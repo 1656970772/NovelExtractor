@@ -58,6 +58,7 @@ function createHandlers(): DesktopIpcHandlers {
       bookId: "book-1",
       displayName: input.displayName ?? "book",
       sourceAssetId: "asset-1",
+      sourceTextPath: "assets/books/book-1/source/original.txt",
       fileName: "book.txt",
       byteSize: 12,
       encoding: "utf-8",
@@ -194,7 +195,10 @@ describe("desktop IPC contract", () => {
       apiKey?: string;
     }>();
     expectTypeOf<UploadTxtDto>().toMatchTypeOf<{ projectId: string; filePath: string }>();
-    expectTypeOf<BookUploadResultDto>().toMatchTypeOf<{ encoding: "utf-8" | "utf-8-bom" | "gbk" | "cp936" }>();
+    expectTypeOf<BookUploadResultDto>().toMatchTypeOf<{
+      sourceTextPath: string;
+      encoding: "utf-8" | "utf-8-bom" | "gbk" | "cp936";
+    }>();
     expectTypeOf<ReportDto>().toMatchTypeOf<{ bookId: string; fileName: string }>();
     expectTypeOf<SafeMarkdownPreviewDto>().toMatchTypeOf<{ html: string; generatedAt: string }>();
     expectTypeOf<TemplateDto>().toMatchTypeOf<{
@@ -219,6 +223,10 @@ describe("desktop IPC contract", () => {
       templateIds: string[];
       providerConfigId: string;
       modelId: string;
+      singleRunChapterCount: number;
+      extractionChapterCount: number;
+      overlapChapterCount: number;
+      skipAlreadyExtracted: boolean;
     }>();
     expectTypeOf<JobDto>().toMatchTypeOf<{ status: JobStatus; allowedActions: Array<"start" | "pause" | "resume" | "delete"> }>();
     expectTypeOf<DeleteJobDto>().toMatchTypeOf<{ jobId: string; confirm: true }>();

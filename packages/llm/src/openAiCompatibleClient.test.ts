@@ -87,6 +87,412 @@ describe("OpenAiCompatibleClient", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps raw usage and normalizes OpenAI-compatible token details", async () => {
+    const usage = {
+      prompt_tokens: 100,
+      completion_tokens: 40,
+      total_tokens: 140,
+      prompt_tokens_details: { cached_tokens: 25 },
+      completion_tokens_details: { reasoning_tokens: 7 }
+    };
+    const client = new OpenAiCompatibleClient(
+      createProvider(),
+      { resolveApiKey: async () => "sk-usage-secret" },
+      {
+        fetch: vi.fn(async () => {
+          return new Response(
+            JSON.stringify({
+              choices: [{ message: { content: "丹药摘要" } }],
+              usage
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        })
+      }
+    );
+
+    const result = await client.chatCompletion({
+      providerId: "deepseek-user",
+      modelId: "novel-analysis",
+      messages: [{ role: "user", content: "提取丹药信息" }]
+    });
+
+    expect(result.usage).toEqual(usage);
+    expect(result).toMatchObject({
+      normalizedUsage: {
+        requestCount: 1,
+        inputTokens: 100,
+        outputTokens: 40,
+        totalTokens: 140,
+        cacheHitTokens: 25,
+        cacheMissTokens: 75,
+        reasoningTokens: 7
+      }
+    });
+  });
+
+  it("normalizes prompt_cache_hit_tokens usage fields", async () => {
+    const client = new OpenAiCompatibleClient(
+      createProvider(),
+      { resolveApiKey: async () => "sk-cache-secret" },
+      {
+        fetch: vi.fn(async () => {
+          return new Response(
+            JSON.stringify({
+              choices: [{ message: { content: "ok" } }],
+              usage: {
+                prompt_tokens: 16,
+                completion_tokens: 3,
+                total_tokens: 19,
+                prompt_cache_hit_tokens: 20,
+                reasoning_tokens: 2
+              }
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        })
+      }
+    );
+
+    const result = await client.chatCompletion({
+      providerId: "deepseek-user",
+      modelId: "novel-analysis",
+      messages: [{ role: "user", content: "hello" }]
+    });
+
+    expect(result).toMatchObject({
+      normalizedUsage: {
+        requestCount: 1,
+        inputTokens: 16,
+        outputTokens: 3,
+        totalTokens: 19,
+        cacheHitTokens: 20,
+        cacheMissTokens: 0,
+        reasoningTokens: 2
+      }
+    });
+  });
+
+  it("keeps zero usage override values instead of falling back to detail fields", async () => {
+    const usage = {
+      prompt_tokens: 100,
+      completion_tokens: 10,
+      total_tokens: 110,
+      prompt_cache_hit_tokens: 0,
+      prompt_tokens_details: { cached_tokens: 25 },
+      completion_tokens_details: { reasoning_tokens: 0 },
+      reasoning_tokens: 8
+    };
+    const client = new OpenAiCompatibleClient(
+      createProvider(),
+      { resolveApiKey: async () => "sk-zero-usage-secret" },
+      {
+        fetch: vi.fn(async () => {
+          return new Response(
+            JSON.stringify({
+              choices: [{ message: { content: "ok" } }],
+              usage
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        })
+      }
+    );
+
+    const result = await client.chatCompletion({
+      providerId: "deepseek-user",
+      modelId: "novel-analysis",
+      messages: [{ role: "user", content: "hello" }]
+    });
+
+    expect(result).toMatchObject({
+      normalizedUsage: {
+        requestCount: 1,
+        inputTokens: 100,
+        outputTokens: 10,
+        totalTokens: 110,
+        cacheHitTokens: 0,
+        cacheMissTokens: 100,
+        reasoningTokens: 0
+      }
+    });
+  });
+
+  it("parses OpenAI-compatible tool calls and JSON function arguments", async () => {
+    const client = new OpenAiCompatibleClient(
+      createProvider(),
+      { resolveApiKey: async () => "sk-tool-secret" },
+      {
+        fetch: vi.fn(async () => {
+          return new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content: null,
+                    tool_calls: [
+                      {
+                        id: "call-1",
+                        type: "function",
+                        function: {
+                          name: "record_pill",
+                          arguments: "{\"name\":\"筑基丹\",\"rank\":2}"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        })
+      }
+    );
+
+    const result = await client.chatCompletion({
+      providerId: "deepseek-user",
+      modelId: "novel-analysis",
+      messages: [{ role: "user", content: "提取丹药信息" }]
+    });
+
+    expect(result.content).toBe("");
+    expect(result).toMatchObject({
+      toolCalls: [
+        {
+          id: "call-1",
+          name: "record_pill",
+          arguments: { name: "筑基丹", rank: 2 }
+        }
+      ]
+    });
+  });
+
+  it("skips malformed tool calls and only keeps explicit function calls with names", async () => {
+    const client = new OpenAiCompatibleClient(
+      createProvider(),
+      { resolveApiKey: async () => "sk-malformed-tool-secret" },
+      {
+        fetch: vi.fn(async () => {
+          return new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content: null,
+                    tool_calls: [
+                      "not-an-object",
+                      {
+                        id: "call-missing-name",
+                        type: "function",
+                        function: {
+                          arguments: "{\"name\":\"无名丹\"}"
+                        }
+                      },
+                      {
+                        id: "call-not-function",
+                        type: "not_function",
+                        function: {
+                          name: "record_invalid",
+                          arguments: "{\"ignored\":true}"
+                        }
+                      },
+                      {
+                        id: "call-missing-type",
+                        function: {
+                          name: "record_missing_type",
+                          arguments: "{\"ignored\":true}"
+                        }
+                      },
+                      {
+                        id: "call-valid",
+                        type: "function",
+                        function: {
+                          name: "record_pill",
+                          arguments: "{\"name\":\"筑基丹\"}"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        })
+      }
+    );
+
+    const result = await client.chatCompletion({
+      providerId: "deepseek-user",
+      modelId: "novel-analysis",
+      messages: [{ role: "user", content: "提取丹药信息" }]
+    });
+
+    expect(result.toolCalls).toEqual([
+      {
+        id: "call-valid",
+        name: "record_pill",
+        arguments: { name: "筑基丹" }
+      }
+    ]);
+  });
+
+  it("keeps tool call arguments as strings when they are not valid JSON", async () => {
+    const client = new OpenAiCompatibleClient(
+      createProvider(),
+      { resolveApiKey: async () => "sk-invalid-tool-secret" },
+      {
+        fetch: vi.fn(async () => {
+          return new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content: "需要工具",
+                    tool_calls: [
+                      {
+                        id: "call-bad-json",
+                        type: "function",
+                        function: {
+                          name: "record_pill",
+                          arguments: "{not-json"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        })
+      }
+    );
+
+    const result = await client.chatCompletion({
+      providerId: "deepseek-user",
+      modelId: "novel-analysis",
+      messages: [{ role: "user", content: "提取丹药信息" }]
+    });
+
+    expect(result).toMatchObject({
+      toolCalls: [
+        {
+          id: "call-bad-json",
+          name: "record_pill",
+          arguments: "{not-json"
+        }
+      ]
+    });
+  });
+
+  it("serializes assistant tool calls and tool result messages in OpenAI-compatible request bodies", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(JSON.parse(String(init?.body))).toEqual({
+        model: "novel-analysis",
+        messages: [
+          { role: "user", content: "提取丹药信息" },
+          {
+            role: "assistant",
+            content: "",
+            tool_calls: [
+              {
+                id: "call-record-pill",
+                type: "function",
+                function: {
+                  name: "record_pill",
+                  arguments: "{\"name\":\"筑基丹\",\"rank\":2}"
+                }
+              }
+            ]
+          },
+          {
+            role: "tool",
+            tool_call_id: "call-record-pill",
+            name: "record_pill",
+            content: "{\"ok\":true}"
+          }
+        ]
+      });
+
+      return new Response(JSON.stringify({ choices: [{ message: { content: "继续" } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    });
+    const client = new OpenAiCompatibleClient(
+      createProvider(),
+      { resolveApiKey: async () => "sk-serialize-tool-secret" },
+      { fetch: fetchMock }
+    );
+
+    await client.chatCompletion({
+      providerId: "deepseek-user",
+      modelId: "novel-analysis",
+      messages: [
+        { role: "user", content: "提取丹药信息" },
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              id: "call-record-pill",
+              name: "record_pill",
+              arguments: { rank: 2, name: "筑基丹" }
+            }
+          ]
+        },
+        {
+          role: "tool",
+          toolCallId: "call-record-pill",
+          name: "record_pill",
+          content: "{\"ok\":true}"
+        }
+      ]
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps string tool call arguments unchanged when serializing request bodies", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.messages[1].tool_calls[0].function.arguments).toBe("{\"already\":\"json\"}");
+
+      return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    });
+    const client = new OpenAiCompatibleClient(
+      createProvider(),
+      { resolveApiKey: async () => "sk-string-arguments-secret" },
+      { fetch: fetchMock }
+    );
+
+    await client.chatCompletion({
+      providerId: "deepseek-user",
+      modelId: "novel-analysis",
+      messages: [
+        { role: "user", content: "提取丹药信息" },
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              id: "call-string-args",
+              name: "record_pill",
+              arguments: "{\"already\":\"json\"}"
+            }
+          ]
+        }
+      ]
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not call fetch when the API key reference is missing", async () => {
     const provider = { ...createProvider(), apiKeyRef: undefined };
     const fetchMock = vi.fn();

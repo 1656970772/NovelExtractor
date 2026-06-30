@@ -14,14 +14,69 @@ export interface ToolSchema {
 export interface ChatCompletionRequest {
   providerId: string;
   modelId: string;
-  messages: Array<{ role: "system" | "user" | "assistant" | "tool"; content: string }>;
+  messages: ChatCompletionMessage[];
   tools?: ToolSchema[];
+}
+
+export type ToolCallArguments =
+  | string
+  | number
+  | boolean
+  | null
+  | Record<string, unknown>
+  | unknown[];
+
+export type ChatCompletionMessage =
+  | ChatCompletionContentMessage
+  | ChatCompletionAssistantMessage
+  | ChatCompletionToolMessage;
+
+export interface ChatCompletionContentMessage {
+  role: "system" | "user";
+  content: string;
+}
+
+export interface ChatCompletionAssistantMessage {
+  role: "assistant";
+  content: string;
+  toolCalls?: ChatCompletionRequestToolCall[];
+}
+
+export interface ChatCompletionToolMessage {
+  role: "tool";
+  toolCallId: string;
+  name?: string;
+  content: string;
+}
+
+export interface ChatCompletionRequestToolCall {
+  id: string;
+  name: string;
+  arguments: ToolCallArguments;
 }
 
 export interface ChatCompletionResult {
   content: string;
   usage?: unknown;
+  normalizedUsage: NormalizedUsage;
+  toolCalls: ToolCall[];
   raw: unknown;
+}
+
+export interface NormalizedUsage {
+  requestCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cacheHitTokens: number;
+  cacheMissTokens: number;
+  reasoningTokens: number;
+}
+
+export interface ToolCall {
+  id: string;
+  name: string;
+  arguments: unknown;
 }
 
 export interface ConnectionTestResult {
@@ -42,9 +97,175 @@ interface OpenAiCompatibleResponseBody {
   choices?: Array<{
     message?: {
       content?: unknown;
+      tool_calls?: unknown;
     };
   }>;
   usage?: unknown;
+}
+
+interface OpenAiCompatibleRequestToolCall {
+  id: string;
+  type: "function";
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
+type OpenAiCompatibleRequestMessage =
+  | ChatCompletionContentMessage
+  | {
+      role: "assistant";
+      content: string;
+      tool_calls?: OpenAiCompatibleRequestToolCall[];
+    }
+  | {
+      role: "tool";
+      tool_call_id: string;
+      name?: string;
+      content: string;
+    };
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+
+  return undefined;
+}
+
+function optionalNumberField(
+  source: Record<string, unknown> | undefined,
+  field: string
+): number | undefined {
+  const value = source?.[field];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function numberField(source: Record<string, unknown> | undefined, field: string): number {
+  return optionalNumberField(source, field) ?? 0;
+}
+
+function normalizeUsage(usage: unknown): NormalizedUsage {
+  const usageRecord = asRecord(usage);
+  const promptDetails = asRecord(usageRecord?.prompt_tokens_details);
+  const completionDetails = asRecord(usageRecord?.completion_tokens_details);
+  const inputTokens = numberField(usageRecord, "prompt_tokens");
+  const cacheHitTokens =
+    optionalNumberField(usageRecord, "prompt_cache_hit_tokens") ??
+    numberField(promptDetails, "cached_tokens");
+
+  return {
+    requestCount: 1,
+    inputTokens,
+    outputTokens: numberField(usageRecord, "completion_tokens"),
+    totalTokens: numberField(usageRecord, "total_tokens"),
+    cacheHitTokens,
+    cacheMissTokens: Math.max(inputTokens - cacheHitTokens, 0),
+    reasoningTokens:
+      optionalNumberField(completionDetails, "reasoning_tokens") ??
+      numberField(usageRecord, "reasoning_tokens")
+  };
+}
+
+function parseToolCallArguments(value: unknown): unknown {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function parseToolCalls(toolCalls: unknown): ToolCall[] {
+  if (!Array.isArray(toolCalls)) {
+    return [];
+  }
+
+  return toolCalls.flatMap((toolCall) => {
+    const toolCallRecord = asRecord(toolCall);
+    if (toolCallRecord?.type !== "function") {
+      return [];
+    }
+
+    const functionRecord = asRecord(toolCallRecord?.function);
+    const name = functionRecord?.name;
+    if (typeof name !== "string" || name.trim() === "") {
+      return [];
+    }
+
+    return [{
+      id: typeof toolCallRecord?.id === "string" ? toolCallRecord.id : "",
+      name,
+      arguments: parseToolCallArguments(functionRecord?.arguments)
+    }];
+  });
+}
+
+function stableJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stableJsonValue);
+  }
+
+  const record = asRecord(value);
+  if (!record) {
+    return value;
+  }
+
+  return Object.keys(record)
+    .sort()
+    .reduce<Record<string, unknown>>((result, key) => {
+      result[key] = stableJsonValue(record[key]);
+      return result;
+    }, {});
+}
+
+function serializeToolCallArguments(value: ToolCallArguments): string {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  return JSON.stringify(stableJsonValue(value)) ?? "";
+}
+
+function serializeToolCall(toolCall: ChatCompletionRequestToolCall): OpenAiCompatibleRequestToolCall {
+  return {
+    id: toolCall.id,
+    type: "function",
+    function: {
+      name: toolCall.name,
+      arguments: serializeToolCallArguments(toolCall.arguments)
+    }
+  };
+}
+
+function serializeMessage(message: ChatCompletionMessage): OpenAiCompatibleRequestMessage {
+  if (message.role === "assistant") {
+    const serialized: OpenAiCompatibleRequestMessage = {
+      role: "assistant",
+      content: message.content
+    };
+
+    if (message.toolCalls?.length) {
+      serialized.tool_calls = message.toolCalls.map(serializeToolCall);
+    }
+
+    return serialized;
+  }
+
+  if (message.role === "tool") {
+    return {
+      role: "tool",
+      tool_call_id: message.toolCallId,
+      ...(message.name ? { name: message.name } : {}),
+      content: message.content
+    };
+  }
+
+  return message;
 }
 
 function getFetch(options: OpenAiCompatibleClientOptions): FetchLike {
@@ -145,7 +366,7 @@ export class OpenAiCompatibleClient {
     const redactionOptions = redactionOptionsFor(apiKey);
     const body: Record<string, unknown> = {
       model: request.modelId,
-      messages: request.messages
+      messages: request.messages.map(serializeMessage)
     };
 
     if (request.tools) {
@@ -178,11 +399,14 @@ export class OpenAiCompatibleClient {
     }
 
     const completion = responseBody as OpenAiCompatibleResponseBody;
-    const content = completion.choices?.[0]?.message?.content;
+    const message = completion.choices?.[0]?.message;
+    const content = message?.content;
 
     return {
       content: typeof content === "string" ? content : "",
       usage: completion.usage,
+      normalizedUsage: normalizeUsage(completion.usage),
+      toolCalls: parseToolCalls(message?.tool_calls),
       raw: responseBody
     };
   }

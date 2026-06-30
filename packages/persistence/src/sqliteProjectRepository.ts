@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import initSqlJs from "sql.js";
 import {
+  createDefaultBookSourceTextPath,
   createProjectSlug,
   type Book,
   type Chapter,
@@ -46,6 +47,7 @@ CREATE TABLE IF NOT EXISTS books (
   project_id TEXT NOT NULL,
   display_name TEXT NOT NULL,
   source_asset_id TEXT NOT NULL,
+  source_text_path TEXT NOT NULL,
   chapter_count INTEGER NOT NULL,
   created_at TEXT NOT NULL,
   FOREIGN KEY (project_id) REFERENCES projects(id)
@@ -196,18 +198,20 @@ export class SqliteProjectRepository implements ProjectRepository, BookRepositor
   }
 
   async createBook(
-    input: Pick<Book, "projectId" | "displayName" | "sourceAssetId" | "chapterCount">
+    input: Pick<Book, "projectId" | "displayName" | "sourceAssetId" | "sourceTextPath" | "chapterCount">
   ): Promise<Book> {
     const projectRecord = this.findProjectRecordById(input.projectId);
     if (!projectRecord) {
       throw new Error(`Project not found: ${input.projectId}`);
     }
 
+    const bookId = this.idGenerator.createId("book");
     const book: Book = {
-      id: this.idGenerator.createId("book"),
+      id: bookId,
       projectId: input.projectId,
       displayName: normalizeDisplayName(input.displayName),
       sourceAssetId: input.sourceAssetId,
+      sourceTextPath: createDefaultBookSourceTextPath(bookId),
       chapterCount: input.chapterCount,
       createdAt: this.clock.now()
     };
@@ -220,13 +224,14 @@ export class SqliteProjectRepository implements ProjectRepository, BookRepositor
 
     this.mutateDatabase(projectRecord.databasePath, (database) => {
       database.run(
-        `INSERT INTO books (id, project_id, display_name, source_asset_id, chapter_count, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO books (id, project_id, display_name, source_asset_id, source_text_path, chapter_count, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [
           book.id,
           book.projectId,
           book.displayName,
           book.sourceAssetId,
+          book.sourceTextPath,
           book.chapterCount,
           book.createdAt
         ]
@@ -244,7 +249,7 @@ export class SqliteProjectRepository implements ProjectRepository, BookRepositor
 
     return this.readRows(
       projectRecord.databasePath,
-      `SELECT id, project_id, display_name, source_asset_id, chapter_count, created_at
+      `SELECT id, project_id, display_name, source_asset_id, source_text_path, chapter_count, created_at
        FROM books
        WHERE project_id = ?
        ORDER BY created_at`,
@@ -323,6 +328,7 @@ export class SqliteProjectRepository implements ProjectRepository, BookRepositor
     const database = new this.sqlModule.Database();
     database.run("PRAGMA foreign_keys = ON");
     database.run(SCHEMA_SQL);
+    migrateDatabase(database);
     return database;
   }
 
@@ -332,6 +338,9 @@ export class SqliteProjectRepository implements ProjectRepository, BookRepositor
       : new this.sqlModule.Database();
     database.run("PRAGMA foreign_keys = ON");
     database.run(SCHEMA_SQL);
+    if (migrateDatabase(database)) {
+      this.writeDatabase(databasePath, database);
+    }
     return database;
   }
 
@@ -409,7 +418,7 @@ export class SqliteProjectRepository implements ProjectRepository, BookRepositor
     for (const databasePath of this.listProjectDatabasePaths()) {
       const rows = this.readRows(
         databasePath,
-        `SELECT id, project_id, display_name, source_asset_id, chapter_count, created_at
+        `SELECT id, project_id, display_name, source_asset_id, source_text_path, chapter_count, created_at
          FROM books
          WHERE id = ?
          LIMIT 1`,
@@ -441,6 +450,37 @@ function getProjectDatabasePath(projectRoot: string): string {
 async function getSqlModule(): Promise<SqlJsStatic> {
   sqlModulePromise ??= initSqlJs();
   return sqlModulePromise;
+}
+
+function migrateDatabase(database: SqliteDatabase): boolean {
+  let changed = false;
+  const bookColumns = new Set(
+    (database.exec("PRAGMA table_info(books)")[0]?.values ?? []).map((row) => String(row[1]))
+  );
+
+  if (!bookColumns.has("source_text_path")) {
+    database.run("ALTER TABLE books ADD COLUMN source_text_path TEXT");
+    changed = true;
+  }
+
+  const booksMissingSourceTextPath = database.exec(
+    "SELECT id FROM books WHERE source_text_path IS NULL OR source_text_path = ''"
+  )[0]?.values ?? [];
+
+  for (const row of booksMissingSourceTextPath) {
+    const bookId = row[0];
+    if (typeof bookId === "string") {
+      database.run(
+        `UPDATE books
+         SET source_text_path = ?
+         WHERE id = ? AND (source_text_path IS NULL OR source_text_path = '')`,
+        [createDefaultBookSourceTextPath(bookId), bookId]
+      );
+      changed = true;
+    }
+  }
+
+  return changed;
 }
 
 const systemClock: Clock = {
@@ -477,6 +517,7 @@ function rowToBook(row: SqlRow): Book {
     projectId: requireString(row, "project_id"),
     displayName: requireString(row, "display_name"),
     sourceAssetId: requireString(row, "source_asset_id"),
+    sourceTextPath: requireString(row, "source_text_path"),
     chapterCount: requireNumber(row, "chapter_count"),
     createdAt: requireString(row, "created_at")
   };

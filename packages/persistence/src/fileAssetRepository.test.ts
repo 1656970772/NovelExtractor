@@ -74,6 +74,7 @@ async function makeProjectWithBook() {
     projectId: project.id,
     displayName: "第一卷",
     sourceAssetId: "source-1",
+    sourceTextPath: "assets/books/book-2/source/original.txt",
     chapterCount: 0
   });
   return { repository, project, book };
