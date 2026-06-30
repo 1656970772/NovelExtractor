@@ -4,6 +4,7 @@ import type {
   CreateJobDto,
   DeleteJobDto,
   JobDto,
+  JobLogDto,
   JobStatus,
   ProjectDto,
   ProviderKind,
@@ -63,6 +64,7 @@ function createHandlers(): DesktopIpcHandlers {
       effectiveProjectStorageDirectory: input.projectStorageDirectory ?? "C:\\NovelExtractor\\projects",
       projectStorageDirectory: input.projectStorageDirectory
     }),
+    "settings:chooseProjectDirectory": async () => "D:\\NovelExtractorProjects",
     "providers:save": async () => undefined,
     "providers:list": async () => [],
     "books:uploadTxt": async (input) => ({
@@ -97,6 +99,11 @@ function createHandlers(): DesktopIpcHandlers {
     "jobs:pause": async () => undefined,
     "jobs:resume": async () => undefined,
     "jobs:delete": async () => undefined,
+    "jobs:readLog": async (input) => ({
+      jobId: input.jobId,
+      logFilePath: "runs/job-1/logs/20260630-153012.txt",
+      content: "[2026-06-30 15:30:12][任务信息] 任务 job-1"
+    }),
     "reports:preview": async (input) => ({
       reportId: input.reportId,
       html: "<h1>preview</h1>",
@@ -121,6 +128,7 @@ describe("desktop IPC contract", () => {
       "project:list",
       "settings:get",
       "settings:save",
+      "settings:chooseProjectDirectory",
       "providers:save",
       "providers:list",
       "books:uploadTxt",
@@ -135,6 +143,7 @@ describe("desktop IPC contract", () => {
       "jobs:pause",
       "jobs:resume",
       "jobs:delete",
+      "jobs:readLog",
       "reports:preview"
     ]);
   });
@@ -245,6 +254,7 @@ describe("desktop IPC contract", () => {
       skipAlreadyExtracted: boolean;
     }>();
     expectTypeOf<JobDto>().toMatchTypeOf<{ status: JobStatus; allowedActions: Array<"start" | "pause" | "resume" | "delete"> }>();
+    expectTypeOf<JobLogDto>().toMatchTypeOf<{ jobId: string; logFilePath?: string; content: string }>();
     expectTypeOf<DeleteJobDto>().toMatchTypeOf<{ jobId: string; confirm: true }>();
   });
 

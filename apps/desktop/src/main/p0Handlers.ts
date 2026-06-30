@@ -26,6 +26,7 @@ import { createMemoryCredentialStore, type MemoryCredentialStore } from "./crede
 import type { DesktopIpcHandlers } from "./ipc";
 import { createFileProjectStore, type MainProjectStore } from "./projectStore";
 import { createMemoryProviderStore, type MainProviderStore } from "./providerStore";
+import { createTaskTextLogger, type TaskTextLogger } from "./taskTextLogger";
 import { createWindowRunService, type WindowRunArtifacts } from "./windowRunService";
 import type {
   CreateJobDto,
@@ -52,6 +53,7 @@ type P0Handlers = Pick<
   | "jobs:pause"
   | "jobs:resume"
   | "jobs:delete"
+  | "jobs:readLog"
   | "reports:preview"
 >;
 
@@ -62,6 +64,7 @@ interface P0JobRecord {
   progressText: string;
   tokenText?: string;
   failureReason?: string;
+  logFilePath?: string;
   input: CreateJobDto;
   createdAt: string;
   updatedAt: string;
@@ -203,6 +206,7 @@ function toJobDto(job: P0JobRecord): JobDto {
     progressText: job.progressText,
     tokenText: job.tokenText,
     failureReason: job.failureReason,
+    logFilePath: job.logFilePath,
     allowedActions: getAllowedActions(job.status),
     createdAt: job.createdAt,
     updatedAt: job.updatedAt
@@ -635,6 +639,48 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     };
   }
 
+  function buildTaskInfo(job: P0JobRecord, book: Book): string {
+    return [
+      `任务 ${job.id}`,
+      `书籍 ${book.id}`,
+      `模型 ${job.input.modelId}`,
+      `模板 ${job.input.templateIds.length} 个`,
+      `单次章节 ${job.input.singleRunChapterCount}`,
+      `提取章节 ${job.input.extractionChapterCount}`,
+      `重叠章节 ${job.input.overlapChapterCount}`
+    ].join("，");
+  }
+
+  async function createTaskLoggerForJob(job: P0JobRecord): Promise<TaskTextLogger> {
+    const book = requireBook(job.bookId);
+    const project = await ensureProject(book.projectId);
+    return createTaskTextLogger({
+      clock,
+      jobId: job.id,
+      projectRoot: project.rootPath,
+      taskInfo: buildTaskInfo(job, book)
+    });
+  }
+
+  async function readJobLog(job: P0JobRecord): Promise<string> {
+    if (!job.logFilePath) {
+      return "任务尚未开始，日志文件还没有生成。";
+    }
+
+    const book = requireBook(job.bookId);
+    const project = await ensureProject(book.projectId);
+    const logPath = path.join(project.rootPath, job.logFilePath);
+
+    try {
+      return await fs.readFile(logPath, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return "日志文件不存在，可能任务还没有真正开始或文件已被移动。";
+      }
+      throw error;
+    }
+  }
+
   function isPlainRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null;
   }
@@ -733,15 +779,31 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
   }
 
   async function runModelBackedJob(job: P0JobRecord): Promise<JobDto> {
+    const taskLogger = await createTaskLoggerForJob(job);
     let runningJob = updateJob(job, {
       status: "running",
       progressText: "正在准备运行窗口",
       tokenText: formatTokenText(null),
-      failureReason: undefined
+      failureReason: undefined,
+      logFilePath: taskLogger.relativePath
     });
 
     try {
       const artifacts = await preparePreRunArtifacts(runningJob);
+      await taskLogger.append(["上下文", "任务"], {
+        任务ID: runningJob.id,
+        书籍ID: artifacts.book.id,
+        书籍名称: artifacts.book.displayName,
+        模型: runningJob.input.modelId,
+        模板: artifacts.templates.map((template) => ({
+          模板ID: template.id,
+          模板名称: template.name,
+          输出文件: template.fileName
+        })),
+        窗口数量: artifacts.runtimeWindowManifest.windows.length,
+        规则快照: artifacts.rulesSnapshotPath,
+        报告目录: ["reports", artifacts.book.id].join("/")
+      });
       runningJob = updateJob(runningJob, {
         progressText: `窗口 0/${artifacts.runtimeWindowManifest.windows.length}`
       });
@@ -761,6 +823,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
           updateJob(currentJob, toJobPatchFromRuntimeState(state));
         },
         providerStore,
+        taskLogger,
         registerReport({ path: reportPath, report }) {
           reportsById.set(report.id, report);
           reportPathById.set(report.id, reportPath);
@@ -785,6 +848,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
 
       return toJobDto(requireJob(runningJob.id));
     } catch (error) {
+      await taskLogger.append(["错误", "任务"], getFailureReason(error));
       return toJobDto(
         updateJob(runningJob, {
           status: "failed",
@@ -952,6 +1016,14 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
         throw new Error("Delete confirmation is required");
       }
       jobsById.delete(input.jobId);
+    },
+    "jobs:readLog": async (input) => {
+      const job = requireJob(input.jobId);
+      return {
+        jobId: job.id,
+        logFilePath: job.logFilePath,
+        content: await readJobLog(job)
+      };
     },
     "reports:preview": async (input) => {
       const report = reportsById.get(input.reportId);

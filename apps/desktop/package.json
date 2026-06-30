@@ -7,7 +7,9 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "dist": "pnpm build && electron-builder --config electron-builder.yml",
+    "dist": "pnpm build && node scripts/build-dist.js",
+    "dist:direct": "pnpm build && node scripts/build-dist.js",
+    "repack": "pnpm build && node scripts/build-dist.js",
     "typecheck": "tsc --noEmit --project tsconfig.json",
     "test": "vitest run --config vitest.config.ts"
   },

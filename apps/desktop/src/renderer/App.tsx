@@ -73,13 +73,6 @@ function getErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
-function appendJobLog(job: ExtractionJob, line: string): ExtractionJob {
-  return {
-    ...job,
-    logs: [...(job.logs ?? []), line]
-  };
-}
-
 export function App({ initialState = DEFAULT_STATE }: AppProps) {
   const [project, setProject] = useState<ProjectSummary | null>(initialState.project);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -188,6 +181,23 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
   function openSettings(): void {
     setSettingsModalOpen(true);
     void refreshSettings();
+  }
+
+  async function chooseProjectDirectory(): Promise<string | undefined> {
+    const api = window.novelExtractor;
+    if (!api?.chooseProjectDirectory) {
+      setSettingsError("选择路径失败");
+      return undefined;
+    }
+
+    setSettingsError(undefined);
+
+    try {
+      return await api.chooseProjectDirectory();
+    } catch (error) {
+      setSettingsError(getErrorMessage(error, "选择路径失败"));
+      return undefined;
+    }
   }
 
   async function saveDesktopSettings(input: SaveDesktopSettingsDto): Promise<DesktopSettingsDto | void> {
@@ -453,7 +463,7 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
     setCreateError(undefined);
 
     try {
-      const createdJob = mapJobDtoToExtractionJob(await api.createJob(input), ["任务已创建"]);
+      const createdJob = mapJobDtoToExtractionJob(await api.createJob(input));
       if (createdJob) {
         setJobs((currentJobs) => [
           createdJob,
@@ -497,9 +507,7 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
       }
 
       if (updatedJob) {
-        const mappedJob = mapJobDtoToExtractionJob(updatedJob, [
-          action === "start" ? "任务已完成" : "任务状态已更新"
-        ]);
+        const mappedJob = mapJobDtoToExtractionJob(updatedJob);
         if (mappedJob) {
           setJobs((currentJobs) =>
             currentJobs.map((job) => (job.id === jobId ? mappedJob : job))
@@ -514,23 +522,24 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
         return;
       }
 
-      const logLineByAction: Record<TaskAction, string> = {
-        start: "任务已开始",
-        pause: "任务已暂停",
-        resume: "任务已继续",
-        delete: "任务已删除"
-      };
-
       setJobs((currentJobs) =>
         currentJobs.map((job) =>
-          job.id === jobId
-            ? appendJobLog({ ...job, status: nextStatus }, logLineByAction[action])
-            : job
+          job.id === jobId ? { ...job, status: nextStatus } : job
         )
       );
     } catch (error) {
       setExtractionError(getErrorMessage(error, "任务操作失败"));
     }
+  }
+
+  async function readJobLog(jobId: string): Promise<string> {
+    const api = window.novelExtractor;
+    if (!api?.readJobLog) {
+      return "日志读取入口尚未就绪。";
+    }
+
+    const result = await api.readJobLog({ jobId });
+    return result.content || "日志文件暂无内容。";
   }
 
   async function deleteJob(jobId: string): Promise<void> {
@@ -572,10 +581,10 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
         activePage={activePage}
         projectName={project.displayName}
         onPageChange={setActivePage}
+        onOpenSettings={openSettings}
         userMenu={
           <UserMenu
             onOpenProviderConfig={() => setProviderModalOpen(true)}
-            onOpenSettings={openSettings}
           />
         }
       />
@@ -612,6 +621,7 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
             onCreateJob={createJob}
             onDeleteJob={deleteJob}
             onJobAction={runJobAction}
+            onReadJobLog={readJobLog}
             onTemplateSelectionChange={(templateIds) => {
               void saveTemplateSelection(templateIds);
             }}
@@ -642,6 +652,7 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
         saveState={settingsSaveState}
         settings={desktopSettings}
         onClose={() => setSettingsModalOpen(false)}
+        onChooseProjectDirectory={chooseProjectDirectory}
         onSaveSettings={saveDesktopSettings}
       />
       <TemplateManagementModal

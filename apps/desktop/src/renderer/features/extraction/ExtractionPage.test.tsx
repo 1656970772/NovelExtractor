@@ -480,8 +480,11 @@ describe("ExtractionPage", () => {
     expect(onDeleteJob).toHaveBeenCalledWith("job-failed");
   });
 
-  it("expands job logs", async () => {
+  it("expands a job log by reading the task log file", async () => {
     const user = userEvent.setup();
+    const onReadJobLog = vi.fn().mockResolvedValue(
+      "[2026-06-30 15:30:12][任务信息] 任务 job-running\n[2026-06-30 15:30:13][大模型返回] 等待模型返回"
+    );
     render(
       <ExtractionPage
         models={[modelForTest]}
@@ -491,18 +494,20 @@ describe("ExtractionPage", () => {
             id: "job-running",
             status: "running",
             progressText: "窗口 1/3",
-            logs: ["已读取第 1 章", "等待模型返回"]
+            logFilePath: "runs/job-running/logs/20260630-153012.txt"
           }
         ]}
         state="ready"
+        onReadJobLog={onReadJobLog}
       />
     );
 
-    expect(screen.queryByText("已读取第 1 章")).not.toBeInTheDocument();
+    expect(screen.queryByText(/任务 job-running/)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "展开日志" }));
 
-    expect(screen.getByText("已读取第 1 章")).toBeInTheDocument();
-    expect(screen.getByText("等待模型返回")).toBeInTheDocument();
+    expect(onReadJobLog).toHaveBeenCalledWith("job-running");
+    expect(await screen.findByText(/任务 job-running/)).toBeInTheDocument();
+    expect(screen.getByText(/等待模型返回/)).toBeInTheDocument();
   });
 });

@@ -8,12 +8,13 @@ export interface JobListProps {
   jobs: readonly ExtractionJob[];
   onJobAction?: (jobId: string, action: TaskAction) => Promise<void>;
   onDeleteJob?: (jobId: string) => Promise<void>;
+  onReadJobLog?: (jobId: string) => Promise<string>;
 }
 
 const STATUS_CONFIG = getTaskStatusConfig();
 const TASK_ACTION_CONFIG = getTaskActionConfig();
 
-export function JobList({ jobs, onJobAction, onDeleteJob }: JobListProps) {
+export function JobList({ jobs, onJobAction, onDeleteJob, onReadJobLog }: JobListProps) {
   const [deleteCandidate, setDeleteCandidate] = useState<ExtractionJob | null>(null);
 
   function runAction(job: ExtractionJob, action: TaskAction): void {
@@ -66,7 +67,11 @@ export function JobList({ jobs, onJobAction, onDeleteJob }: JobListProps) {
                       <p className="danger-text">{job.failureReason}</p>
                     ) : null}
                   </div>
-                  <JobLogPanel logs={job.logs} />
+                  <JobLogPanel
+                    jobId={job.id}
+                    logFilePath={job.logFilePath}
+                    onReadLog={onReadJobLog}
+                  />
                 </div>
                 <div className="job-row__actions">
                   {statusConfig.allowedActions.map((action) => (

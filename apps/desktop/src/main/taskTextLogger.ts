@@ -1,0 +1,192 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import type { Clock } from "@novel-extractor/domain";
+import { redactSecrets } from "./credentials";
+
+export interface TaskTextLogger {
+  readonly absolutePath: string;
+  readonly relativePath: string;
+  append(tags: readonly string[], value: unknown): Promise<void>;
+  setSecrets(secrets: readonly string[]): void;
+}
+
+interface CreateTaskTextLoggerInput {
+  clock?: Pick<Clock, "now">;
+  jobId: string;
+  projectRoot: string;
+  secrets?: readonly string[];
+  taskInfo: string;
+}
+
+const systemClock: Pick<Clock, "now"> = {
+  now: () => new Date().toISOString()
+};
+
+function toDisplayTimestamp(timestamp: string): string {
+  const match = timestamp.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/u);
+  if (!match) {
+    return timestamp;
+  }
+
+  return `${match[1]}-${match[2]}-${match[3]} ${match[4]}:${match[5]}:${match[6]}`;
+}
+
+function toFileTimestamp(timestamp: string): string {
+  const match = timestamp.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/u);
+  if (!match) {
+    return timestamp.replace(/[^a-zA-Z0-9._-]+/gu, "-").replace(/^-+|-+$/gu, "") || "task-log";
+  }
+
+  return `${match[1]}${match[2]}${match[3]}-${match[4]}${match[5]}${match[6]}`;
+}
+
+function toProjectRelativePath(...segments: string[]): string {
+  return segments.join("/");
+}
+
+async function allocateLogPath(input: {
+  baseFileName: string;
+  jobId: string;
+  projectRoot: string;
+}): Promise<{ absolutePath: string; relativePath: string }> {
+  for (let index = 0; index < 1000; index += 1) {
+    const suffix = index === 0 ? "" : `-${String(index).padStart(3, "0")}`;
+    const fileName = `${input.baseFileName}${suffix}.txt`;
+    const relativePath = toProjectRelativePath("runs", input.jobId, "logs", fileName);
+    const absolutePath = path.join(input.projectRoot, "runs", input.jobId, "logs", fileName);
+
+    try {
+      const handle = await fs.open(absolutePath, "wx");
+      await handle.close();
+      return { absolutePath, relativePath };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+        const handle = await fs.open(absolutePath, "wx");
+        await handle.close();
+        return { absolutePath, relativePath };
+      }
+
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw error;
+      }
+    }
+  }
+
+  throw new Error("无法创建唯一任务日志文件");
+}
+
+function redactTaskLogText(value: string, secrets: readonly string[]): string {
+  return redactSecrets(value, secrets)
+    .replace(/((?:apiKey|api_key|authorization|password|secret)\s*:\s*)[^\n]+/giu, "$1***")
+    .replace(/(authorization\s*:\s*bearer\s+)[^\s,;"]+/giu, "$1***")
+    .replace(/\[REDACTED\]/gu, "***");
+}
+
+function renderPlainText(value: unknown, depth = 0, seen = new WeakSet<object>()): string {
+  const indent = "  ".repeat(depth);
+  const childIndent = "  ".repeat(depth + 1);
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (typeof value === "number" || typeof value === "boolean" || value === null) {
+    return String(value);
+  }
+
+  if (typeof value === "undefined") {
+    return "未设置";
+  }
+
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+
+  if (typeof value === "function") {
+    return "[Function]";
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return "[]";
+    }
+
+    return value
+      .map((item) => {
+        const rendered = renderPlainText(item, depth + 1, seen);
+        if (rendered.includes("\n")) {
+          return `${indent}-\n${rendered}`;
+        }
+
+        return `${indent}- ${rendered}`;
+      })
+      .join("\n");
+  }
+
+  if (typeof value === "object" && value !== null) {
+    if (seen.has(value)) {
+      return "[Circular]";
+    }
+    seen.add(value);
+
+    const entries = Object.entries(value);
+    if (entries.length === 0) {
+      return "{}";
+    }
+
+    return entries
+      .map(([key, item]) => {
+        const rendered = renderPlainText(item, depth + 1, seen);
+        if (rendered.includes("\n")) {
+          return `${indent}${key}:\n${rendered
+            .split("\n")
+            .map((line) => `${childIndent}${line}`)
+            .join("\n")}`;
+        }
+
+        return `${indent}${key}: ${rendered}`;
+      })
+      .join("\n");
+  }
+
+  return String(value);
+}
+
+export async function createTaskTextLogger(input: CreateTaskTextLoggerInput): Promise<TaskTextLogger> {
+  const clock = input.clock ?? systemClock;
+  const createdAt = clock.now();
+  const allocated = await allocateLogPath({
+    baseFileName: toFileTimestamp(createdAt),
+    jobId: input.jobId,
+    projectRoot: input.projectRoot
+  });
+  let secrets = [...(input.secrets ?? [])];
+
+  function renderLine(tags: readonly string[], value: unknown, timestampValue = clock.now()): string {
+    const timestamp = toDisplayTimestamp(timestampValue);
+    const tagText = tags.map((tag) => `[${tag}]`).join("");
+    const rendered = redactTaskLogText(renderPlainText(value), secrets);
+    const linePrefix = `[${timestamp}]${tagText}`;
+
+    if (!rendered.includes("\n")) {
+      return `${linePrefix} ${rendered}\n`;
+    }
+
+    return `${linePrefix}\n${rendered}\n`;
+  }
+
+  const logger: TaskTextLogger = {
+    absolutePath: allocated.absolutePath,
+    relativePath: allocated.relativePath,
+    async append(tags, value) {
+      await fs.appendFile(allocated.absolutePath, renderLine(tags, value), "utf8");
+    },
+    setSecrets(nextSecrets) {
+      secrets = [...nextSecrets];
+    }
+  };
+
+  await fs.appendFile(allocated.absolutePath, renderLine(["任务信息"], input.taskInfo, createdAt), "utf8");
+  return logger;
+}

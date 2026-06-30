@@ -43,7 +43,8 @@ const MENU_ITEMS = {
   },
   desktopSettings: {
     id: "desktop-settings",
-    label: "设置"
+    label: "设置",
+    shortLabel: "⚙"
   },
   language: {
     id: "language",
@@ -213,12 +214,13 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
   ],
   menu: {
     mainNavigation: [MENU_ITEMS.assets, MENU_ITEMS.extraction, MENU_ITEMS.graph],
-    userMenu: [MENU_ITEMS.providerSettings, MENU_ITEMS.desktopSettings],
+    userMenu: [MENU_ITEMS.providerSettings],
     workbenchNavigation: {
       topFunctionLabel: "功能",
       topFunctionItems: [MENU_ITEMS.extraction, MENU_ITEMS.graph],
       railAssetItem: MENU_ITEMS.assets,
       railFunctionItems: [MENU_ITEMS.extraction, MENU_ITEMS.graph],
+      railUtilityItems: [MENU_ITEMS.desktopSettings],
       languageAction: MENU_ITEMS.language,
       userAction: MENU_ITEMS.userMenu
     }

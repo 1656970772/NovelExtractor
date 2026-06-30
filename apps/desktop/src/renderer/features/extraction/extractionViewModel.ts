@@ -32,7 +32,7 @@ export interface ExtractionJob {
   progressText?: string;
   tokenText?: string;
   failureReason?: string;
-  logs?: string[];
+  logFilePath?: string;
 }
 
 export interface ExtractionFormState {
@@ -193,10 +193,7 @@ export function mapUploadResultToBook(result: BookUploadResultDto): ExtractionBo
   };
 }
 
-export function mapJobDtoToExtractionJob(
-  job: JobDto,
-  logs: readonly string[] = []
-): ExtractionJob | null {
+export function mapJobDtoToExtractionJob(job: JobDto): ExtractionJob | null {
   const status = toTaskStatus(job.status);
 
   if (status === null) {
@@ -210,7 +207,7 @@ export function mapJobDtoToExtractionJob(
     progressText: job.progressText,
     tokenText: job.tokenText,
     failureReason: job.failureReason,
-    logs: [...logs]
+    logFilePath: job.logFilePath
   };
 }
 

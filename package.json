@@ -7,6 +7,8 @@
     "desktop:dev": "pnpm --filter @novel-extractor/desktop dev",
     "desktop:build": "pnpm --filter @novel-extractor/desktop build",
     "desktop:dist": "pnpm --filter @novel-extractor/desktop dist",
+    "desktop:dist:direct": "pnpm --filter @novel-extractor/desktop dist:direct",
+    "desktop:repack": "pnpm --filter @novel-extractor/desktop repack",
     "test:ts": "vitest run --passWithNoTests",
     "test:e2e": "playwright test",
     "typecheck": "pnpm -r typecheck"

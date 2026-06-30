@@ -7,6 +7,7 @@ import type {
   DesktopIpcRequest,
   DesktopIpcResponse,
   JobDto,
+  JobLogDto,
   ProjectDto,
   ProviderViewDto,
   ReportDto,
@@ -30,6 +31,7 @@ export interface NovelExtractorDesktopApi {
   listProjects(): Promise<ProjectDto[]>;
   getSettings(): Promise<DesktopSettingsDto>;
   saveSettings(input: SaveDesktopSettingsDto): Promise<DesktopSettingsDto>;
+  chooseProjectDirectory(): Promise<string | undefined>;
   saveProvider(input: SaveProviderDto): Promise<void>;
   listProviders(): Promise<ProviderViewDto[]>;
   uploadTxt(input: UploadTxtDto): Promise<BookUploadResultDto>;
@@ -45,6 +47,7 @@ export interface NovelExtractorDesktopApi {
   pauseJob(input: { jobId: string }): Promise<JobDto | void>;
   resumeJob(input: { jobId: string }): Promise<JobDto | void>;
   deleteJob(input: DeleteJobDto): Promise<void>;
+  readJobLog(input: { jobId: string }): Promise<JobLogDto>;
 }
 
 function invokeTyped<TChannel extends DesktopIpcChannel>(
@@ -63,6 +66,7 @@ export function createNovelExtractorDesktopApi(
     listProjects: () => invokeTyped(invoke, "project:list", undefined),
     getSettings: () => invokeTyped(invoke, "settings:get", undefined),
     saveSettings: (input) => invokeTyped(invoke, "settings:save", input),
+    chooseProjectDirectory: () => invokeTyped(invoke, "settings:chooseProjectDirectory", undefined),
     saveProvider: (input) => invokeTyped(invoke, "providers:save", input),
     listProviders: () => invokeTyped(invoke, "providers:list", undefined),
     uploadTxt: (input) => invokeTyped(invoke, "books:uploadTxt", input),
@@ -77,7 +81,8 @@ export function createNovelExtractorDesktopApi(
     startJob: (input) => invokeTyped(invoke, "jobs:start", input),
     pauseJob: (input) => invokeTyped(invoke, "jobs:pause", input),
     resumeJob: (input) => invokeTyped(invoke, "jobs:resume", input),
-    deleteJob: (input) => invokeTyped(invoke, "jobs:delete", input)
+    deleteJob: (input) => invokeTyped(invoke, "jobs:delete", input),
+    readJobLog: (input) => invokeTyped(invoke, "jobs:readLog", input)
   };
 
   return Object.freeze(api);

@@ -34,6 +34,7 @@ describe("preload desktop API", () => {
     await api.listProjects();
     await api.getSettings();
     await api.saveSettings({ projectStorageDirectory: "D:\\NovelExtractorProjects" });
+    await api.chooseProjectDirectory();
     await api.saveProvider({
       presetId: "deepseek",
       displayName: "DeepSeek",
@@ -71,6 +72,7 @@ describe("preload desktop API", () => {
     await api.pauseJob({ jobId: "job-1" });
     await api.resumeJob({ jobId: "job-1" });
     await api.deleteJob({ jobId: "job-1", confirm: true });
+    await api.readJobLog({ jobId: "job-1" });
     await api.previewReport({ reportId: "report-1" });
 
     expect(calls.map((call) => call.channel)).toEqual([
@@ -78,6 +80,7 @@ describe("preload desktop API", () => {
       "project:list",
       "settings:get",
       "settings:save",
+      "settings:chooseProjectDirectory",
       "providers:save",
       "providers:list",
       "books:uploadTxt",
@@ -92,9 +95,10 @@ describe("preload desktop API", () => {
       "jobs:pause",
       "jobs:resume",
       "jobs:delete",
+      "jobs:readLog",
       "reports:preview"
     ]);
-    expect(invoke).toHaveBeenCalledTimes(19);
+    expect(invoke).toHaveBeenCalledTimes(21);
   });
 
   it("does not expose raw invoke or the raw Electron renderer bridge", () => {
@@ -106,6 +110,7 @@ describe("preload desktop API", () => {
       "listProjects",
       "getSettings",
       "saveSettings",
+      "chooseProjectDirectory",
       "saveProvider",
       "listProviders",
       "uploadTxt",
@@ -120,7 +125,8 @@ describe("preload desktop API", () => {
       "startJob",
       "pauseJob",
       "resumeJob",
-      "deleteJob"
+      "deleteJob",
+      "readJobLog"
     ]);
     expect(api).not.toHaveProperty("invoke");
     expect(api).not.toHaveProperty(rawIpcRendererName);

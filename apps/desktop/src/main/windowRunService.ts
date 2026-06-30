@@ -36,6 +36,7 @@ import {
 import type { TemplateDto } from "../shared/ipcTypes";
 import { redactSecrets, type MemoryCredentialStore } from "./credentials";
 import type { MainProviderStore } from "./providerStore";
+import type { TaskTextLogger } from "./taskTextLogger";
 
 interface WindowRunJobInput {
   id: string;
@@ -64,6 +65,7 @@ export interface WindowRunServiceOptions {
   onRuntimeState(state: JobRuntimeState): Promise<void> | void;
   providerStore: MainProviderStore;
   registerReport(input: { path: string; report: ReportAsset }): void;
+  taskLogger?: TaskTextLogger;
 }
 
 export interface WindowRunService {
@@ -142,15 +144,6 @@ const GREP_BUDGET_ERROR_MESSAGES = new Set([
   "grep total byte budget exceeded",
   "grep match budget exceeded"
 ]);
-const TRACE_PREVIEW_MAX_CHARS = 160;
-const TRACE_FIELD_LIMIT = 30;
-const TRACE_ARRAY_ITEM_LIMIT = 5;
-const OMITTED_TRACE_TEXT_FIELDS = new Set(["content", "newText", "oldText", "body", "windowText", "preview"]);
-
-interface ToolLoopTraceWriter {
-  append(event: Record<string, unknown>): Promise<void>;
-}
-
 function getWindowMetadata(window: JobWindowInput): RuntimeWindowManifestWindow {
   const manifestWindow = window.metadata?.manifestWindow;
   if (!manifestWindow || typeof manifestWindow !== "object") {
@@ -192,168 +185,6 @@ function chunkTemplates(templates: TemplateDto[], maxFullTemplatesPerCall: numbe
     batches.push(templates.slice(index, index + batchSize));
   }
   return batches;
-}
-
-function padTraceIndex(index: number): string {
-  return String(index).padStart(4, "0");
-}
-
-function toTracePreview(value: string, secrets: readonly string[]): string {
-  const redacted = redactSecrets(value, secrets);
-  if (redacted.length <= TRACE_PREVIEW_MAX_CHARS) {
-    return redacted;
-  }
-
-  return `${redacted.slice(0, TRACE_PREVIEW_MAX_CHARS)}...`;
-}
-
-function summarizeTraceValue(
-  value: unknown,
-  secrets: readonly string[],
-  fieldName?: string
-): Record<string, unknown> {
-  if (typeof value === "string") {
-    const summary: Record<string, unknown> = {
-      type: "string",
-      length: value.length
-    };
-
-    if (fieldName && OMITTED_TRACE_TEXT_FIELDS.has(fieldName)) {
-      return {
-        ...summary,
-        preview: "<omitted>"
-      };
-    }
-
-    return {
-      ...summary,
-      preview: toTracePreview(value, secrets)
-    };
-  }
-
-  if (typeof value === "number" || typeof value === "boolean") {
-    return {
-      type: typeof value,
-      value
-    };
-  }
-
-  if (value === null) {
-    return {
-      type: "null"
-    };
-  }
-
-  if (Array.isArray(value)) {
-    return {
-      type: "array",
-      length: value.length,
-      items: value
-        .slice(0, TRACE_ARRAY_ITEM_LIMIT)
-        .map((item) => summarizeTraceValue(item, secrets, fieldName)),
-      truncated: value.length > TRACE_ARRAY_ITEM_LIMIT
-    };
-  }
-
-  if (isPlainRecord(value)) {
-    const entries = Object.entries(value);
-    return {
-      type: "object",
-      fields: Object.fromEntries(
-        entries
-          .slice(0, TRACE_FIELD_LIMIT)
-          .map(([key, item]) => [key, summarizeTraceValue(item, secrets, key)])
-      ),
-      truncated: entries.length > TRACE_FIELD_LIMIT
-    };
-  }
-
-  return {
-    type: typeof value
-  };
-}
-
-function summarizeCompletion(content: string, toolCallCount: number, secrets: readonly string[]): Record<string, unknown> {
-  return {
-    hasToolCalls: toolCallCount > 0,
-    toolCallCount,
-    contentLength: content.length,
-    contentPreview: toTracePreview(content, secrets)
-  };
-}
-
-function getRecoverableErrorSummary(result: unknown, secrets: readonly string[]): Record<string, unknown> | undefined {
-  if (!isPlainRecord(result) || !isPlainRecord(result.error)) {
-    return undefined;
-  }
-
-  return {
-    code: typeof result.error.code === "string" ? result.error.code : undefined,
-    message:
-      typeof result.error.message === "string"
-        ? redactSecrets(result.error.message, secrets)
-        : undefined,
-    hint: typeof result.hint === "string" ? redactSecrets(result.hint, secrets) : undefined
-  };
-}
-
-function toTraceErrorSummary(error: unknown, secrets: readonly string[]): Record<string, unknown> {
-  return {
-    name: error instanceof Error ? error.name : typeof error,
-    message: toSafeErrorMessage(error, secrets)
-  };
-}
-
-function createToolLoopTraceWriter(input: {
-  artifacts: WindowRunArtifacts;
-  batchIndex: number;
-  batchTotal: number;
-  job: WindowRunJobInput;
-  manifestWindow: RuntimeWindowManifestWindow;
-  secrets: readonly string[];
-  totalWindowCount: number;
-}): ToolLoopTraceWriter {
-  const windowIndex = input.manifestWindow.index + 1;
-  const batchIndex = input.batchIndex + 1;
-  const tracePath = path.join(
-    input.artifacts.project.rootPath,
-    "runs",
-    input.job.id,
-    "tool-loop-traces",
-    `window-${padTraceIndex(windowIndex)}`,
-    `batch-${padTraceIndex(batchIndex)}.jsonl`
-  );
-  const baseEvent = {
-    jobId: input.job.id,
-    window: {
-      index: windowIndex,
-      total: input.totalWindowCount,
-      fileName: input.manifestWindow.fileName,
-      textPath: input.manifestWindow.textPath,
-      contextChapterRange: input.manifestWindow.contextChapterRange,
-      submittedChapterRange: input.manifestWindow.submittedChapterRange
-    },
-    batch: {
-      index: batchIndex,
-      total: input.batchTotal,
-      templates: input.artifacts.templates.map((template) => ({
-        id: template.id,
-        name: template.name,
-        outputFileName: template.fileName
-      }))
-    }
-  };
-
-  return {
-    async append(event) {
-      await fs.mkdir(path.dirname(tracePath), { recursive: true });
-      await fs.appendFile(
-        tracePath,
-        `${JSON.stringify(redactJsonValue({ ...baseEvent, ...event }, input.secrets))}\n`,
-        "utf8"
-      );
-    }
-  };
 }
 
 function toLlmToolSchema(tool: ReturnType<typeof getEnabledTools>[number]): LlmToolSchema {
@@ -1207,19 +1038,11 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
     await fs.mkdir(reportsRoot, { recursive: true });
 
     const secrets = await getReportRedactionSecrets(input.job.input.providerConfigId);
+    options.taskLogger?.setSecrets(secrets);
     const allowedOutputFileNames = new Set(input.artifacts.templates.map((template) => template.fileName));
     const queriedReportFileNames = new Set<string>();
     const writtenReportFileNames = new Set<string>();
     let hasSuccessfulWrite = false;
-    const trace = createToolLoopTraceWriter({
-      artifacts: input.artifacts,
-      batchIndex: input.batchIndex,
-      batchTotal: input.batchTotal,
-      job: input.job,
-      manifestWindow: input.manifestWindow,
-      secrets,
-      totalWindowCount: input.totalWindowCount
-    });
     const messages: ChatCompletionMessage[] = [
       {
         role: "system",
@@ -1240,10 +1063,31 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
     let currentRoundIndex: number | undefined;
 
     try {
-      await trace.append({ event: "batch_started" });
+      await options.taskLogger?.append(["上下文", "窗口"], {
+        正在处理: `窗口 ${input.manifestWindow.index + 1}/${input.totalWindowCount}`,
+        窗口序号: `${input.manifestWindow.index + 1}/${input.totalWindowCount}`,
+        窗口文件: input.manifestWindow.textPath,
+        章节范围: input.manifestWindow.submittedChapterRange,
+        上下文章节范围: input.manifestWindow.contextChapterRange,
+        规则快照: input.artifacts.rulesSnapshotPath,
+        报告目录: path.relative(input.artifacts.project.rootPath, reportsRoot) || reportsRoot,
+        批次: `${input.batchIndex + 1}/${input.batchTotal}`,
+        模板: input.artifacts.templates.map((template) => ({
+          模板ID: template.id,
+          模板名称: template.name,
+          输出文件: template.fileName
+        }))
+      });
 
       for (let roundIndex = 0; roundIndex < TOOL_LOOP_DEFAULTS.maxRounds; roundIndex += 1) {
         currentRoundIndex = roundIndex + 1;
+        await options.taskLogger?.append(["大模型请求", "Prompt"], {
+          供应商: input.providerId,
+          模型: input.modelId,
+          轮次: currentRoundIndex,
+          messages,
+          tools: TOOL_SCHEMAS
+        });
         const completion = await input.client.chatCompletion({
           providerId: input.providerId,
           modelId: input.modelId,
@@ -1253,11 +1097,11 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         const usageDelta = mapUsage(completion.normalizedUsage);
         usage = addUsage(usage, usageDelta);
 
-        await trace.append({
-          event: "round_completion",
-          roundIndex: currentRoundIndex,
-          completion: summarizeCompletion(completion.content, completion.toolCalls.length, secrets),
-          usageDelta
+        await options.taskLogger?.append(["大模型返回"], {
+          轮次: currentRoundIndex,
+          正文: completion.content,
+          工具调用: completion.toolCalls,
+          Token使用: usageDelta
         });
 
         if (completion.toolCalls.length === 0) {
@@ -1266,6 +1110,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
               throw new Error(NO_TOOL_PROTOCOL_ERROR_MESSAGE);
             }
 
+            await options.taskLogger?.append(["上下文", "重试"], NO_TOOL_PROTOCOL_CORRECTION_MESSAGE);
             messages.push({
               role: "assistant",
               content: redactSecrets(completion.content, secrets)
@@ -1276,13 +1121,6 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             });
             continue;
           }
-
-          await trace.append({
-            event: "batch_finished",
-            status: "completed",
-            roundIndex: currentRoundIndex,
-            usage
-          });
 
           return {
             content: redactSecrets(completion.content, secrets),
@@ -1332,14 +1170,11 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         });
 
         for (const toolCall of toolCalls) {
-          const parameters = summarizeTraceValue(toolCall.arguments, secrets);
-          await trace.append({
-            event: "tool_call",
-            roundIndex: currentRoundIndex,
-            toolName: toolCall.name,
-            toolCallId: toolCall.id,
-            parameters,
-            usageDelta
+          await options.taskLogger?.append(["工具调用", toolCall.name], {
+            轮次: currentRoundIndex,
+            工具调用ID: toolCall.id,
+            模型原始输入: toolCall.replayArguments,
+            实际执行输入: toolCall.executionArguments
           });
 
           await validateToolCallBeforeExecution({
@@ -1403,17 +1238,11 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             }
           }
 
-          await trace.append({
-            event: "tool_result",
-            roundIndex: currentRoundIndex,
-            toolName: toolCall.name,
-            toolCallId: toolCall.id,
-            parameters,
-            ...(returnedRecoverableToolError
-              ? { recoverableError: getRecoverableErrorSummary(toolResult, secrets) }
-              : {}),
-            toolResultSummary: summarizeTraceValue(toolResult, secrets),
-            usageDelta
+          await options.taskLogger?.append(["工具返回", toolCall.name], {
+            轮次: currentRoundIndex,
+            工具调用ID: toolCall.id,
+            是否可恢复错误: returnedRecoverableToolError,
+            返回内容: toolResult
           });
           if (shouldRecordSuccessfulReportQuery({ returnedRecoverableToolError, toolCall })) {
             recordReportQuery({
@@ -1453,12 +1282,6 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
       }
 
       if (hasSuccessfulWrite) {
-        await trace.append({
-          event: "batch_finished",
-          status: "max_rounds_after_write",
-          usage
-        });
-
         return {
           content: "tool loop 达到最大轮次，已保留本窗口成功写入结果",
           usage
@@ -1467,16 +1290,11 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
 
       throw new Error(`tool loop 超过最大轮次 ${TOOL_LOOP_DEFAULTS.maxRounds}`);
     } catch (error) {
-      try {
-        await trace.append({
-          event: "fatal_error",
-          ...(currentRoundIndex ? { roundIndex: currentRoundIndex } : {}),
-          fatalError: toTraceErrorSummary(error, secrets),
-          usage
-        });
-      } catch {
-        // Preserve the original tool-loop failure if trace persistence also fails.
-      }
+      await options.taskLogger?.append(["错误", "窗口"], {
+        ...(currentRoundIndex ? { 轮次: currentRoundIndex } : {}),
+        错误: toSafeErrorMessage(error, secrets),
+        Token使用: usage
+      });
       throw error;
     }
   }

@@ -260,6 +260,10 @@ export function assertValidConfigInvariants(config: NovelExtractorConfig): void 
     config.menu.workbenchNavigation.railFunctionItems.map((item) => item.id),
     "rail function item id"
   );
+  assertUnique(
+    config.menu.workbenchNavigation.railUtilityItems.map((item) => item.id),
+    "rail utility item id"
+  );
   assertNonEmpty(config.menu.workbenchNavigation.topFunctionLabel, "top function label");
   assertMenuItemsHaveLabels(
     [
@@ -268,6 +272,7 @@ export function assertValidConfigInvariants(config: NovelExtractorConfig): void 
       ...config.menu.workbenchNavigation.topFunctionItems,
       config.menu.workbenchNavigation.railAssetItem,
       ...config.menu.workbenchNavigation.railFunctionItems,
+      ...config.menu.workbenchNavigation.railUtilityItems,
       config.menu.workbenchNavigation.languageAction,
       config.menu.workbenchNavigation.userAction
     ],

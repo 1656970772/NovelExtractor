@@ -28,7 +28,7 @@ describe("app css template modal layout", () => {
     const activeRule = getRuleBody(".template-modal__card--active");
     const nameRule = getRuleBody(".template-modal__card-name");
 
-    expect(modalRule).toContain("width: min(780px, 100%)");
+    expect(modalRule).toContain("width: min(920px, 100%)");
     expect(scrollRule).toContain("display: flex");
     expect(scrollRule).toContain("flex-direction: column");
     expect(scrollRule).toContain("min-height: 0");
@@ -87,10 +87,16 @@ describe("app css template modal layout", () => {
     const templateModalRule = getRuleBody(".template-modal");
     const settingsWorkspaceRule = getRuleBody(".settings-modal__workspace");
     const activeCategoryRule = getRuleBody(".settings-modal__category-button[aria-pressed=\"true\"]");
+    const railNavRule = getRuleBody(".rail-nav");
+    const utilityGroupRule = getRuleBody(".rail-nav__utility-group");
+    const pathPickerRule = getRuleBody(".settings-modal__path-picker");
 
-    expect(templateModalRule).toContain("width: min(780px, 100%)");
+    expect(templateModalRule).toContain("width: min(920px, 100%)");
     expect(settingsWorkspaceRule).toContain("grid-template-columns: minmax(180px, 0.55fr) minmax(420px, 1.45fr)");
     expect(activeCategoryRule).toContain("background: var(--app-color-selected)");
     expect(activeCategoryRule).toContain("color: var(--app-color-accent)");
+    expect(railNavRule).toContain("min-height: 0");
+    expect(utilityGroupRule).toContain("margin-top: auto");
+    expect(pathPickerRule).toContain("grid-template-columns: minmax(0, 1fr) auto");
   });
 });

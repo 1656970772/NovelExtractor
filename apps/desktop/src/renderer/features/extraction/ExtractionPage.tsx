@@ -39,6 +39,7 @@ export interface ExtractionPageProps {
   onCreateJob?: (input: CreateJobDto) => Promise<void>;
   onJobAction?: (jobId: string, action: TaskAction) => Promise<void>;
   onDeleteJob?: (jobId: string) => Promise<void>;
+  onReadJobLog?: (jobId: string) => Promise<string>;
   onOpenProviderConfig?: () => void;
   onOpenNewTemplate?: () => void;
   onOpenTemplateManager?: () => void;
@@ -67,6 +68,7 @@ export function ExtractionPage({
   onCreateJob,
   onJobAction,
   onDeleteJob,
+  onReadJobLog,
   onOpenProviderConfig,
   onOpenNewTemplate,
   onOpenTemplateManager,
@@ -181,7 +183,12 @@ export function ExtractionPage({
           onOpenProviderConfig={onOpenProviderConfig}
           onOpenTemplateManager={onOpenTemplateManager}
         />
-        <JobList jobs={jobs} onDeleteJob={onDeleteJob} onJobAction={onJobAction} />
+        <JobList
+          jobs={jobs}
+          onDeleteJob={onDeleteJob}
+          onJobAction={onJobAction}
+          onReadJobLog={onReadJobLog}
+        />
       </div>
     </section>
   );

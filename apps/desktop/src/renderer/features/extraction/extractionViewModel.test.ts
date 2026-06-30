@@ -134,6 +134,7 @@ describe("extractionViewModel", () => {
       status: "created",
       progressText: "窗口 0/3",
       tokenText: "Token 0 / 费用 0",
+      logFilePath: "runs/job-1/logs/20260630-153012.txt",
       allowedActions: ["start", "delete"],
       createdAt: "2026-06-27T00:00:00.000Z",
       updatedAt: "2026-06-27T00:00:00.000Z"
@@ -144,7 +145,8 @@ describe("extractionViewModel", () => {
       bookId: "book-1",
       status: "pending",
       progressText: "窗口 0/3",
-      tokenText: "Token 0 / 费用 0"
+      tokenText: "Token 0 / 费用 0",
+      logFilePath: "runs/job-1/logs/20260630-153012.txt"
     });
   });
 });

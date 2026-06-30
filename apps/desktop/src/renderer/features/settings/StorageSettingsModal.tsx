@@ -11,6 +11,7 @@ export interface StorageSettingsModalProps {
   saveState?: SettingsSaveState;
   errorMessage?: string;
   onClose: () => void;
+  onChooseProjectDirectory?: () => Promise<string | undefined>;
   onSaveSettings: (input: SaveDesktopSettingsDto) => Promise<DesktopSettingsDto | void>;
 }
 
@@ -21,12 +22,15 @@ export function StorageSettingsModal({
   saveState = "idle",
   errorMessage,
   onClose,
+  onChooseProjectDirectory,
   onSaveSettings
 }: StorageSettingsModalProps) {
   const [projectDirectory, setProjectDirectory] = useState("");
   const [savedMessage, setSavedMessage] = useState<string | undefined>();
+  const [isChoosingDirectory, setChoosingDirectory] = useState(false);
   const isSaving = saveState === "saving";
   const isLoading = loadState === "loading";
+  const isBusy = isLoading || isSaving || isChoosingDirectory;
   const fieldValue = projectDirectory;
 
   useEffect(() => {
@@ -59,6 +63,24 @@ export function StorageSettingsModal({
       setSavedMessage("已保存");
     } catch {
       setSavedMessage(undefined);
+    }
+  }
+
+  async function handleChooseDirectory(): Promise<void> {
+    if (!onChooseProjectDirectory) {
+      return;
+    }
+
+    setSavedMessage(undefined);
+    setChoosingDirectory(true);
+
+    try {
+      const chosenDirectory = await onChooseProjectDirectory();
+      if (chosenDirectory) {
+        setProjectDirectory(chosenDirectory);
+      }
+    } finally {
+      setChoosingDirectory(false);
     }
   }
 
@@ -107,30 +129,29 @@ export function StorageSettingsModal({
             <form className="template-modal__editor-form settings-modal__form" onSubmit={(event) => {
               void handleSubmit(event);
             }}>
-              <label className="file-upload-field" htmlFor="project-storage-directory">
-                项目目录
-                <input
-                  id="project-storage-directory"
-                  name="projectStorageDirectory"
-                  type="text"
-                  value={fieldValue}
-                  disabled={isLoading || isSaving}
-                  onChange={(event) => setProjectDirectory(event.target.value)}
-                />
-              </label>
-
-              {settings ? (
-                <dl className="metadata-grid settings-modal__metadata">
-                  <div>
-                    <dt>默认</dt>
-                    <dd>{settings.defaultProjectStorageDirectory}</dd>
-                  </div>
-                  <div>
-                    <dt>当前</dt>
-                    <dd>{settings.effectiveProjectStorageDirectory}</dd>
-                  </div>
-                </dl>
-              ) : null}
+              <div className="settings-modal__path-picker">
+                <label className="file-upload-field" htmlFor="project-storage-directory">
+                  项目目录
+                  <input
+                    id="project-storage-directory"
+                    name="projectStorageDirectory"
+                    type="text"
+                    value={fieldValue}
+                    disabled={isBusy}
+                    onChange={(event) => setProjectDirectory(event.target.value)}
+                  />
+                </label>
+                <button
+                  className="button button--secondary button--compact"
+                  disabled={isBusy || !onChooseProjectDirectory}
+                  onClick={() => {
+                    void handleChooseDirectory();
+                  }}
+                  type="button"
+                >
+                  {isChoosingDirectory ? "选择中" : "浏览"}
+                </button>
+              </div>
 
               {errorMessage ? (
                 <p className="form-error" role="alert">
@@ -142,7 +163,7 @@ export function StorageSettingsModal({
               <div className="template-upload__actions">
                 <button
                   className="button button--primary button--compact template-upload__submit-button"
-                  disabled={isLoading || isSaving}
+                  disabled={isBusy}
                   type="submit"
                 >
                   {isSaving ? "保存中" : "保存设置"}

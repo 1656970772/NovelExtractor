@@ -1,4 +1,5 @@
-import { app, BrowserWindow, Menu, ipcMain, safeStorage, shell } from "electron";
+import { app, BrowserWindow, Menu, dialog, ipcMain, safeStorage, shell } from "electron";
+import type { OpenDialogOptions } from "electron";
 import { getThemeTokens } from "@novel-extractor/config";
 import { join } from "node:path";
 import { createAppPaths } from "./appPaths";
@@ -54,6 +55,23 @@ function createMainWindow(): void {
   void mainWindow.loadFile(join(__dirname, "../renderer/index.html"));
 }
 
+async function chooseProjectDirectory(): Promise<string | undefined> {
+  const dialogOptions: OpenDialogOptions = {
+    title: "选择项目目录",
+    properties: ["openDirectory", "createDirectory"]
+  };
+  const focusedWindow = BrowserWindow.getFocusedWindow();
+  const result = focusedWindow
+    ? await dialog.showOpenDialog(focusedWindow, dialogOptions)
+    : await dialog.showOpenDialog(dialogOptions);
+
+  if (result.canceled) {
+    return undefined;
+  }
+
+  return result.filePaths[0];
+}
+
 const SAFE_STORAGE_PREFIX = "safe-storage-v1:";
 
 function createSafeStorageCredentialCodec(): {
@@ -104,6 +122,7 @@ void app.whenReady().then(async () => {
     ...createProviderIpcHandlers({ credentialStore, providerStore }),
     ...createDesktopSettingsIpcHandlers({
       settingsStore,
+      chooseProjectDirectory,
       onSettingsSaved: (settings) => {
         projectStorageDirectory = settings.effectiveProjectStorageDirectory;
       }
