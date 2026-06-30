@@ -64,7 +64,7 @@ export class PathResolver {
         continue;
       }
 
-      const subpath = cleanReadSubpath(key.slice(token.length));
+      const subpath = cleanReadSubpath(key.slice(token.length + 1));
       if (subpath === undefined) {
         return undefined;
       }

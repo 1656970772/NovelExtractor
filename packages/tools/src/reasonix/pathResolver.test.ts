@@ -54,6 +54,15 @@ describe("Reasonix path resolver parity", () => {
     expect(resolved?.errorText(new Error(`open ${root}: no such file`))).toBe(
       "open __reasonix_external_folder/abc/External: no such file"
     );
+
+    const resolvedDoubleSlash = resolver.resolve("__reasonix_external_folder/abc/External//src/outside.txt");
+    expect(resolvedDoubleSlash).toMatchObject({
+      path: path.join(root, "src", "outside.txt"),
+      displayPath: "__reasonix_external_folder/abc/External/src/outside.txt",
+      root,
+      displayRoot: "__reasonix_external_folder/abc/External",
+      external: true
+    });
   });
 
   it("rejects alias subpaths that escape the registered read root", async () => {
@@ -75,8 +84,15 @@ describe("Reasonix path resolver parity", () => {
     expect(resolver.resolve("__reasonix_external_folder/abc/External/C:/secret.txt")).toBeUndefined();
     expect(resolver.resolve("__reasonix_external_folder/abc/External/C:\\secret.txt")).toBeUndefined();
     expect(resolver.resolve("__reasonix_external_folder/abc/External/C:/../secret.txt")).toBeUndefined();
-    expect(resolver.resolve("__reasonix_external_folder/abc/External//server/share/secret.txt")).toBeUndefined();
-    expect(resolver.resolve("__reasonix_external_folder/abc/External/\\server\\share\\secret.txt")).toBeUndefined();
+    expect(resolver.resolve("__reasonix_external_folder/abc/External//server/share/secret.txt")).toMatchObject({
+      path: path.join("C:\\external", "Readable", "server", "share", "secret.txt"),
+      displayPath: "__reasonix_external_folder/abc/External/server/share/secret.txt"
+    });
+    expect(resolver.resolve("__reasonix_external_folder/abc/External///server/share/secret.txt")).toBeUndefined();
+    expect(resolver.resolve("__reasonix_external_folder/abc/External/\\server\\share\\secret.txt")).toMatchObject({
+      path: path.join("C:\\external", "Readable", "server", "share", "secret.txt"),
+      displayPath: "__reasonix_external_folder/abc/External/server/share/secret.txt"
+    });
     expect(resolver.resolve("__reasonix_external_folder/abc/External/..")).toBeUndefined();
     expect(resolver.resolve("__reasonix_external_folder/abc/External/../x")).toBeUndefined();
   });
