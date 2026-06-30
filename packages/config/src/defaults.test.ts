@@ -115,7 +115,6 @@ describe("default config", () => {
   it("provides tool loop defaults for desktop window runs", () => {
     expect(getDefaultConfig().toolLoopDefaults).toEqual({
       enabledToolNames: ["read_file", "grep", "write_file", "edit_file", "multi_edit", "mark_no_update"],
-      maxRounds: 12,
       systemInstruction: expect.stringContaining("文件工具"),
       windowInstructionLines: expect.arrayContaining([
         expect.stringContaining("NO_UPDATE"),

@@ -83,7 +83,6 @@ export type ToolLoopToolName =
 
 export interface ToolLoopDefaults {
   enabledToolNames: ToolLoopToolName[];
-  maxRounds: number;
   systemInstruction: string;
   windowInstructionLines: string[];
 }

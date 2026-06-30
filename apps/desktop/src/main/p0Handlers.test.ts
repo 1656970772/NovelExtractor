@@ -3455,12 +3455,12 @@ describe("P0 desktop IPC handlers", () => {
     }
   });
 
-  it("fails ordinary no-tool completions after max tool-loop rounds unless the model returns NO_UPDATE", async () => {
-    const maxRounds = getDefaultConfig().toolLoopDefaults.maxRounds;
+  it("continues ordinary no-tool completions beyond the former tool-loop round limit until NO_UPDATE", async () => {
+    const formerRoundLimit = 12;
     const mockServer = await startMockOpenAiServer({
       respond: ({ requestIndex }) => ({
         body: createChatCompletionResponse({
-          content: requestIndex === 0 ? "普通最终说明。" : "仍未精确返回 NO_UPDATE。"
+          content: requestIndex < formerRoundLimit ? "普通最终说明。" : "NO_UPDATE"
         })
       })
     });
@@ -3488,26 +3488,24 @@ describe("P0 desktop IPC handlers", () => {
         providerConfigId: "provider-1",
         modelId: "mock-model",
         singleRunChapterCount: 2,
-        extractionChapterCount: 3,
+        extractionChapterCount: 2,
         overlapChapterCount: 1,
         skipAlreadyExtracted: true
       });
 
-      const failedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
       const requestBodies = mockServer.requests.map((request) => JSON.stringify(request.body));
 
-      expect(mockServer.requests).toHaveLength(maxRounds);
+      expect(mockServer.requests).toHaveLength(formerRoundLimit + 1);
       expect(requestBodies[1]).toContain("上一轮没有调用任何工具，也没有成功写入报告");
       expect(requestBodies[1]).toContain("必须精确返回 NO_UPDATE");
-      expect(failedJob).toMatchObject({
+      expect(completedJob).toMatchObject({
         id: job.id,
-        status: "failed",
-        progressText: "进度：0/2",
-        allowedActions: ["delete"]
+        status: "completed",
+        progressText: "进度：1/1"
       });
-      expect(failedJob?.failureReason).toContain("NO_UPDATE");
-      expect(failedJob?.failureReason).toContain("协议");
+      expect(completedJob.failureReason).toBeUndefined();
       expect(reports).toEqual([]);
     } finally {
       await mockServer.close();
@@ -3764,8 +3762,7 @@ describe("P0 desktop IPC handlers", () => {
     }
   });
 
-  it("completes a window that reaches max tool-loop rounds after an initial successful write", async () => {
-    const maxRounds = getDefaultConfig().toolLoopDefaults.maxRounds;
+  it("completes a window as soon as every selected template has a tool outcome", async () => {
     const mockServer = await startMockOpenAiServer({
       respond: ({ requestIndex }) => ({
         body: createChatCompletionResponse({
@@ -3823,7 +3820,7 @@ describe("P0 desktop IPC handlers", () => {
         "utf8"
       );
 
-      expect(mockServer.requests).toHaveLength(maxRounds);
+      expect(mockServer.requests).toHaveLength(1);
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
@@ -3836,9 +3833,7 @@ describe("P0 desktop IPC handlers", () => {
         displayName: "丹药分析",
         reportKind: "template-output"
       });
-      expect(JSON.stringify(mockServer.requests[2].body)).toContain("已有报告不能用 write_file 覆盖");
       expect(reportMarkdown).toContain("第 1 轮成功写入正式报告。");
-      expect(reportMarkdown).not.toContain(`第 ${maxRounds} 轮成功写入正式报告。`);
     } finally {
       await mockServer.close();
     }
@@ -4088,16 +4083,24 @@ describe("P0 desktop IPC handlers", () => {
     }
   });
 
-  it("fails a window that reaches max tool-loop rounds without successful writes", async () => {
-    const maxRounds = getDefaultConfig().toolLoopDefaults.maxRounds;
+  it("continues read-only retries beyond the former tool-loop round limit until an explicit no-update outcome", async () => {
+    const formerRoundLimit = 12;
     const mockServer = await startMockOpenAiServer({
       respond: ({ requestIndex }) => ({
         body: createChatCompletionResponse({
-          toolCalls: [
-            createToolCall(`call-read-missing-${requestIndex}`, "read_file", {
-              path: "丹药分析.md"
-            })
-          ]
+          toolCalls:
+            requestIndex < formerRoundLimit
+              ? [
+                  createToolCall(`call-read-missing-${requestIndex}`, "read_file", {
+                    path: "丹药分析.md"
+                  })
+                ]
+              : [
+                  createToolCall("call-no-update-after-read-retries", "mark_no_update", {
+                    path: "丹药分析.md",
+                    reason: "连续查询后确认当前窗口没有可写入新增信息。"
+                  })
+                ]
         })
       })
     });
@@ -4130,17 +4133,16 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const failedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
 
-      expect(mockServer.requests).toHaveLength(maxRounds);
-      expect(failedJob).toMatchObject({
+      expect(mockServer.requests).toHaveLength(formerRoundLimit + 1);
+      expect(completedJob).toMatchObject({
         id: job.id,
-        status: "failed",
-        progressText: "进度：0/1",
-        allowedActions: ["delete"]
+        status: "completed",
+        progressText: "进度：1/1"
       });
-      expect(requireJobDto(failedJob).failureReason).toContain("tool loop 超过最大轮次");
+      expect(requireJobDto(completedJob).failureReason).toBeUndefined();
       expect(reports).toEqual([]);
     } finally {
       await mockServer.close();

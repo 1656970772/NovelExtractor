@@ -5,7 +5,6 @@ import type { NovelExtractorConfig } from "./schema";
 
 interface ToolLoopDefaultsTestShape {
   enabledToolNames: string[];
-  maxRounds: number;
   systemInstruction: string;
   windowInstructionLines: string[];
 }
@@ -21,7 +20,6 @@ function withToolLoopDefaults(
   const config = getDefaultConfig();
   (config as unknown as { toolLoopDefaults: ToolLoopDefaultsTestShape }).toolLoopDefaults = {
     enabledToolNames: ["read_file", "grep", "write_file", "edit_file", "multi_edit", "mark_no_update"],
-    maxRounds: 12,
     systemInstruction: "必须通过文件工具写入或返回 NO_UPDATE。",
     windowInstructionLines: ["写工具 path 必须使用模板 outputFileName。", "无更新时只返回 NO_UPDATE。"],
     ...overrides
@@ -316,7 +314,6 @@ describe("config invariants", () => {
       withToolLoopDefaults({ enabledToolNames: ["read_file", "ls"] }),
       /tool loop enabled tool name/i
     );
-    expectInvariantViolation(withToolLoopDefaults({ maxRounds: 0 }), /tool loop max rounds/i);
     expectInvariantViolation(
       withToolLoopDefaults({ systemInstruction: " " }),
       /tool loop system instruction/i

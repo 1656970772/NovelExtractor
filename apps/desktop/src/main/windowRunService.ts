@@ -1228,7 +1228,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         }))
       });
 
-      for (let roundIndex = 0; roundIndex < TOOL_LOOP_DEFAULTS.maxRounds; roundIndex += 1) {
+      for (let roundIndex = 0; ; roundIndex += 1) {
         currentRoundIndex = roundIndex + 1;
         await options.taskLogger?.append(["大模型请求", "Prompt"], {
           供应商: input.providerId,
@@ -1260,10 +1260,6 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
           }
 
           if (!outcomeTracker.isComplete()) {
-            if (roundIndex + 1 >= TOOL_LOOP_DEFAULTS.maxRounds) {
-              throw new Error(NO_TOOL_PROTOCOL_ERROR_MESSAGE);
-            }
-
             const correctionMessage =
               outcomeTracker.outcomes().length === 0 && completionText !== "NO_UPDATE"
                 ? NO_TOOL_PROTOCOL_CORRECTION_MESSAGE
@@ -1456,30 +1452,27 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
           });
         }
 
+        if (outcomeTracker.isComplete()) {
+          await options.taskLogger?.append(["上下文", "批次结果"], {
+            批次: `${input.batchIndex + 1}/${input.batchTotal}`,
+            处理结果: outcomeTracker.outcomes()
+          });
+          return {
+            content: "本批次处理完成",
+            outcomes: outcomeTracker.outcomes(),
+            usage
+          };
+        }
+
         if (
           !outcomeTracker.isComplete() &&
-          outcomeTracker.outcomes().length > 0 &&
-          roundIndex + 1 < TOOL_LOOP_DEFAULTS.maxRounds
+          outcomeTracker.outcomes().length > 0
         ) {
           const correctionMessage = createBatchOutcomeCorrectionMessage(outcomeTracker);
           await options.taskLogger?.append(["上下文", "重试"], correctionMessage);
           replaceBatchOutcomeCorrectionMessage(messages, correctionMessage);
         }
       }
-
-      if (outcomeTracker.isComplete()) {
-        await options.taskLogger?.append(["上下文", "批次结果"], {
-          批次: `${input.batchIndex + 1}/${input.batchTotal}`,
-          处理结果: outcomeTracker.outcomes()
-        });
-        return {
-          content: "tool loop 达到最大轮次，已保留本批次处理结果",
-          outcomes: outcomeTracker.outcomes(),
-          usage
-        };
-      }
-
-      throw new Error(`tool loop 超过最大轮次 ${TOOL_LOOP_DEFAULTS.maxRounds}`);
     } catch (error) {
       await options.taskLogger?.append(["错误", "窗口"], {
         ...(currentRoundIndex ? { 轮次: currentRoundIndex } : {}),

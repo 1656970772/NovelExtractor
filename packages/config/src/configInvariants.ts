@@ -188,10 +188,6 @@ function assertToolLoopDefaults(config: NovelExtractorConfig): void {
       "tool loop enabled tool name"
     );
   });
-  if (typeof defaults.maxRounds !== "number") {
-    throw new ConfigInvariantError("tool loop max rounds must be a positive integer.");
-  }
-  assertPositiveInteger(defaults.maxRounds, "tool loop max rounds");
   assertNonEmpty(defaults.systemInstruction, "tool loop system instruction");
   assertNonEmptyStringArray(defaults.windowInstructionLines, "tool loop window instruction lines");
 }
