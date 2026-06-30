@@ -1,7 +1,7 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { buildChange, type ReasonixDiffChange, type ReasonixDiffKind } from "../diff";
-import { decodeFileBytes, detectFileEncoding, encodeFileText, FileEncodingKind } from "../encoding";
+import { buildChange, type ReasonixDiffChange } from "../diff";
+import { goStyleFsError, readFileForPreview, readOptionalFileEncoded, writeFileEncoded } from "../encodedFile";
 import {
   GoRawJSONUnmarshaller,
   goJSONTokenKind,
@@ -40,7 +40,7 @@ export function createWriteFileTool(workspace: Workspace): ReasonixPreviewableTo
       const targetPath = resolveInWorkspace(workspace.dir, params.path);
       assertWritablePath(workspace.realWriteRoots, targetPath);
 
-      const existing = await readFileEncoded(targetPath);
+      const existing = await readOptionalFileEncoded(targetPath);
       if (existing.content !== undefined && existing.content === params.content) {
         return `${targetPath} already contains the exact content; no changes made`;
       }
@@ -54,32 +54,10 @@ export function createWriteFileTool(workspace: Workspace): ReasonixPreviewableTo
         }
       }
 
-      try {
-        await writeFile(targetPath, encodeFileText(params.content, existing.encoding), { mode: 0o644 });
-      } catch (error) {
-        throw new Error(`write ${targetPath}: ${goStyleFsError(error)}`);
-      }
+      await writeFileEncoded(targetPath, params.content, existing.encoding);
 
       return `wrote ${Buffer.byteLength(params.content, "utf8")} bytes to ${targetPath}`;
     }
-  };
-}
-
-async function readFileForPreview(targetPath: string): Promise<{ oldText: string; kind: ReasonixDiffKind }> {
-  let bytes: Buffer;
-  try {
-    bytes = await readFile(targetPath);
-  } catch (error) {
-    if (isNotExistError(error)) {
-      return { oldText: "", kind: "create" };
-    }
-    throw new Error(`read ${targetPath}: ${goStyleFsError(error)}`);
-  }
-
-  const { kind } = detectFileEncoding(bytes);
-  return {
-    oldText: decodeFileText(bytes, kind),
-    kind: "modify"
   };
 }
 
@@ -213,74 +191,4 @@ function writeFileArgField(key: string): "path" | "content" | undefined {
     return folded;
   }
   return undefined;
-}
-
-async function readFileEncoded(targetPath: string): Promise<{ content?: string; encoding: FileEncodingKind }> {
-  let bytes: Buffer;
-  try {
-    bytes = await readFile(targetPath);
-  } catch {
-    return { encoding: FileEncodingKind.UTF8 };
-  }
-
-  const { kind } = detectFileEncoding(bytes);
-  if (kind === FileEncodingKind.LossyUTF8) {
-    return { encoding: kind };
-  }
-
-  return {
-    content: decodeExistingText(bytes, kind),
-    encoding: kind
-  };
-}
-
-function decodeExistingText(bytes: Uint8Array, kind: Exclude<FileEncodingKind, FileEncodingKind.LossyUTF8>): string {
-  return decodeFileText(bytes, kind);
-}
-
-function decodeFileText(bytes: Uint8Array, kind: FileEncodingKind): string {
-  switch (kind) {
-    case FileEncodingKind.UTF8:
-      return decodeFileBytes(bytes, kind).toString("utf8");
-    case FileEncodingKind.UTF8BOM:
-    case FileEncodingKind.UTF16LE:
-    case FileEncodingKind.UTF16BE:
-    case FileEncodingKind.GB18030:
-    case FileEncodingKind.UTF16LENoBOM:
-    case FileEncodingKind.UTF16BENoBOM:
-      return decodeFileBytes(bytes, kind);
-    case FileEncodingKind.LossyUTF8:
-      return Buffer.from(bytes).toString("utf8");
-  }
-}
-
-function isNotExistError(error: unknown): boolean {
-  return error !== null && typeof error === "object" && (error as NodeJS.ErrnoException).code === "ENOENT";
-}
-
-function goStyleFsError(error: unknown): string {
-  if (error !== null && typeof error === "object") {
-    const err = error as NodeJS.ErrnoException;
-    if (typeof err.syscall === "string" && typeof err.path === "string" && typeof err.code === "string") {
-      return `${err.syscall} ${err.path}: ${goStyleErrnoMessage(err.code, err.message)}`;
-    }
-  }
-  return error instanceof Error ? error.message : String(error);
-}
-
-function goStyleErrnoMessage(code: string, fallback: string): string {
-  switch (code) {
-    case "ENOENT":
-      return "no such file or directory";
-    case "EACCES":
-      return "permission denied";
-    case "EPERM":
-      return "operation not permitted";
-    case "EISDIR":
-      return "is a directory";
-    case "ENOTDIR":
-      return "not a directory";
-    default:
-      return fallback;
-  }
 }

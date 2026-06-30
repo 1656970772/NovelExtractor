@@ -2,5 +2,8 @@ export * from "./pathResolver";
 export * from "./registry";
 export * from "./workspace";
 export * from "./encoding";
+export * from "./encodedFile";
+export * from "./textEdit";
 export * from "./tools/readFileTool";
 export * from "./tools/writeFileTool";
+export * from "./tools/editFileTool";
