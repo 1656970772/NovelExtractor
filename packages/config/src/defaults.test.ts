@@ -40,7 +40,7 @@ describe("default config", () => {
       onFallbackNoMatch: "no-update"
     });
     expect(config.extractionRuleDefaults.templateGroupFallbackStrategy).toBe("by-output-file");
-    expect(config.extractionRuleDefaults.maxFullTemplatesPerCall).toBe(1);
+    expect(config.extractionRuleDefaults.maxFullTemplatesPerCall).toBe(4);
     expect(config.extractionRuleDefaults.ruleSections.commonExtractionRules).toEqual(
       expect.arrayContaining([
         "仅根据当前窗口文本与模板快照抽取信息，禁止补写、推测或编造原文未出现的内容。"
@@ -114,13 +114,73 @@ describe("default config", () => {
 
   it("provides tool loop defaults for desktop window runs", () => {
     expect(getDefaultConfig().toolLoopDefaults).toEqual({
-      enabledToolNames: ["read_file", "grep", "write_file", "edit_file", "multi_edit"],
+      enabledToolNames: ["read_file", "grep", "write_file", "edit_file", "multi_edit", "mark_no_update"],
       maxRounds: 12,
       systemInstruction: expect.stringContaining("文件工具"),
       windowInstructionLines: expect.arrayContaining([
         expect.stringContaining("NO_UPDATE"),
         expect.stringContaining("outputFileName")
       ])
+    });
+    expect(getDefaultConfig().toolLoopDefaults.windowInstructionLines.join("\n")).toContain(
+      "mark_no_update"
+    );
+  });
+
+  it("provides configurable extraction batching defaults", () => {
+    const config = getDefaultConfig();
+
+    expect(config.extractionRuleDefaults.templateBatching).toEqual({
+      maxTemplatesPerCall: 4,
+      promptBudgetChars: expect.any(Number),
+      nonMergeableTemplateTags: []
+    });
+    expect(config.extractionRuleDefaults.templateBatching.maxTemplatesPerCall).toBe(
+      config.extractionRuleDefaults.maxFullTemplatesPerCall
+    );
+  });
+
+  it("provides template profile, outcome, coverage, path and quantity policy defaults", () => {
+    const config = getDefaultConfig();
+
+    expect(config.templatePromptProfileDefaults).toMatchObject({
+      compressionVersion: "template-profile-v1",
+      exampleSectionPatterns: expect.arrayContaining([expect.stringContaining("示例")]),
+      referenceSectionPatterns: expect.arrayContaining([expect.stringContaining("参考")]),
+      placeholderPatterns: expect.arrayContaining([expect.stringContaining("待补充")]),
+      alwaysKeepHeadingPatterns: expect.arrayContaining([expect.stringContaining("字段")]),
+      minProfileChars: expect.any(Number)
+    });
+    expect(config.batchOutcomeDefaults).toEqual({
+      outcomeKeyMode: "outputFileName",
+      noUpdateToolName: "mark_no_update",
+      missingOutcomeCorrectionTemplate: expect.stringContaining("{{missingOutputFileNames}}"),
+      maxCorrectionRounds: expect.any(Number)
+    });
+    expect(config.coverageIndexDefaults).toEqual({
+      relativePath: "metadata/coverage/coverage-index.json",
+      corruptionStrategy: "fail",
+      keyFields: expect.arrayContaining([
+        "bookId",
+        "templateId",
+        "outputFileName",
+        "templateHash",
+        "windowHash",
+        "rulesSemanticHash",
+        "submittedChapterRange"
+      ])
+    });
+    expect(config.coverageIndexDefaults.relativePath).not.toMatch(/^reports[\\/]/i);
+    expect(config.reportPathPolicyDefaults).toEqual({
+      mode: "flat",
+      reportsAlias: "reports",
+      allowSubdirectories: false
+    });
+    expect(config.ruleLayerDefaults.p0HardRules.length).toBeGreaterThan(0);
+    expect(config.quantityPolicyDefaults).toEqual({
+      allowZeroWhenNoEvidence: true,
+      defaultMinItemsWhenEvidenceExists: 1,
+      evidenceScope: "current-window"
     });
   });
 
@@ -136,18 +196,29 @@ describe("default config", () => {
 
     config.extractionRuleDefaults.routeFailurePolicy.maxRetries = 3;
     config.extractionRuleDefaults.ruleSections.commonExtractionRules.push("调用方可追加运行期规则。");
+    config.extractionRuleDefaults.templateBatching.nonMergeableTemplateTags.push("solo");
     config.toolLoopDefaults.enabledToolNames.push("read_file");
+    config.templatePromptProfileDefaults.exampleSectionPatterns.push("custom-example");
+    config.coverageIndexDefaults.keyFields.push("customKey");
 
     expect(getDefaultConfig().extractionRuleDefaults.routeFailurePolicy.maxRetries).toBe(1);
     expect(getDefaultConfig().extractionRuleDefaults.ruleSections.commonExtractionRules).not.toContain(
       "调用方可追加运行期规则。"
     );
+    expect(
+      getDefaultConfig().extractionRuleDefaults.templateBatching.nonMergeableTemplateTags
+    ).not.toContain("solo");
     expect(getDefaultConfig().toolLoopDefaults.enabledToolNames).toEqual([
       "read_file",
       "grep",
       "write_file",
       "edit_file",
-      "multi_edit"
+      "multi_edit",
+      "mark_no_update"
     ]);
+    expect(getDefaultConfig().templatePromptProfileDefaults.exampleSectionPatterns).not.toContain(
+      "custom-example"
+    );
+    expect(getDefaultConfig().coverageIndexDefaults.keyFields).not.toContain("customKey");
   });
 });

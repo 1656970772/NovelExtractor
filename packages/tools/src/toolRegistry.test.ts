@@ -3,14 +3,11 @@ import { getEnabledTools } from "./toolRegistry";
 
 describe("P0 tool registry", () => {
   it("exposes the configured file tools in deterministic order", () => {
-    expect(getEnabledTools(["ls", "read_file", "grep", "write_file", "edit_file", "multi_edit"]).map((tool) => tool.name)).toEqual([
-      "ls",
-      "read_file",
-      "grep",
-      "write_file",
-      "edit_file",
-      "multi_edit"
-    ]);
+    expect(
+      getEnabledTools(["ls", "read_file", "grep", "write_file", "edit_file", "multi_edit", "mark_no_update"]).map(
+        (tool) => tool.name
+      )
+    ).toEqual(["ls", "read_file", "grep", "write_file", "edit_file", "multi_edit", "mark_no_update"]);
   });
 
   it("filters enabled tools while preserving registry order", () => {
@@ -18,7 +15,7 @@ describe("P0 tool registry", () => {
   });
 
   it("exposes JSON Schema parameter definitions for tool calling", () => {
-    const tools = getEnabledTools(["read_file", "write_file"]);
+    const tools = getEnabledTools(["read_file", "write_file", "mark_no_update"]);
 
     expect(tools[0].parameters).toMatchObject({
       type: "object",
@@ -33,6 +30,22 @@ describe("P0 tool registry", () => {
       required: ["path", "content"],
       additionalProperties: false
     });
+    expect(tools[2].parameters).toMatchObject({
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        reason: { type: "string" }
+      },
+      required: ["path", "reason"],
+      additionalProperties: false
+    });
+  });
+
+  it("describes mark_no_update as recording an outcome without writing a report", () => {
+    const [markNoUpdateTool] = getEnabledTools(["mark_no_update"]);
+
+    expect(markNoUpdateTool.description).toContain("Record that a selected report has no new information");
+    expect(markNoUpdateTool.description).not.toContain("Create");
   });
 
   it("describes write_file as creating new reports instead of overwriting existing reports", () => {

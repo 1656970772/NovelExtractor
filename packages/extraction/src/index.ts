@@ -5,3 +5,4 @@ export * from "./windowPlanner";
 export * from "./templateRouter";
 export * from "./runtimeWindows";
 export * from "./extractionRules";
+export * from "./templatePromptProfile";

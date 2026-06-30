@@ -54,10 +54,17 @@ export interface ExtractionRuleSectionDefaults {
 
 export type TemplateGroupFallbackStrategy = "one-template-per-group" | "by-output-file";
 
+export interface TemplateBatchingDefaults {
+  maxTemplatesPerCall: number;
+  promptBudgetChars: number;
+  nonMergeableTemplateTags: string[];
+}
+
 export interface ExtractionRuleDefaults {
   routeFailurePolicy: RouteFailurePolicyConfig;
   ruleSections: ExtractionRuleSectionDefaults;
   templateGroupFallbackStrategy: TemplateGroupFallbackStrategy;
+  templateBatching: TemplateBatchingDefaults;
   maxFullTemplatesPerCall: number;
 }
 
@@ -66,13 +73,66 @@ export interface RawWindowReportDefaults {
   displayNamePrefix: string;
 }
 
-export type ToolLoopToolName = "read_file" | "grep" | "write_file" | "edit_file" | "multi_edit";
+export type ToolLoopToolName =
+  | "read_file"
+  | "grep"
+  | "write_file"
+  | "edit_file"
+  | "multi_edit"
+  | "mark_no_update";
 
 export interface ToolLoopDefaults {
   enabledToolNames: ToolLoopToolName[];
   maxRounds: number;
   systemInstruction: string;
   windowInstructionLines: string[];
+}
+
+export interface TemplatePromptProfileDefaults {
+  compressionVersion: string;
+  exampleSectionPatterns: string[];
+  referenceSectionPatterns: string[];
+  placeholderPatterns: string[];
+  alwaysKeepHeadingPatterns: string[];
+  minProfileChars: number;
+}
+
+export type BatchOutcomeKeyMode = "outputFileName" | "templateIdAndOutputFileName";
+
+export interface BatchOutcomeDefaults {
+  outcomeKeyMode: BatchOutcomeKeyMode;
+  noUpdateToolName: "mark_no_update";
+  missingOutcomeCorrectionTemplate: string;
+  maxCorrectionRounds: number;
+}
+
+export type CoverageIndexCorruptionStrategy = "fail" | "conservative-rerun";
+
+export interface CoverageIndexDefaults {
+  relativePath: string;
+  corruptionStrategy: CoverageIndexCorruptionStrategy;
+  keyFields: string[];
+}
+
+export type ReportPathPolicyMode = "flat";
+
+export interface ReportPathPolicyDefaults {
+  mode: ReportPathPolicyMode;
+  reportsAlias: string;
+  allowSubdirectories: boolean;
+}
+
+export interface RuleLayerDefaults {
+  p0HardRules: string[];
+  qualityRules: string[];
+  formatRules: string[];
+  postWriteGuards: string[];
+}
+
+export interface QuantityPolicyDefaults {
+  allowZeroWhenNoEvidence: boolean;
+  defaultMinItemsWhenEvidenceExists: number;
+  evidenceScope: "current-window";
 }
 
 export interface ReportFileNameInput {
@@ -181,6 +241,12 @@ export interface NovelExtractorConfig {
   extractionRuleDefaults: ExtractionRuleDefaults;
   rawWindowReportDefaults: RawWindowReportDefaults;
   toolLoopDefaults: ToolLoopDefaults;
+  templatePromptProfileDefaults: TemplatePromptProfileDefaults;
+  batchOutcomeDefaults: BatchOutcomeDefaults;
+  coverageIndexDefaults: CoverageIndexDefaults;
+  reportPathPolicyDefaults: ReportPathPolicyDefaults;
+  ruleLayerDefaults: RuleLayerDefaults;
+  quantityPolicyDefaults: QuantityPolicyDefaults;
   taskActions: TaskActionConfig;
   taskStatus: TaskStatusConfig;
   assetTypes: AssetTypeConfig[];

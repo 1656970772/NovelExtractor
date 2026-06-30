@@ -109,6 +109,19 @@ const BUILTIN_TOOLS: ToolSchema[] = [
       required: ["path", "edits"],
       additionalProperties: false
     }
+  },
+  {
+    name: "mark_no_update",
+    description: "Record that a selected report has no new information for the current window without writing a report file.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: stringSchema("Selected report file name under the reports root."),
+        reason: stringSchema("Short reason why the current window has no new information for this report.")
+      },
+      required: ["path", "reason"],
+      additionalProperties: false
+    }
   }
 ];
 

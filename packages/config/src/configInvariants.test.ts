@@ -20,7 +20,7 @@ function withToolLoopDefaults(
 ): NovelExtractorConfig {
   const config = getDefaultConfig();
   (config as unknown as { toolLoopDefaults: ToolLoopDefaultsTestShape }).toolLoopDefaults = {
-    enabledToolNames: ["read_file", "grep", "write_file", "edit_file", "multi_edit"],
+    enabledToolNames: ["read_file", "grep", "write_file", "edit_file", "multi_edit", "mark_no_update"],
     maxRounds: 12,
     systemInstruction: "必须通过文件工具写入或返回 NO_UPDATE。",
     windowInstructionLines: ["写工具 path 必须使用模板 outputFileName。", "无更新时只返回 NO_UPDATE。"],
@@ -157,6 +157,104 @@ describe("config invariants", () => {
       config.extractionRuleDefaults.maxFullTemplatesPerCall = invalidValue;
       expectInvariantViolation(config, /max full templates per call/i);
     }
+  });
+
+  it("requires template batching defaults to be configured and synced with the compatibility field", () => {
+    const missingDefaults = getDefaultConfig();
+    delete (missingDefaults.extractionRuleDefaults as unknown as Record<string, unknown>)
+      .templateBatching;
+    expectInvariantViolation(missingDefaults, /template batching defaults/i);
+
+    const invalidBatchSize = getDefaultConfig();
+    invalidBatchSize.extractionRuleDefaults.templateBatching.maxTemplatesPerCall = 0;
+    expectInvariantViolation(invalidBatchSize, /template batching max templates per call/i);
+
+    const invalidBudget = getDefaultConfig();
+    invalidBudget.extractionRuleDefaults.templateBatching.promptBudgetChars = 0;
+    expectInvariantViolation(invalidBudget, /template batching prompt budget chars/i);
+
+    const duplicateTags = getDefaultConfig();
+    duplicateTags.extractionRuleDefaults.templateBatching.nonMergeableTemplateTags = [
+      "high-risk",
+      "high-risk"
+    ];
+    expectInvariantViolation(duplicateTags, /non-mergeable template tags/i);
+
+    const divergedCompatibilityField = getDefaultConfig();
+    divergedCompatibilityField.extractionRuleDefaults.maxFullTemplatesPerCall = 2;
+    expectInvariantViolation(divergedCompatibilityField, /must match template batching/i);
+  });
+
+  it("requires template prompt profile defaults to be configured", () => {
+    const missingDefaults = getDefaultConfig();
+    delete (missingDefaults as unknown as Record<string, unknown>).templatePromptProfileDefaults;
+    expectInvariantViolation(missingDefaults, /template prompt profile defaults/i);
+
+    const missingPatterns = getDefaultConfig();
+    missingPatterns.templatePromptProfileDefaults.exampleSectionPatterns = [];
+    expectInvariantViolation(missingPatterns, /example section patterns/i);
+
+    const invalidMinChars = getDefaultConfig();
+    invalidMinChars.templatePromptProfileDefaults.minProfileChars = 0;
+    expectInvariantViolation(invalidMinChars, /template prompt profile min chars/i);
+  });
+
+  it("requires batch outcome defaults to be configured", () => {
+    const missingDefaults = getDefaultConfig();
+    delete (missingDefaults as unknown as Record<string, unknown>).batchOutcomeDefaults;
+    expectInvariantViolation(missingDefaults, /batch outcome defaults/i);
+
+    const invalidKeyMode = getDefaultConfig();
+    invalidKeyMode.batchOutcomeDefaults.outcomeKeyMode = "fileName" as never;
+    expectInvariantViolation(invalidKeyMode, /batch outcome key mode/i);
+
+    const invalidNoUpdateTool = getDefaultConfig();
+    invalidNoUpdateTool.batchOutcomeDefaults.noUpdateToolName = "noop" as never;
+    expectInvariantViolation(invalidNoUpdateTool, /no-update tool name/i);
+
+    const invalidCorrectionRounds = getDefaultConfig();
+    invalidCorrectionRounds.batchOutcomeDefaults.maxCorrectionRounds = 0;
+    expectInvariantViolation(invalidCorrectionRounds, /batch outcome max correction rounds/i);
+  });
+
+  it("requires coverage index defaults to be outside model-readable reports paths", () => {
+    const missingDefaults = getDefaultConfig();
+    delete (missingDefaults as unknown as Record<string, unknown>).coverageIndexDefaults;
+    expectInvariantViolation(missingDefaults, /coverage index defaults/i);
+
+    const reportsPath = getDefaultConfig();
+    reportsPath.coverageIndexDefaults.relativePath = "reports/.index/coverage.json";
+    expectInvariantViolation(reportsPath, /must not be under reports/i);
+
+    const absolutePath = getDefaultConfig();
+    absolutePath.coverageIndexDefaults.relativePath = "C:/tmp/coverage.json";
+    expectInvariantViolation(absolutePath, /coverage index relative path/i);
+
+    const invalidStrategy = getDefaultConfig();
+    invalidStrategy.coverageIndexDefaults.corruptionStrategy = "ignore" as never;
+    expectInvariantViolation(invalidStrategy, /coverage index corruption strategy/i);
+
+    const duplicateFields = getDefaultConfig();
+    duplicateFields.coverageIndexDefaults.keyFields = ["bookId", "bookId"];
+    expectInvariantViolation(duplicateFields, /coverage index key fields/i);
+  });
+
+  it("requires report path policy, rule layers and quantity policy defaults", () => {
+    const missingPathPolicy = getDefaultConfig();
+    delete (missingPathPolicy as unknown as Record<string, unknown>).reportPathPolicyDefaults;
+    expectInvariantViolation(missingPathPolicy, /report path policy defaults/i);
+
+    const nestedReports = getDefaultConfig();
+    nestedReports.reportPathPolicyDefaults.allowSubdirectories = true;
+    expectInvariantViolation(nestedReports, /flat report path policy/i);
+
+    const missingRuleLayers = getDefaultConfig();
+    missingRuleLayers.ruleLayerDefaults.p0HardRules = [];
+    expectInvariantViolation(missingRuleLayers, /p0 hard rules/i);
+
+    const invalidQuantityPolicy = getDefaultConfig();
+    invalidQuantityPolicy.quantityPolicyDefaults.defaultMinItemsWhenEvidenceExists = -1;
+    expectInvariantViolation(invalidQuantityPolicy, /quantity policy default minimum/i);
   });
 
   it("requires raw window report defaults and prefixes to be present", () => {

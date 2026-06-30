@@ -1,6 +1,10 @@
 import type {
+  BatchOutcomeKeyMode,
+  CoverageIndexCorruptionStrategy,
   MenuItemConfig,
   NovelExtractorConfig,
+  QuantityPolicyDefaults,
+  ReportPathPolicyMode,
   TaskAction,
   TemplateGroupFallbackStrategy,
   ToolLoopToolName
@@ -22,18 +26,37 @@ const ALLOWED_TEMPLATE_GROUP_FALLBACK_STRATEGIES = new Set<TemplateGroupFallback
   "one-template-per-group",
   "by-output-file"
 ]);
+const ALLOWED_BATCH_OUTCOME_KEY_MODES = new Set<BatchOutcomeKeyMode>([
+  "outputFileName",
+  "templateIdAndOutputFileName"
+]);
+const ALLOWED_COVERAGE_INDEX_CORRUPTION_STRATEGIES = new Set<CoverageIndexCorruptionStrategy>([
+  "fail",
+  "conservative-rerun"
+]);
+const ALLOWED_REPORT_PATH_POLICY_MODES = new Set<ReportPathPolicyMode>(["flat"]);
+const ALLOWED_QUANTITY_EVIDENCE_SCOPES = new Set<QuantityPolicyDefaults["evidenceScope"]>([
+  "current-window"
+]);
 const ALLOWED_TOOL_LOOP_TOOL_NAMES = new Set<ToolLoopToolName>([
   "read_file",
   "grep",
   "write_file",
   "edit_file",
-  "multi_edit"
+  "multi_edit",
+  "mark_no_update"
 ]);
 const WINDOWS_DRIVE_PATH_PREFIX = /^[A-Za-z]:/;
 
 function assertNonEmpty(value: unknown, label: string): asserts value is string {
   if (typeof value !== "string" || !value.trim()) {
     throw new ConfigInvariantError(`${label} must be non-empty.`);
+  }
+}
+
+function assertConfigObject(value: unknown, label: string): asserts value is Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new ConfigInvariantError(`${label} must be configured.`);
   }
 }
 
@@ -66,8 +89,14 @@ function assertAllowedValue(value: string, allowedValues: Set<string>, label: st
   }
 }
 
-function assertNonEmptyRules(rules: string[], label: string): void {
-  if (rules.length === 0) {
+function assertBoolean(value: unknown, label: string): asserts value is boolean {
+  if (typeof value !== "boolean") {
+    throw new ConfigInvariantError(`${label} must be a boolean.`);
+  }
+}
+
+function assertNonEmptyRules(rules: unknown, label: string): void {
+  if (!Array.isArray(rules) || rules.length === 0) {
     throw new ConfigInvariantError(`${label} must contain at least one rule.`);
   }
 
@@ -101,6 +130,23 @@ function assertSafeRawWindowReportFileNamePrefix(value: unknown): void {
   }
   if (value.trim().toLowerCase().endsWith(".md")) {
     throw new ConfigInvariantError(`${label} must not include a .md suffix.`);
+  }
+}
+
+function assertSafeRelativePath(value: unknown, label: string): asserts value is string {
+  assertNonEmpty(value, label);
+
+  const normalizedValue = value.replace(/\\/g, "/").trim();
+  if (normalizedValue.startsWith("/") || WINDOWS_DRIVE_PATH_PREFIX.test(normalizedValue)) {
+    throw new ConfigInvariantError(`${label} must be a relative path.`);
+  }
+  if (
+    normalizedValue === "." ||
+    normalizedValue === ".." ||
+    normalizedValue.includes("../") ||
+    normalizedValue.includes("/..")
+  ) {
+    throw new ConfigInvariantError(`${label} must not traverse directories.`);
   }
 }
 
@@ -148,6 +194,119 @@ function assertToolLoopDefaults(config: NovelExtractorConfig): void {
   assertPositiveInteger(defaults.maxRounds, "tool loop max rounds");
   assertNonEmpty(defaults.systemInstruction, "tool loop system instruction");
   assertNonEmptyStringArray(defaults.windowInstructionLines, "tool loop window instruction lines");
+}
+
+function assertTemplatePromptProfileDefaults(config: NovelExtractorConfig): void {
+  assertConfigObject(config.templatePromptProfileDefaults, "template prompt profile defaults");
+  const defaults = config.templatePromptProfileDefaults as Record<string, unknown>;
+
+  assertNonEmpty(defaults.compressionVersion, "template prompt profile compression version");
+  assertNonEmptyStringArray(
+    defaults.exampleSectionPatterns,
+    "template prompt profile example section patterns"
+  );
+  assertNonEmptyStringArray(
+    defaults.referenceSectionPatterns,
+    "template prompt profile reference section patterns"
+  );
+  assertNonEmptyStringArray(
+    defaults.placeholderPatterns,
+    "template prompt profile placeholder patterns"
+  );
+  assertNonEmptyStringArray(
+    defaults.alwaysKeepHeadingPatterns,
+    "template prompt profile always keep heading patterns"
+  );
+  if (typeof defaults.minProfileChars !== "number") {
+    throw new ConfigInvariantError("template prompt profile min chars must be a positive integer.");
+  }
+  assertPositiveInteger(defaults.minProfileChars, "template prompt profile min chars");
+}
+
+function assertBatchOutcomeDefaults(config: NovelExtractorConfig): void {
+  assertConfigObject(config.batchOutcomeDefaults, "batch outcome defaults");
+  const defaults = config.batchOutcomeDefaults as Record<string, unknown>;
+
+  assertAllowedValue(
+    String(defaults.outcomeKeyMode),
+    ALLOWED_BATCH_OUTCOME_KEY_MODES as Set<string>,
+    "batch outcome key mode"
+  );
+  if (defaults.noUpdateToolName !== "mark_no_update") {
+    throw new ConfigInvariantError("batch outcome no-update tool name must be mark_no_update.");
+  }
+  assertNonEmpty(
+    defaults.missingOutcomeCorrectionTemplate,
+    "batch outcome missing correction template"
+  );
+  if (typeof defaults.maxCorrectionRounds !== "number") {
+    throw new ConfigInvariantError("batch outcome max correction rounds must be a positive integer.");
+  }
+  assertPositiveInteger(defaults.maxCorrectionRounds, "batch outcome max correction rounds");
+}
+
+function assertCoverageIndexDefaults(config: NovelExtractorConfig): void {
+  assertConfigObject(config.coverageIndexDefaults, "coverage index defaults");
+  const defaults = config.coverageIndexDefaults as Record<string, unknown>;
+
+  assertSafeRelativePath(defaults.relativePath, "coverage index relative path");
+  if (defaults.relativePath.replace(/\\/g, "/").toLowerCase().startsWith("reports/")) {
+    throw new ConfigInvariantError("coverage index relative path must not be under reports.");
+  }
+  assertAllowedValue(
+    String(defaults.corruptionStrategy),
+    ALLOWED_COVERAGE_INDEX_CORRUPTION_STRATEGIES as Set<string>,
+    "coverage index corruption strategy"
+  );
+  assertNonEmptyStringArray(defaults.keyFields, "coverage index key fields");
+  assertUnique(defaults.keyFields, "coverage index key fields");
+}
+
+function assertReportPathPolicyDefaults(config: NovelExtractorConfig): void {
+  assertConfigObject(config.reportPathPolicyDefaults, "report path policy defaults");
+  const defaults = config.reportPathPolicyDefaults as Record<string, unknown>;
+
+  assertAllowedValue(
+    String(defaults.mode),
+    ALLOWED_REPORT_PATH_POLICY_MODES as Set<string>,
+    "report path policy mode"
+  );
+  assertNonEmpty(defaults.reportsAlias, "report path policy reports alias");
+  assertBoolean(defaults.allowSubdirectories, "report path policy allow subdirectories");
+  if (defaults.mode === "flat" && defaults.allowSubdirectories) {
+    throw new ConfigInvariantError("flat report path policy must not allow subdirectories.");
+  }
+}
+
+function assertRuleLayerDefaults(config: NovelExtractorConfig): void {
+  assertConfigObject(config.ruleLayerDefaults, "rule layer defaults");
+  const defaults = config.ruleLayerDefaults as Record<string, unknown>;
+
+  assertNonEmptyRules(defaults.p0HardRules, "p0 hard rules");
+  assertNonEmptyRules(defaults.qualityRules, "quality rules");
+  assertNonEmptyRules(defaults.formatRules, "format rules");
+  assertNonEmptyRules(defaults.postWriteGuards, "post write guards");
+}
+
+function assertQuantityPolicyDefaults(config: NovelExtractorConfig): void {
+  assertConfigObject(config.quantityPolicyDefaults, "quantity policy defaults");
+  const defaults = config.quantityPolicyDefaults as Record<string, unknown>;
+
+  assertBoolean(defaults.allowZeroWhenNoEvidence, "quantity policy allow zero when no evidence");
+  if (typeof defaults.defaultMinItemsWhenEvidenceExists !== "number") {
+    throw new ConfigInvariantError(
+      "quantity policy default minimum items when evidence exists must be a non-negative integer."
+    );
+  }
+  assertNonNegativeInteger(
+    defaults.defaultMinItemsWhenEvidenceExists,
+    "quantity policy default minimum items when evidence exists"
+  );
+  assertAllowedValue(
+    String(defaults.evidenceScope),
+    ALLOWED_QUANTITY_EVIDENCE_SCOPES as Set<string>,
+    "quantity policy evidence scope"
+  );
 }
 
 function assertMenuItemsHaveLabels(items: MenuItemConfig[], label: string): void {
@@ -241,12 +400,45 @@ export function assertValidConfigInvariants(config: NovelExtractorConfig): void 
     ALLOWED_TEMPLATE_GROUP_FALLBACK_STRATEGIES,
     "template group fallback strategy"
   );
+  const templateBatching = (config.extractionRuleDefaults as { templateBatching?: unknown })
+    .templateBatching;
+  assertConfigObject(templateBatching, "template batching defaults");
+  assertPositiveInteger(
+    templateBatching.maxTemplatesPerCall as number,
+    "template batching max templates per call"
+  );
+  assertPositiveInteger(
+    templateBatching.promptBudgetChars as number,
+    "template batching prompt budget chars"
+  );
+  if (!Array.isArray(templateBatching.nonMergeableTemplateTags)) {
+    throw new ConfigInvariantError("template batching non-mergeable template tags must be an array.");
+  }
+  const nonMergeableTemplateTags = templateBatching.nonMergeableTemplateTags;
+  nonMergeableTemplateTags.forEach((tag, index) => {
+    assertNonEmpty(tag, `template batching non-mergeable template tag ${index + 1}`);
+  });
+  assertUnique(nonMergeableTemplateTags, "template batching non-mergeable template tags");
   assertPositiveInteger(
     config.extractionRuleDefaults.maxFullTemplatesPerCall,
     "max full templates per call"
   );
+  if (
+    config.extractionRuleDefaults.maxFullTemplatesPerCall !==
+    templateBatching.maxTemplatesPerCall
+  ) {
+    throw new ConfigInvariantError(
+      "max full templates per call must match template batching max templates per call."
+    );
+  }
   assertRawWindowReportDefaults(config);
   assertToolLoopDefaults(config);
+  assertTemplatePromptProfileDefaults(config);
+  assertBatchOutcomeDefaults(config);
+  assertCoverageIndexDefaults(config);
+  assertReportPathPolicyDefaults(config);
+  assertRuleLayerDefaults(config);
+  assertQuantityPolicyDefaults(config);
 
   assertUnique(
     [...config.menu.mainNavigation, ...config.menu.userMenu].map((item) => item.id),

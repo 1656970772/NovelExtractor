@@ -309,6 +309,200 @@ describe("P0 desktop IPC handlers", () => {
     };
   }
 
+  it("rejects jobs whose selected templates share the same output file name", async () => {
+    const contract = createIpcContract();
+    const handlers = createHandlers();
+    const book = await contract.invoke(handlers, "books:uploadTxt", {
+      projectId: "project-a",
+      filePath: utf8FixturePath,
+      displayName: "凡人修仙传.txt"
+    });
+    const firstTemplate = await contract.invoke(handlers, "templates:save", {
+      projectId: "project-a",
+      scope: "project",
+      name: "甲模板",
+      fileName: "重复.md",
+      body: "记录甲模板内容。"
+    });
+    const secondTemplate = await contract.invoke(handlers, "templates:save", {
+      projectId: "project-a",
+      scope: "project",
+      name: "乙模板",
+      fileName: "重复.md",
+      body: "记录乙模板内容。"
+    });
+
+    await expect(
+      contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: [firstTemplate.id, secondTemplate.id],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 3,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      })
+    ).rejects.toThrow(/重复\.md.*甲模板.*乙模板/u);
+  });
+
+  it("uses compressed template prompt profiles while keeping full template bodies in rule snapshots", async () => {
+    const mockServer = await startMockOpenAiServer({
+      respond: () => ({
+        body: createChatCompletionResponse({
+          content: "NO_UPDATE"
+        })
+      })
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-profile-mock");
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: mockServer.baseUrl
+        })
+      )
+    });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: utf8FixturePath,
+        displayName: "凡人修仙传.txt"
+      });
+      const template = await contract.invoke(handlers, "templates:save", {
+        projectId: "project-a",
+        scope: "project",
+        name: "压缩验证模板",
+        fileName: "压缩验证.md",
+        body: [
+          "# 压缩验证模板",
+          "状态：模板",
+          "",
+          "## 字段",
+          "- 条目名称",
+          "- 当前窗口证据",
+          "- 首次出现章节",
+          "- 与人物、势力、地点的关系",
+          "- 已确认事实和原文未说明事项",
+          "",
+          "## 禁止事项",
+          "- 禁止使用后续章节或全书先验。",
+          "- 没有当前窗口证据时不得把模板示例或常识体系词写入正式报告。",
+          "- 公开元数据只能写窗口编号、章节范围和章节名。",
+          "",
+          "## 示例",
+          "示例事件链：韩立未来结丹成功。",
+          "",
+          "## 参考范围",
+          "参考范围：全书后续情节。",
+          "",
+          "待补充：{{条目名称}}"
+        ].join("\n")
+      });
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: [template.id],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 2,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      });
+
+      await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+
+      const firstRequest = mockServer.requests[0].body as { messages?: Array<{ content?: string; role?: string }> };
+      const userPrompt = firstRequest.messages?.find((message) => message.role === "user")?.content ?? "";
+      const profileSection =
+        userPrompt.split("## 选中模板 Prompt Profile\n")[1]?.split("\n\n## 当前窗口文本")[0] ?? "";
+      expect(profileSection).toContain("templateId:");
+      expect(profileSection).toContain("outputFileName: 压缩验证.md");
+      expect(profileSection).toContain("templateHash:");
+      expect(profileSection).toContain("条目名称");
+      expect(profileSection).toContain("禁止使用后续章节");
+      expect(profileSection).not.toContain("状态：模板");
+      expect(profileSection).not.toContain("示例事件链：韩立未来结丹成功");
+      expect(profileSection).not.toContain("参考范围：全书后续情节");
+      expect(profileSection).not.toContain("{{条目名称}}");
+
+      const rulesSnapshot = await fs.readFile(
+        path.join(tempRoot, "projects", "project-a", "runs", job.id, "rules", "提取规则.md"),
+        "utf8"
+      );
+      expect(rulesSnapshot).toContain("状态：模板");
+      expect(rulesSnapshot).toContain("示例事件链：韩立未来结丹成功");
+      expect(rulesSnapshot).toContain("参考范围：全书后续情节");
+      expect(rulesSnapshot).toContain("{{条目名称}}");
+    } finally {
+      await mockServer.close();
+    }
+  });
+
+  it("skips model calls for covered templates when skipAlreadyExtracted is enabled", async () => {
+    const mockServer = await startMockOpenAiServer({
+      expectedApiKey: "sk-coverage-mock",
+      respond: () => ({
+        body: createChatCompletionResponse({
+          content: "NO_UPDATE"
+        })
+      })
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-coverage-mock");
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: mockServer.baseUrl
+        })
+      )
+    });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: utf8FixturePath,
+        displayName: "凡人修仙传.txt"
+      });
+      const createJobInput = {
+        bookId: book.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 2,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      };
+
+      const firstJob = await contract.invoke(handlers, "jobs:create", createJobInput);
+      await contract.invoke(handlers, "jobs:start", { jobId: firstJob.id });
+      expect(mockServer.requests).toHaveLength(1);
+
+      const secondJob = await contract.invoke(handlers, "jobs:create", createJobInput);
+      const completedSecondJob = await contract.invoke(handlers, "jobs:start", { jobId: secondJob.id });
+      expect(completedSecondJob).toMatchObject({
+        status: "completed",
+        progressText: "进度：1/1"
+      });
+      expect(mockServer.requests).toHaveLength(1);
+
+      const secondJobLog = await contract.invoke(handlers, "jobs:readLog", {
+        jobId: secondJob.id
+      });
+      expect(secondJobLog.content).toContain("覆盖索引");
+      expect(secondJobLog.content).toContain("丹药分析.md");
+      expect(secondJobLog.content).toContain("待处理模板");
+    } finally {
+      await mockServer.close();
+    }
+  });
+
   it("uploads UTF-8 books, writes template reports through tool loop, and previews sanitized markdown reports", async () => {
     const mockServer = await startMockOpenAiServer({
       respond: ({ body }) => {
@@ -316,7 +510,12 @@ describe("P0 desktop IPC handlers", () => {
         const isFirstWindow = requestBodyText.includes("窗口序号：1/2");
         const hasToolReplay = requestBodyText.includes("\"role\":\"tool\"");
 
-        if (isFirstWindow && !hasToolReplay && requestBodyText.includes("丹药分析模板")) {
+        if (
+          isFirstWindow &&
+          !hasToolReplay &&
+          requestBodyText.includes("丹药分析模板") &&
+          requestBodyText.includes("材料分析模板")
+        ) {
           return {
             body: createChatCompletionResponse({
               toolCalls: [
@@ -335,16 +534,7 @@ describe("P0 desktop IPC handlers", () => {
                     "",
                     "模型不应写出密钥 sk-p0-mock"
                   ].join("\n")
-                })
-              ]
-            })
-          };
-        }
-
-        if (isFirstWindow && !hasToolReplay && requestBodyText.includes("材料分析模板")) {
-          return {
-            body: createChatCompletionResponse({
-              toolCalls: [
+                }),
                 createToolCall("call-material", "write_file", {
                   path: "材料分析.md",
                   content: "# 材料分析\n\n紫霜草、月华露来自第一窗口。"
@@ -396,7 +586,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
-        skipAlreadyExtracted: true
+        skipAlreadyExtracted: false
       });
 
       expect(job).toMatchObject({
@@ -455,7 +645,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(rulesSnapshot).toContain("## 写入规则");
       expect(rulesLatest).toBe(rulesSnapshot);
 
-      expect(mockServer.requests).toHaveLength(6);
+      expect(mockServer.requests).toHaveLength(3);
       for (const request of mockServer.requests) {
         expect(request).toMatchObject({
           authorization: "Bearer sk-p0-mock",
@@ -470,18 +660,13 @@ describe("P0 desktop IPC handlers", () => {
       }
       const firstRequestBody = mockServer.requests[0].body as Record<string, unknown>;
       const secondRequestBody = mockServer.requests[1].body as { messages?: Array<Record<string, unknown>> };
-      const firstMaterialRequestBody = mockServer.requests[2].body as Record<string, unknown>;
-      const firstMaterialReplayBody = mockServer.requests[3].body as { messages?: Array<Record<string, unknown>> };
       const secondMessages = secondRequestBody.messages ?? [];
-      const firstMaterialReplayMessages = firstMaterialReplayBody.messages ?? [];
       const assistantToolCallMessage = secondMessages.find(
         (message) => message.role === "assistant" && Array.isArray(message.tool_calls)
       );
       const secondToolMessages = secondMessages.filter((message) => message.role === "tool");
-      const firstMaterialToolMessages = firstMaterialReplayMessages.filter((message) => message.role === "tool");
 
       const firstRequestJson = JSON.stringify(firstRequestBody);
-      const firstMaterialRequestJson = JSON.stringify(firstMaterialRequestBody);
       const firstWindowTextPath = `runs/${jobWithTwoTemplates.id}/windows/window-0001.txt`;
 
       expect(firstRequestJson).toContain("write_file");
@@ -495,20 +680,15 @@ describe("P0 desktop IPC handlers", () => {
       );
       expect(firstRequestJson).toContain("窗口序号：1/2");
       expect(firstRequestJson).toContain("丹药分析模板");
-      expect(firstRequestJson).not.toContain("材料分析模板");
-      expect(firstMaterialRequestJson).toContain("窗口序号：1/2");
-      expect(firstMaterialRequestJson).toContain("材料分析模板");
-      expect(firstMaterialRequestJson).not.toContain("丹药分析模板");
-      expect(JSON.stringify(mockServer.requests[4].body)).toContain("窗口序号：2/2");
-      expect(JSON.stringify(mockServer.requests[5].body)).toContain("窗口序号：2/2");
+      expect(firstRequestJson).toContain("材料分析模板");
+      expect(JSON.stringify(mockServer.requests[2].body)).toContain("窗口序号：2/2");
       expect(assistantToolCallMessage).toMatchObject({
         role: "assistant"
       });
-      expect((assistantToolCallMessage?.tool_calls as unknown[] | undefined) ?? []).toHaveLength(1);
-      expect(secondToolMessages).toHaveLength(1);
-      expect(firstMaterialToolMessages).toHaveLength(1);
+      expect((assistantToolCallMessage?.tool_calls as unknown[] | undefined) ?? []).toHaveLength(2);
+      expect(secondToolMessages).toHaveLength(2);
       expect(JSON.stringify(secondToolMessages)).toContain("丹药分析.md");
-      expect(JSON.stringify(firstMaterialToolMessages)).toContain("材料分析.md");
+      expect(JSON.stringify(secondToolMessages)).toContain("材料分析.md");
       expect(JSON.stringify(mockServer.requests[0].body)).toContain("上下文章节范围：1-2");
       expect(JSON.stringify(mockServer.requests[0].body)).toContain("提交章节范围：1-2");
       expect(JSON.stringify(mockServer.requests[0].body)).toContain("当前运行日期：2026-06-27");
@@ -521,17 +701,17 @@ describe("P0 desktop IPC handlers", () => {
       expect(JSON.stringify(mockServer.requests[0].body)).toContain("第一章 初入坊市");
       expect(JSON.stringify(mockServer.requests[0].body)).toContain("第二章 丹房夜火");
       expect(JSON.stringify(mockServer.requests[0].body)).not.toContain("第三章 试炼归来");
-      expect(JSON.stringify(mockServer.requests[4].body)).toContain("上下文章节范围：2-3");
-      expect(JSON.stringify(mockServer.requests[4].body)).toContain("提交章节范围：3-3");
-      expect(JSON.stringify(mockServer.requests[4].body)).not.toContain("第一章 初入坊市");
-      expect(JSON.stringify(mockServer.requests[4].body)).toContain("第二章 丹房夜火");
-      expect(JSON.stringify(mockServer.requests[4].body)).toContain("第三章 试炼归来");
+      expect(JSON.stringify(mockServer.requests[2].body)).toContain("上下文章节范围：2-3");
+      expect(JSON.stringify(mockServer.requests[2].body)).toContain("提交章节范围：3-3");
+      expect(JSON.stringify(mockServer.requests[2].body)).not.toContain("第一章 初入坊市");
+      expect(JSON.stringify(mockServer.requests[2].body)).toContain("第二章 丹房夜火");
+      expect(JSON.stringify(mockServer.requests[2].body)).toContain("第三章 试炼归来");
 
       expect(completedJob).toMatchObject({
         id: jobWithTwoTemplates.id,
         status: "completed",
         progressText: "进度：2/2",
-        tokenText: "Token 222 / 缓存命中率 0.00%",
+        tokenText: "Token 111 / 缓存命中率 0.00%",
         allowedActions: ["delete"]
       });
 
@@ -3413,7 +3593,7 @@ describe("P0 desktop IPC handlers", () => {
     }
   });
 
-  it("recovers an unwritten template sub-batch when the model corrects ordinary no-tool text to NO_UPDATE", async () => {
+  it("recovers a missing template outcome when the model marks the unwritten output as no update", async () => {
     const firstTemplateName = "甲模板纠正测试";
     const secondTemplateName = "乙模板纠正测试";
     const firstReportName = "甲模板纠正测试.md";
@@ -3435,18 +3615,19 @@ describe("P0 desktop IPC handlers", () => {
 
         if (requestIndex === 1) {
           return {
-            body: createChatCompletionResponse({ content: "甲模板子批次写入完成。" })
-          };
-        }
-
-        if (requestIndex === 2) {
-          return {
-            body: createChatCompletionResponse({ content: "这段普通说明不能直接当成成功。" })
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-second-template-no-update", "mark_no_update", {
+                  path: secondReportName,
+                  reason: "乙模板在当前窗口没有新增信息。"
+                })
+              ]
+            })
           };
         }
 
         return {
-          body: createChatCompletionResponse({ content: "NO_UPDATE" })
+          body: createChatCompletionResponse({ content: "本批次两个模板均已处理。" })
         };
       }
     });
@@ -3497,11 +3678,12 @@ describe("P0 desktop IPC handlers", () => {
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
       const requestBodies = mockServer.requests.map((request) => JSON.stringify(request.body));
 
-      expect(mockServer.requests).toHaveLength(4);
-      expect(requestBodies[2]).toContain(secondTemplateName);
-      expect(requestBodies[2]).not.toContain(firstTemplateName);
-      expect(requestBodies[3]).toContain("上一轮没有调用任何工具，也没有成功写入报告");
-      expect(requestBodies[3]).toContain("必须精确返回 NO_UPDATE");
+      expect(mockServer.requests).toHaveLength(3);
+      expect(requestBodies[0]).toContain(firstTemplateName);
+      expect(requestBodies[0]).toContain(secondTemplateName);
+      expect(requestBodies[1]).toContain("尚未为本批次所有选中模板提供处理结果");
+      expect(requestBodies[1]).toContain(secondReportName);
+      expect(requestBodies[2]).toContain("mark_no_update");
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
@@ -3509,6 +3691,74 @@ describe("P0 desktop IPC handlers", () => {
       });
       expect(requireJobDto(completedJob).failureReason).toBeUndefined();
       expect(reports.map((report) => report.fileName)).toEqual([firstReportName]);
+    } finally {
+      await mockServer.close();
+    }
+  });
+
+  it("completes a selected template batch when the model marks the output as no update", async () => {
+    const mockServer = await startMockOpenAiServer({
+      respond: ({ requestIndex }) => {
+        if (requestIndex === 0) {
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-mark-no-update", "mark_no_update", {
+                  path: "丹药分析.md",
+                  reason: "当前窗口没有丹药相关新增信息。"
+                })
+              ]
+            })
+          };
+        }
+
+        return {
+          body: createChatCompletionResponse({ content: "丹药分析无新增，已记录无更新。" })
+        };
+      }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: mockServer.baseUrl
+        })
+      )
+    });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: utf8FixturePath,
+        displayName: "凡人修仙传.txt"
+      });
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 2,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      });
+
+      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
+      const firstRequest = JSON.stringify(mockServer.requests[0].body);
+
+      expect(firstRequest).toContain("mark_no_update");
+      expect(mockServer.requests).toHaveLength(2);
+      expect(completedJob).toMatchObject({
+        id: job.id,
+        status: "completed",
+        progressText: "进度：1/1"
+      });
+      expect(requireJobDto(completedJob).failureReason).toBeUndefined();
+      expect(reports).toEqual([]);
     } finally {
       await mockServer.close();
     }
@@ -3594,34 +3844,24 @@ describe("P0 desktop IPC handlers", () => {
     }
   });
 
-  it("runs template sub-batches independently when one batch reaches max tool-loop rounds after a write", async () => {
-    const maxRounds = getDefaultConfig().toolLoopDefaults.maxRounds;
+  it("completes a combined template batch with one written report and one no-update outcome", async () => {
     const firstTemplateName = "甲模板分批测试";
     const secondTemplateName = "乙模板分批测试";
     const firstReportName = "甲模板分批测试.md";
     const secondReportName = "乙模板分批测试.md";
     const mockServer = await startMockOpenAiServer({
       respond: ({ requestIndex }) => {
-        if (requestIndex < maxRounds) {
+        if (requestIndex === 0) {
           return {
             body: createChatCompletionResponse({
               toolCalls: [
-                createToolCall(`call-first-template-${requestIndex}`, "write_file", {
+                createToolCall("call-first-template-write", "write_file", {
                   path: firstReportName,
-                  content: `# 甲模板分批测试\n\n第 ${requestIndex + 1} 轮写入甲模板。`
-                })
-              ]
-            })
-          };
-        }
-
-        if (requestIndex === maxRounds) {
-          return {
-            body: createChatCompletionResponse({
-              toolCalls: [
-                createToolCall("call-second-template-write", "write_file", {
+                  content: "# 甲模板分批测试\n\n合并批次写入甲模板。"
+                }),
+                createToolCall("call-second-template-no-update", "mark_no_update", {
                   path: secondReportName,
-                  content: "# 乙模板分批测试\n\n甲模板触顶后仍应写入乙模板。"
+                  reason: "乙模板当前窗口无新增信息。"
                 })
               ]
             })
@@ -3629,7 +3869,7 @@ describe("P0 desktop IPC handlers", () => {
         }
 
         return {
-          body: createChatCompletionResponse({ content: "乙模板子批次写入完成。" })
+          body: createChatCompletionResponse({ content: "合并批次处理完成。" })
         };
       }
     });
@@ -3680,25 +3920,20 @@ describe("P0 desktop IPC handlers", () => {
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
       const requestBodies = mockServer.requests.map((request) => JSON.stringify(request.body));
 
-      expect(mockServer.requests).toHaveLength(maxRounds + 2);
+      expect(mockServer.requests).toHaveLength(2);
       expect(requestBodies[0]).toContain(firstTemplateName);
-      expect(requestBodies[0]).not.toContain(secondTemplateName);
-      expect(requestBodies[maxRounds]).toContain(secondTemplateName);
-      expect(requestBodies[maxRounds]).not.toContain(firstTemplateName);
+      expect(requestBodies[0]).toContain(secondTemplateName);
+      expect(requestBodies[1]).toContain("mark_no_update");
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
         progressText: "进度：1/1"
       });
-      expect(reports.map((report) => report.fileName).sort()).toEqual([firstReportName, secondReportName].sort());
+      expect(reports.map((report) => report.fileName)).toEqual([firstReportName]);
       expect(await fs.readFile(
         path.join(tempRoot, "projects", "project-a", "assets", "books", book.bookId, "reports", firstReportName),
         "utf8"
-      )).toContain("第 1 轮写入甲模板。");
-      expect(await fs.readFile(
-        path.join(tempRoot, "projects", "project-a", "assets", "books", book.bookId, "reports", secondReportName),
-        "utf8"
-      )).toContain("甲模板触顶后仍应写入乙模板。");
+      )).toContain("合并批次写入甲模板。");
     } finally {
       await mockServer.close();
     }
@@ -5335,7 +5570,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
-        skipAlreadyExtracted: true
+        skipAlreadyExtracted: false
       });
 
       const firstCompletedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });

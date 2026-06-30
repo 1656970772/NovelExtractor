@@ -21,6 +21,12 @@ export interface ToolWriteSummary {
   preview: string;
 }
 
+export interface ToolNoUpdateSummary {
+  path: string;
+  operation: "mark_no_update";
+  reason: string;
+}
+
 export interface LsResult {
   path: string;
   entries: Array<{ name: string; type: "file" | "directory" }>;
@@ -47,7 +53,7 @@ export class ToolExecutionError extends Error {
   }
 }
 
-type ToolResult = LsResult | ReadFileResult | GrepResult | ToolWriteSummary;
+type ToolResult = LsResult | ReadFileResult | GrepResult | ToolWriteSummary | ToolNoUpdateSummary;
 
 const DEFAULT_MAX_READ_BYTES = 1024 * 1024;
 const DEFAULT_MAX_GREP_FILES = 5000;
@@ -76,6 +82,8 @@ export async function executeBuiltinFileTool(name: string, rawArguments: unknown
         return executeEditFile(rawArguments, context);
       case "multi_edit":
         return executeMultiEdit(rawArguments, context);
+      case "mark_no_update":
+        return executeMarkNoUpdate(rawArguments, context);
     }
   } catch (error) {
     throw toToolError(error, "IO_ERROR");
@@ -194,6 +202,18 @@ function executeMultiEdit(rawArguments: unknown, context: ToolExecutionContext):
   });
 
   return toSummary(result.relativePath, "multi_edit", result.changedBytes, result.preview);
+}
+
+function executeMarkNoUpdate(rawArguments: unknown, context: ToolExecutionContext): ToolNoUpdateSummary {
+  const args = parseArgs(rawArguments, ["path", "reason"]);
+  assertReportsRootInsideProject(context);
+  const writer = createReportWriter({ reportsRoot: context.reportsRoot, previewLimit: context.maxPreviewChars });
+  writer.resolveReportPath(args.path);
+  return {
+    path: args.path,
+    operation: "mark_no_update",
+    reason: args.reason
+  };
 }
 
 function toSummary(pathName: string, operation: ToolWriteSummary["operation"], changedBytes: number, preview: string): ToolWriteSummary {
