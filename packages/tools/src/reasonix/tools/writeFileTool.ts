@@ -166,11 +166,6 @@ class RawWriteFileArgsUnmarshaller {
       return;
     }
     if (value.kind === "null") {
-      if (field === "path") {
-        this.path = "";
-      } else {
-        this.content = "";
-      }
       return;
     }
     if (value.kind === "string") {

@@ -173,6 +173,35 @@ describe("Reasonix write_file tool parity", () => {
     await expect(readFile(path.join(dir, "null-content.txt"))).resolves.toHaveLength(0);
   });
 
+  it("matches Go raw JSON null no-op semantics for duplicate string fields", async () => {
+    const { createWriteFileTool } = await import("./writeFileTool");
+    const { Workspace } = await import("../workspace");
+    const dir = await tempDir();
+    const tool = createWriteFileTool(new Workspace({ dir }));
+
+    await expect(tool.execute('{"path":"path-kept.txt","path":null,"content":"ok"}')).resolves.toBe(
+      `wrote 2 bytes to ${path.join(dir, "path-kept.txt")}`
+    );
+    await expect(readFile(path.join(dir, "path-kept.txt"), "utf8")).resolves.toBe("ok");
+
+    await expect(tool.execute('{"path":"content-kept.txt","content":"ALPHA","content":null}')).resolves.toBe(
+      `wrote 5 bytes to ${path.join(dir, "content-kept.txt")}`
+    );
+    await expect(readFile(path.join(dir, "content-kept.txt"), "utf8")).resolves.toBe("ALPHA");
+
+    await expect(tool.execute('{"path":"empty-content.txt","content":null}')).resolves.toBe(
+      `wrote 0 bytes to ${path.join(dir, "empty-content.txt")}`
+    );
+    await expect(readFile(path.join(dir, "empty-content.txt"))).resolves.toHaveLength(0);
+    await expect(tool.execute('{"path":null,"content":"x"}')).rejects.toThrow("path is required");
+    await expect(tool.execute('{"path":1,"path":null,"content":"x"}')).rejects.toThrow(
+      "invalid args: json: cannot unmarshal number into Go struct field .path of type string"
+    );
+    await expect(tool.execute('{"path":"bad-content.txt","content":1,"content":null}')).rejects.toThrow(
+      "invalid args: json: cannot unmarshal number into Go struct field .content of type string"
+    );
+  });
+
   it("formats raw JSON syntax, top-level type, field type, case, and duplicate-field behavior like Go encoding/json", async () => {
     const { createWriteFileTool } = await import("./writeFileTool");
     const { Workspace } = await import("../workspace");

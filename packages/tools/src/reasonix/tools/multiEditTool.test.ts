@@ -147,6 +147,10 @@ describe("Reasonix multi_edit tool parity", () => {
     await expect(readFile(target, "utf8")).resolves.toBe("alpha alpha");
 
     await writeFile(target, "alpha beta", "utf8");
+    await expect(tool.execute('{"path":"a.txt","edits":null}')).rejects.toThrow("edits must not be empty");
+    await expect(readFile(target, "utf8")).resolves.toBe("alpha beta");
+
+    await writeFile(target, "alpha beta", "utf8");
     await expect(tool.execute('{"path":"a.txt","edits":[{"old_string":"alpha","new_string":"ALPHA"}],"edits":null}')).rejects.toThrow(
       "edits must not be empty"
     );

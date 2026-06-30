@@ -80,6 +80,36 @@ describe("Reasonix read_file tool parity", () => {
     await expect(tool.execute({ path: "short.txt", offset: null, limit: null })).resolves.toBe("1→one\n2→two\n");
   });
 
+  it("matches Go raw JSON null no-op semantics for duplicate struct fields", async () => {
+    const { createReadFileTool } = await import("./readFileTool");
+    const { Workspace } = await import("../workspace");
+    const dir = await tempDir();
+    await writeFile(path.join(dir, "short.txt"), "one\ntwo\nthree\n", "utf8");
+
+    const tool = createReadFileTool(new Workspace({ dir }));
+    await expect(tool.execute('{"path":"short.txt","path":null}')).resolves.toBe("1→one\n2→two\n3→three\n");
+    await expect(tool.execute('{"path":null,"path":"short.txt","limit":1}')).resolves.toBe(
+      "1→one\n\n[more lines below; pass offset=1 to continue]\n"
+    );
+    await expect(tool.execute('{"path":"short.txt","offset":1,"offset":null,"limit":1}')).resolves.toBe(
+      "2→two\n\n[more lines below; pass offset=2 to continue]\n"
+    );
+    await expect(tool.execute('{"path":"short.txt","offset":0,"limit":1,"limit":null}')).resolves.toBe(
+      "1→one\n\n[more lines below; pass offset=1 to continue]\n"
+    );
+    await expect(tool.execute('{"path":"short.txt","offset":null,"limit":null}')).resolves.toBe("1→one\n2→two\n3→three\n");
+
+    await expect(tool.execute('{"path":1,"path":null}')).rejects.toThrow(
+      "invalid args: json: cannot unmarshal number into Go struct field .path of type string"
+    );
+    await expect(tool.execute('{"path":"short.txt","offset":"bad","offset":null}')).rejects.toThrow(
+      "invalid args: json: cannot unmarshal string into Go struct field .offset of type int"
+    );
+    await expect(tool.execute('{"path":"short.txt","limit":"bad","limit":null}')).rejects.toThrow(
+      "invalid args: json: cannot unmarshal string into Go struct field .limit of type int"
+    );
+  });
+
   it("preserves raw JSON int64 literals for offset and limit like Go int unmarshalling", async () => {
     const { createReadFileTool } = await import("./readFileTool");
     const { Workspace } = await import("../workspace");

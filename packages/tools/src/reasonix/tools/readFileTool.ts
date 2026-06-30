@@ -287,7 +287,7 @@ class RawReadFileArgsUnmarshaller {
     const field = readFileArgField(key);
     if (field === "path") {
       if (value.kind === "null") {
-        this.path = "";
+        return;
       } else if (value.kind === "string") {
         this.path = value.stringValue ?? "";
       } else {
@@ -309,7 +309,7 @@ class RawReadFileArgsUnmarshaller {
 
   private unmarshalRawIntField(value: ParsedRawJSONValue, field: "offset" | "limit"): bigint | string {
     if (value.kind === "null") {
-      return 0n;
+      return field === "offset" ? this.offset : this.limit;
     }
     if (value.kind !== "number") {
       return goJSONTypeError(parsedJSONValueForError(value), field, "int", value.raw);

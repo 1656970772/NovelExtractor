@@ -89,6 +89,49 @@ describe("Reasonix edit_file tool parity", () => {
     );
   });
 
+  it("matches Go raw JSON null no-op semantics for duplicate string fields", async () => {
+    const { createEditFileTool, Workspace } = await import("../index");
+    const dir = await tempDir();
+    const target = path.join(dir, "a.txt");
+    const tool = createEditFileTool(new Workspace({ dir }));
+
+    await writeFile(target, "alpha beta", "utf8");
+    await expect(tool.execute('{"path":"a.txt","path":null,"old_string":"alpha","new_string":"ALPHA"}')).resolves.toBe(
+      `edited ${target}`
+    );
+    await expect(readFile(target, "utf8")).resolves.toBe("ALPHA beta");
+
+    await writeFile(target, "alpha beta", "utf8");
+    await expect(tool.execute('{"path":"a.txt","old_string":"alpha","old_string":null,"new_string":"ALPHA"}')).resolves.toBe(
+      `edited ${target}`
+    );
+    await expect(readFile(target, "utf8")).resolves.toBe("ALPHA beta");
+
+    await writeFile(target, "alpha beta", "utf8");
+    await expect(tool.execute('{"path":"a.txt","old_string":"alpha","new_string":"ALPHA","new_string":null}')).resolves.toBe(
+      `edited ${target}`
+    );
+    await expect(readFile(target, "utf8")).resolves.toBe("ALPHA beta");
+
+    await writeFile(target, "alpha beta", "utf8");
+    await expect(tool.execute('{"path":"a.txt","old_string":"alpha","new_string":null}')).resolves.toBe(`edited ${target}`);
+    await expect(readFile(target, "utf8")).resolves.toBe(" beta");
+
+    await writeFile(target, "alpha beta", "utf8");
+    await expect(tool.execute('{"path":null,"old_string":"alpha","new_string":"ALPHA"}')).rejects.toThrow("path is required");
+    await expect(tool.execute('{"path":"a.txt","old_string":null,"new_string":"ALPHA"}')).rejects.toThrow("old_string is required");
+    await expect(tool.execute('{"path":1,"path":null,"old_string":"alpha","new_string":"ALPHA"}')).rejects.toThrow(
+      "invalid args: json: cannot unmarshal number into Go struct field .path of type string"
+    );
+    await expect(tool.execute('{"path":"a.txt","old_string":1,"old_string":null,"new_string":"ALPHA"}')).rejects.toThrow(
+      "invalid args: json: cannot unmarshal number into Go struct field .old_string of type string"
+    );
+    await expect(tool.execute('{"path":"a.txt","old_string":"alpha","new_string":1,"new_string":null}')).rejects.toThrow(
+      "invalid args: json: cannot unmarshal number into Go struct field .new_string of type string"
+    );
+    await expect(readFile(target, "utf8")).resolves.toBe("alpha beta");
+  });
+
   it("binds workspace-relative paths, confines execute writes, and lets preview resolve without write-root confinement", async () => {
     const { createEditFileTool, Workspace } = await import("../index");
     const dir = await tempDir();

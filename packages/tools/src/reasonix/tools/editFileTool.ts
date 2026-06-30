@@ -211,13 +211,6 @@ class RawEditFileArgsUnmarshaller {
       return;
     }
     if (value.kind === "null") {
-      if (field === "path") {
-        this.path = "";
-      } else if (field === "old_string") {
-        this.oldString = "";
-      } else {
-        this.newString = "";
-      }
       return;
     }
     if (value.kind === "string") {
