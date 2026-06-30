@@ -175,7 +175,10 @@ async function assertTemplateModalLayout(page: Page): Promise<void> {
   const modelSelect = page.getByLabel("模型");
   const modelTopBeforeOpen = await modelSelect.evaluate((node) => node.getBoundingClientRect().top);
 
-  await page.getByRole("button", { name: /选择模板/ }).click();
+  await page
+    .getByRole("region", { name: "提取参数" })
+    .getByRole("button", { name: /选择模板/ })
+    .click();
   const dialog = page.getByRole("dialog", { name: "模板选择与编辑" });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole("complementary", { name: "模板列表" })).toBeVisible();
@@ -218,13 +221,14 @@ test("P0 desktop extraction loop", async () => {
     await createProject(page);
     await configureMockProvider(page, mockServer.baseUrl);
     await runExtractionLoop(page);
-    expect(mockServer.requests).toHaveLength(1);
+    expect(mockServer.requests).toHaveLength(2);
     expect(mockServer.requests[0]).toMatchObject({
       authorization: "Bearer sk-e2e-mock",
       method: "POST",
       url: "/v1/chat/completions"
     });
     expect(mockServer.requests[0].body).toMatchObject({ model: "mock-model" });
+    expect(JSON.stringify(mockServer.requests[0].body)).toContain("write_file");
     await previewReport(page);
     await openFunction(page, "关系图谱");
     await expect(page.getByRole("heading", { name: "关系图谱" })).toBeVisible();
@@ -283,7 +287,7 @@ test("P0 visual screenshots", async () => {
       }
     }
 
-    expect(mockServer.requests).toHaveLength(viewports.length);
+    expect(mockServer.requests).toHaveLength(viewports.length * 2);
   } finally {
     await mockServer.close();
   }

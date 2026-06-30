@@ -31,6 +31,17 @@ export const MOCK_OPENAI_COMPATIBLE_RESPONSE_CONTENT = [
   "[危险链接](javascript:alert(1))"
 ].join("\n");
 
+function createToolCall(id: string, name: string, args: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id,
+    type: "function",
+    function: {
+      name,
+      arguments: JSON.stringify(args)
+    }
+  };
+}
+
 function readRequestBody(request: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -91,10 +102,26 @@ export async function startMockOpenAiCompatibleServer(
       return;
     }
 
+    const requestIndex = requests.length - 1;
+    const message =
+      requestIndex % 2 === 0
+        ? {
+            content: "",
+            tool_calls: [
+              createToolCall("call-e2e-write-pill-report", "write_file", {
+                path: "丹药分析.md",
+                content: `# 丹药分析\n\n${responseContent}\n`
+              })
+            ]
+          }
+        : {
+            content: "窗口完成。"
+          };
+
     response.writeHead(200);
     response.end(
       JSON.stringify({
-        choices: [{ message: { content: responseContent } }],
+        choices: [{ message }],
         usage: {
           prompt_tokens: 39,
           completion_tokens: totalTokens - 39,

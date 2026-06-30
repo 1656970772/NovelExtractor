@@ -487,6 +487,16 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
     setExtractionError(undefined);
 
     let updatedJob: JobDto | void = undefined;
+    const previousJob = jobs.find((job) => job.id === jobId);
+    const nextStatus = getNextTaskStatusForAction(action);
+
+    if (nextStatus) {
+      setJobs((currentJobs) =>
+        currentJobs.map((job) =>
+          job.id === jobId ? { ...job, status: nextStatus, failureReason: undefined } : job
+        )
+      );
+    }
 
     try {
       switch (action) {
@@ -516,7 +526,6 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
         return;
       }
 
-      const nextStatus = getNextTaskStatusForAction(action);
       if (!nextStatus) {
         setJobs((currentJobs) => currentJobs.filter((job) => job.id !== jobId));
         return;
@@ -528,6 +537,11 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
         )
       );
     } catch (error) {
+      if (previousJob && nextStatus) {
+        setJobs((currentJobs) =>
+          currentJobs.map((job) => (job.id === jobId ? previousJob : job))
+        );
+      }
       setExtractionError(getErrorMessage(error, "任务操作失败"));
     }
   }

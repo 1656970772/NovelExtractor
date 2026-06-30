@@ -322,6 +322,64 @@ describe("desktop workbench shell", () => {
     expect(await screen.findByText(/任务 job-1/)).toBeInTheDocument();
   });
 
+  it("shows running immediately after starting a long-running job", async () => {
+    const user = userEvent.setup();
+    const api = installDesktopApiMock();
+    api.listProviders.mockResolvedValue([
+      {
+        id: "provider-1",
+        presetId: "deepseek",
+        displayName: "DeepSeek",
+        kind: "openai-compatible",
+        baseUrl: "https://api.deepseek.com",
+        models: [{ id: "model-a", displayName: "模型 A", enabled: true, isDefault: true }],
+        hasApiKey: true,
+        enabled: true
+      }
+    ]);
+    api.uploadTxt.mockResolvedValue({
+      bookId: "book-1",
+      displayName: "凡人修仙传",
+      sourceAssetId: "asset-1",
+      sourceTextPath: "assets/books/book-1/source/original.txt",
+      fileName: "凡人修仙传.txt",
+      byteSize: 2048,
+      encoding: "utf-8",
+      chapterCount: 3
+    });
+    api.createJob.mockResolvedValue({
+      id: "job-1",
+      bookId: "book-1",
+      status: "created",
+      progressText: "窗口 0/3",
+      tokenText: "Token 0 / 费用 0",
+      allowedActions: ["start", "delete"],
+      createdAt: "2026-06-27T00:00:00.000Z",
+      updatedAt: "2026-06-27T00:00:00.000Z"
+    });
+    api.startJob.mockReturnValue(new Promise(() => undefined));
+
+    render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
+
+    await user.click(screen.getByRole("button", { name: "功能" }));
+    await user.click(
+      within(screen.getByRole("navigation", { name: "功能入口" })).getByRole("button", {
+        name: "小说提取"
+      })
+    );
+    expect(await screen.findByText("DeepSeek / 模型 A")).toBeInTheDocument();
+
+    const file = new File(["第一章 初入仙途"], "凡人修仙传.txt", { type: "text/plain" });
+    await user.upload(screen.getByLabelText("选择 .txt 文件"), file);
+    await user.click(screen.getByRole("button", { name: "创建任务" }));
+    expect(await screen.findByText("待开始")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "开始" }));
+
+    expect(api.startJob).toHaveBeenCalledWith({ jobId: "job-1" });
+    expect(await screen.findByText("运行中")).toBeInTheDocument();
+  });
+
   it("loads project template selection, saves changes, and opens template management", async () => {
     const user = userEvent.setup();
     const api = installDesktopApiMock();
