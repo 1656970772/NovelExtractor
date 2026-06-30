@@ -260,13 +260,16 @@ function planRuntimeWindows(
 async function readReusableManifest(
   manifestPath: string,
   expected: Pick<RuntimeWindowManifest, "sourceTextHash" | "splitConfigHash" | "splitterVersion">,
-  input: Pick<NormalizedRuntimeWindowInput, "projectRoot" | "windowsRoot">
+  input: Pick<NormalizedRuntimeWindowInput, "projectRoot" | "windowsRoot" | "jobId" | "bookId" | "sourceTextProjectPath">
 ): Promise<RuntimeWindowManifest | null> {
   try {
     const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as unknown;
 
     if (
       isRuntimeWindowManifest(manifest) &&
+      manifest.jobId === input.jobId &&
+      manifest.bookId === input.bookId &&
+      manifest.sourceTextPath === input.sourceTextProjectPath &&
       manifest.sourceTextHash === expected.sourceTextHash &&
       manifest.splitConfigHash === expected.splitConfigHash &&
       manifest.splitterVersion === expected.splitterVersion &&

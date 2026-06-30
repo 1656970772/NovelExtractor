@@ -5,6 +5,8 @@ export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  cacheHitTokens?: number;
+  cacheMissTokens?: number;
 }
 
 export interface FeeAmount {
@@ -132,14 +134,18 @@ export interface JobRuntime {
 const EMPTY_USAGE: TokenUsage = {
   inputTokens: 0,
   outputTokens: 0,
-  totalTokens: 0
+  totalTokens: 0,
+  cacheHitTokens: 0,
+  cacheMissTokens: 0
 };
 
 function addUsage(left: TokenUsage, right: TokenUsage): TokenUsage {
   return {
     inputTokens: left.inputTokens + right.inputTokens,
     outputTokens: left.outputTokens + right.outputTokens,
-    totalTokens: left.totalTokens + right.totalTokens
+    totalTokens: left.totalTokens + right.totalTokens,
+    cacheHitTokens: (left.cacheHitTokens ?? 0) + (right.cacheHitTokens ?? 0),
+    cacheMissTokens: (left.cacheMissTokens ?? 0) + (right.cacheMissTokens ?? 0)
   };
 }
 

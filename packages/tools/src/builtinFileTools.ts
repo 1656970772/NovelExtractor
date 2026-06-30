@@ -358,7 +358,22 @@ function toToolError(error: unknown, fallbackCode: ToolExecutionError["code"]): 
     return error;
   }
   if (error instanceof ReportWriterError) {
+    if (isFileNotFoundError(error)) {
+      return new ToolExecutionError("Path does not exist", "NOT_FOUND");
+    }
     return new ToolExecutionError(error.message, error.code === "UNSAFE_PATH" ? "UNSAFE_PATH" : "INVALID_ARGUMENTS");
   }
+  if (isFileNotFoundError(error)) {
+    return new ToolExecutionError("Path does not exist", "NOT_FOUND");
+  }
   return new ToolExecutionError(error instanceof Error ? error.message : "Tool execution failed", fallbackCode);
+}
+
+function isFileNotFoundError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "ENOENT" || /\bENOENT\b|no such file or directory/iu.test(error.message);
 }

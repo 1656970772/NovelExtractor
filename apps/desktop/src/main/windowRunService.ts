@@ -89,7 +89,9 @@ const TOOL_SCHEMAS = getEnabledTools([...ENABLED_TOOL_NAMES]).map(toLlmToolSchem
 const EMPTY_USAGE: TokenUsage = {
   inputTokens: 0,
   outputTokens: 0,
-  totalTokens: 0
+  totalTokens: 0,
+  cacheHitTokens: 0,
+  cacheMissTokens: 0
 };
 const TOOL_ARGUMENTS_MUST_BE_OBJECT_MESSAGE = "Tool arguments must be an object";
 const UNEXPECTED_TOOL_ARGUMENT_MESSAGE_PREFIX = "Unexpected argument: ";
@@ -112,9 +114,11 @@ const WRITE_FILE_LOSSY_REWRITE_MESSAGE =
   "不能覆盖丢失既有内容，需要使用 edit_file/multi_edit 或包含完整旧内容。";
 const REPLACEMENT_TEXT_NOT_FOUND_HINT =
   "oldText 必须精确匹配文件中的原文；可先用 grep/read_file 找到准确片段；若已 read_file 且需要整体更新，可用 write_file 提交完整保留旧内容的新版报告。";
+const EDIT_TARGET_NOT_FOUND_HINT =
+  "目标报告不存在；如果需要创建报告，请改用 write_file 写入完整且合规的报告正文。";
 const READ_TOOL_SCOPE_DENIED_MESSAGE = "read_file/grep 路径不在当前窗口允许范围内。";
 const READ_TOOL_SCOPE_DENIED_HINT =
-  "只能读取/搜索当前窗口文本、当前规则快照、当前书籍 reports 目录或本批选中输出报告；请改用窗口文件路径、规则快照路径、reports 或选中报告文件名。";
+  "只能读取/搜索当前窗口文本、当前书籍 reports 目录或本批选中输出报告；请改用窗口文件路径、reports 或选中报告文件名。";
 const REPORT_CONTENT_INTERNAL_METADATA_MESSAGE = "报告正文不得包含内部运行路径或流程性元数据。";
 const REPORT_CONTENT_INTERNAL_METADATA_HINT =
   "请把资料来源、参考范围等公开元数据改写为窗口编号/章节范围、章节名或原文范围；不要写 runs/job、assets/books、本机绝对路径、AppData 项目路径或后续窗口等流程性措辞。";
@@ -166,7 +170,9 @@ function mapUsage(usage: ChatCompletionResult["normalizedUsage"]): TokenUsage {
   return {
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
-    totalTokens: usage.totalTokens
+    totalTokens: usage.totalTokens,
+    cacheHitTokens: usage.cacheHitTokens,
+    cacheMissTokens: usage.cacheMissTokens
   };
 }
 
@@ -174,7 +180,9 @@ function addUsage(left: TokenUsage, right: TokenUsage): TokenUsage {
   return {
     inputTokens: left.inputTokens + right.inputTokens,
     outputTokens: left.outputTokens + right.outputTokens,
-    totalTokens: left.totalTokens + right.totalTokens
+    totalTokens: left.totalTokens + right.totalTokens,
+    cacheHitTokens: (left.cacheHitTokens ?? 0) + (right.cacheHitTokens ?? 0),
+    cacheMissTokens: (left.cacheMissTokens ?? 0) + (right.cacheMissTokens ?? 0)
   };
 }
 
@@ -226,7 +234,7 @@ function buildWindowPrompt(input: {
   return [
     `小说：${artifacts.book.displayName}`,
     `书籍 ID：${artifacts.book.id}`,
-    `规则快照路径：${artifacts.rulesSnapshotPath}`,
+    "规则与模板要求已内嵌在本请求；不要读取运行级规则快照文件。",
     `当前运行日期：${currentDate}`,
     `窗口序号：${windowNumber}/${totalWindowCount}`,
     `窗口文件：${manifestWindow.textPath}`,
@@ -594,10 +602,7 @@ function assertReadToolExecutionScope(input: {
 
   const comparablePath = normalizeComparableToolPath(pathArgument);
   const reportsRootPath = normalizeComparableToolPath(toProjectRelativeReportsRootPath(input.artifacts));
-  const allowedFilePaths = new Set<string>([
-    normalizeComparableToolPath(input.manifestWindow.textPath),
-    normalizeComparableToolPath(input.artifacts.rulesSnapshotPath)
-  ]);
+  const allowedFilePaths = new Set<string>([normalizeComparableToolPath(input.manifestWindow.textPath)]);
 
   for (const outputFileName of input.allowedOutputFileNames) {
     allowedFilePaths.add(normalizeComparableToolPath(toProjectRelativeReportPath(input.artifacts, outputFileName)));
@@ -777,7 +782,10 @@ function shouldReturnRecoverableToolError(name: string, error: unknown): error i
     return true;
   }
 
-  return (name === "edit_file" || name === "multi_edit") && error.message === REPLACEMENT_TEXT_NOT_FOUND_MESSAGE;
+  return (
+    (name === "edit_file" || name === "multi_edit") &&
+    (error.message === REPLACEMENT_TEXT_NOT_FOUND_MESSAGE || error.code === "NOT_FOUND")
+  );
 }
 
 function isRecoverableToolSchemaInvalidArguments(error: ToolExecutionError): boolean {
@@ -813,6 +821,8 @@ function toRecoverableToolErrorResult(input: {
   const hint =
     input.error.message === REPLACEMENT_TEXT_NOT_FOUND_MESSAGE
       ? REPLACEMENT_TEXT_NOT_FOUND_HINT
+      : input.error.code === "NOT_FOUND"
+        ? EDIT_TARGET_NOT_FOUND_HINT
       : input.error.message === READ_TOOL_SCOPE_DENIED_MESSAGE
         ? READ_TOOL_SCOPE_DENIED_HINT
         : undefined;

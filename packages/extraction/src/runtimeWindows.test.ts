@@ -105,6 +105,49 @@ describe("generateRuntimeWindows", () => {
     expect(reusedWindowStat.mtime.getUTCFullYear()).toBe(2000);
   });
 
+  it("rebuilds instead of reusing a manifest when job, book, or source identity does not match", async () => {
+    const projectRoot = await createTempProject();
+    await writeSource(projectRoot, "books/source.txt", buildChapters(6));
+    const input = {
+      projectRoot,
+      jobId: "job-identity",
+      bookId: "book-a",
+      sourceTextPath: "books/source.txt",
+      singleRunChapterCount: 3,
+      overlapChapterCount: 1,
+      extractionChapterCount: 6,
+      generatedAt: "2026-06-30T00:00:00.000Z"
+    };
+
+    const first = await generateRuntimeWindows(input);
+    await writeFile(
+      first.manifestPath,
+      `${JSON.stringify(
+        {
+          ...first.manifest,
+          jobId: "job-old",
+          bookId: "book-old",
+          sourceTextPath: "books/old-source.txt"
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+
+    const rebuilt = await generateRuntimeWindows({
+      ...input,
+      generatedAt: "2026-06-30T00:01:00.000Z"
+    });
+
+    expect(rebuilt.manifest).toMatchObject({
+      jobId: "job-identity",
+      bookId: "book-a",
+      sourceTextPath: "books/source.txt",
+      generatedAt: "2026-06-30T00:01:00.000Z"
+    });
+  });
+
   it("rebuilds instead of reusing a manifest when a listed window file is missing", async () => {
     const projectRoot = await createTempProject();
     await writeSource(projectRoot, "books/source.txt", buildChapters(6));

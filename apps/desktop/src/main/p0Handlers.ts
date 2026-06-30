@@ -19,6 +19,7 @@ import {
 } from "@novel-extractor/extraction/extractionRules";
 import { generateRuntimeWindows, type GenerateRuntimeWindowsResult } from "@novel-extractor/extraction/runtimeWindows";
 import { uploadBook, type UploadedBookRepository } from "@novel-extractor/extraction/uploadBook";
+import { planChapterWindows } from "@novel-extractor/extraction/windowPlanner";
 import type { JobRuntimeError, JobRuntimeState, TokenUsage } from "@novel-extractor/jobs";
 import type { FetchLike } from "@novel-extractor/llm";
 import { renderSafeMarkdown } from "@novel-extractor/markdown/preview";
@@ -96,6 +97,7 @@ export interface P0IpcHandlersOptions {
 
 const TASK_STATUS_CONFIG = getTaskStatusConfig();
 const RULES_FILE_NAME = "提取规则.md";
+const JOB_ID_COLLISION_RETRY_LIMIT = 50;
 
 const systemClock: Clock = {
   now: () => new Date().toISOString()
@@ -618,12 +620,27 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     return error.code === "job_failed" ? error.message : `任务运行失败：${error.code}`;
   }
 
-  function formatTokenText(usage: Pick<TokenUsage, "totalTokens"> | null | undefined): string {
-    return `Token ${usage?.totalTokens ?? 0} / 费用 0`;
+  function formatTokenText(
+    usage: Pick<TokenUsage, "totalTokens" | "cacheHitTokens" | "cacheMissTokens"> | null | undefined
+  ): string {
+    const cacheHitTokens = usage?.cacheHitTokens ?? 0;
+    const cacheMissTokens = usage?.cacheMissTokens ?? 0;
+    const cacheMeasuredTokens = cacheHitTokens + cacheMissTokens;
+    const cacheHitRate = cacheMeasuredTokens > 0 ? (cacheHitTokens / cacheMeasuredTokens) * 100 : 0;
+    return `Token ${usage?.totalTokens ?? 0} / 缓存命中率 ${cacheHitRate.toFixed(2)}%`;
   }
 
   function formatRuntimeProgress(state: Pick<JobRuntimeState, "completedWindowCount" | "totalWindowCount">): string {
-    return `窗口 ${state.completedWindowCount}/${state.totalWindowCount}`;
+    return `进度：${state.completedWindowCount}/${state.totalWindowCount}`;
+  }
+
+  function estimateRuntimeWindowCount(book: Book, input: CreateJobDto): number {
+    return planChapterWindows({
+      chapterIds: Array.from({ length: book.chapterCount }, (_, index) => String(index + 1)),
+      chaptersPerWindow: input.singleRunChapterCount,
+      maxChapters: input.extractionChapterCount,
+      overlapChapterCount: input.overlapChapterCount
+    }).length;
   }
 
   function toJobStatusFromRuntime(status: JobRuntimeState["status"]): JobStatus {
@@ -679,6 +696,29 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       }
       throw error;
     }
+  }
+
+  async function hasRunDirectory(projectRoot: string, jobId: string): Promise<boolean> {
+    try {
+      const stats = await fs.stat(path.join(projectRoot, "runs", jobId));
+      return stats.isDirectory();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  async function createUniqueJobId(projectRoot: string): Promise<string> {
+    for (let attempt = 0; attempt < JOB_ID_COLLISION_RETRY_LIMIT; attempt += 1) {
+      const jobId = idGenerator.createId("job");
+      if (!jobsById.has(jobId) && !(await hasRunDirectory(projectRoot, jobId))) {
+        return jobId;
+      }
+    }
+
+    throw new Error("任务 ID 已存在，请重试");
   }
 
   function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -805,7 +845,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
         报告目录: ["reports", artifacts.book.id].join("/")
       });
       runningJob = updateJob(runningJob, {
-        progressText: `窗口 0/${artifacts.runtimeWindowManifest.windows.length}`
+        progressText: `进度：0/${artifacts.runtimeWindowManifest.windows.length}`
       });
 
       const windowRunService = createWindowRunService({
@@ -985,13 +1025,14 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     "jobs:create": async (input) => {
       const normalizedInput = normalizeCreateJobInput(input);
       const book = requireBook(normalizedInput.bookId);
+      const project = await ensureProject(book.projectId);
       const now = clock.now();
       const job: P0JobRecord = {
-        id: idGenerator.createId("job"),
+        id: await createUniqueJobId(project.rootPath),
         bookId: book.id,
         status: "created",
-        progressText: `窗口 0/${book.chapterCount}`,
-        tokenText: "Token 0 / 费用 0",
+        progressText: `进度：0/${estimateRuntimeWindowCount(book, normalizedInput)}`,
+        tokenText: formatTokenText(null),
         input: normalizedInput,
         createdAt: now,
         updatedAt: now
