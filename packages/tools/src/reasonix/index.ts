@@ -7,3 +7,4 @@ export * from "./textEdit";
 export * from "./tools/readFileTool";
 export * from "./tools/writeFileTool";
 export * from "./tools/editFileTool";
+export * from "./tools/multiEditTool";
