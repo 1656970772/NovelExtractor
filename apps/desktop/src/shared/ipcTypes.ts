@@ -7,6 +7,8 @@ export type JobStatus = DomainJobStatus;
 export const DESKTOP_IPC_CHANNELS = [
   "project:create",
   "project:list",
+  "settings:get",
+  "settings:save",
   "providers:save",
   "providers:list",
   "books:uploadTxt",
@@ -31,6 +33,16 @@ export interface ProjectDto {
   displayName: string;
   slug: string;
   createdAt: string;
+}
+
+export interface DesktopSettingsDto {
+  defaultProjectStorageDirectory: string;
+  effectiveProjectStorageDirectory: string;
+  projectStorageDirectory?: string;
+}
+
+export interface SaveDesktopSettingsDto {
+  projectStorageDirectory?: string;
 }
 
 export interface SaveProviderDto {
@@ -161,6 +173,8 @@ export interface DeleteJobDto {
 export interface DesktopIpcRequestMap {
   "project:create": { displayName: string };
   "project:list": undefined;
+  "settings:get": undefined;
+  "settings:save": SaveDesktopSettingsDto;
   "providers:save": SaveProviderDto;
   "providers:list": undefined;
   "books:uploadTxt": UploadTxtDto;
@@ -181,6 +195,8 @@ export interface DesktopIpcRequestMap {
 export interface DesktopIpcResponseMap {
   "project:create": ProjectDto;
   "project:list": ProjectDto[];
+  "settings:get": DesktopSettingsDto;
+  "settings:save": DesktopSettingsDto;
   "providers:save": void;
   "providers:list": ProviderViewDto[];
   "books:uploadTxt": BookUploadResultDto;

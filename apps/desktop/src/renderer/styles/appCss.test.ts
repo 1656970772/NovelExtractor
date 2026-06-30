@@ -74,4 +74,23 @@ describe("app css template modal layout", () => {
     expect(dangerButtonRule).toContain("border-color: var(--app-color-danger)");
     expect(dangerButtonRule).toContain("background: var(--app-color-danger)");
   });
+
+  it("keeps long upload errors inside their panel", () => {
+    const formErrorRule = getRuleBody(".form-error");
+
+    expect(formErrorRule).toContain("max-width: 100%");
+    expect(formErrorRule).toContain("overflow-wrap: anywhere");
+    expect(formErrorRule).toContain("white-space: pre-wrap");
+  });
+
+  it("keeps desktop settings modal aligned with the template modal shell", () => {
+    const templateModalRule = getRuleBody(".template-modal");
+    const settingsWorkspaceRule = getRuleBody(".settings-modal__workspace");
+    const activeCategoryRule = getRuleBody(".settings-modal__category-button[aria-pressed=\"true\"]");
+
+    expect(templateModalRule).toContain("width: min(780px, 100%)");
+    expect(settingsWorkspaceRule).toContain("grid-template-columns: minmax(180px, 0.55fr) minmax(420px, 1.45fr)");
+    expect(activeCategoryRule).toContain("background: var(--app-color-selected)");
+    expect(activeCategoryRule).toContain("color: var(--app-color-accent)");
+  });
 });

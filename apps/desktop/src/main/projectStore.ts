@@ -11,6 +11,7 @@ export interface MainProjectStore {
 
 export interface FileProjectStoreOptions {
   workspaceRoot: string;
+  projectsRoot?: string | (() => string);
   filePath?: string;
   clock: Clock;
   idGenerator: IdGenerator;
@@ -19,6 +20,8 @@ export interface FileProjectStoreOptions {
 interface ProjectStoreState {
   projects: Project[];
 }
+
+const PROJECT_ID_COLLISION_RETRY_LIMIT = 20;
 
 function cloneProject(project: Project): Project {
   return { ...project };
@@ -65,6 +68,14 @@ export function createFileProjectStore(options: FileProjectStoreOptions): MainPr
   const workspaceRoot = options.workspaceRoot;
   const filePath = options.filePath ?? path.join(workspaceRoot, "projects.json");
   let statePromise: Promise<ProjectStoreState> | null = null;
+
+  function getProjectsRoot(): string {
+    return path.resolve(
+      typeof options.projectsRoot === "function"
+        ? options.projectsRoot()
+        : options.projectsRoot ?? path.join(workspaceRoot, "projects")
+    );
+  }
 
   async function loadState(): Promise<ProjectStoreState> {
     if (statePromise) {
@@ -124,12 +135,21 @@ export function createFileProjectStore(options: FileProjectStoreOptions): MainPr
       ) {
         throw new Error("项目名称已存在");
       }
+      const usedProjectIds = new Set(state.projects.map((project) => project.id));
+      let projectId = options.idGenerator.createId("project");
+      for (let attempt = 1; usedProjectIds.has(projectId) && attempt < PROJECT_ID_COLLISION_RETRY_LIMIT; attempt += 1) {
+        projectId = options.idGenerator.createId("project");
+      }
+
+      if (usedProjectIds.has(projectId)) {
+        throw new Error("项目 ID 已存在，请重试");
+      }
 
       return upsertProject({
-        id: options.idGenerator.createId("project"),
+        id: projectId,
         displayName,
         slug,
-        rootPath: path.join(workspaceRoot, "projects", slug),
+        rootPath: path.join(getProjectsRoot(), slug),
         createdAt: options.clock.now()
       });
     },
@@ -146,7 +166,7 @@ export function createFileProjectStore(options: FileProjectStoreOptions): MainPr
         id: projectId,
         displayName: projectId,
         slug,
-        rootPath: path.join(workspaceRoot, "projects", slug),
+        rootPath: path.join(getProjectsRoot(), slug),
         createdAt: options.clock.now()
       });
     },

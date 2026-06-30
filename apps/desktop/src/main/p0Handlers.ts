@@ -82,6 +82,7 @@ interface PreparedPreRunArtifacts extends WindowRunArtifacts {
 
 export interface P0IpcHandlersOptions {
   workspaceRoot?: string;
+  projectsRoot?: string | (() => string);
   clock?: Clock;
   idGenerator?: IdGenerator;
   projectStore?: MainProjectStore;
@@ -241,6 +242,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     options.projectStore ??
     createFileProjectStore({
       workspaceRoot,
+      projectsRoot: options.projectsRoot,
       clock,
       idGenerator
     });

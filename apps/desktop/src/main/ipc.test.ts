@@ -10,6 +10,7 @@ import type {
   ProviderViewDto,
   ReportDto,
   SafeMarkdownPreviewDto,
+  SaveDesktopSettingsDto,
   SaveProviderDto,
   SaveTemplateDto,
   TemplateDto,
@@ -52,6 +53,16 @@ function createHandlers(): DesktopIpcHandlers {
       createdAt: "2026-06-27T00:00:00.000Z"
     }),
     "project:list": async () => [],
+    "settings:get": async () => ({
+      defaultProjectStorageDirectory: "C:\\NovelExtractor\\projects",
+      effectiveProjectStorageDirectory: "C:\\NovelExtractor\\projects",
+      projectStorageDirectory: undefined
+    }),
+    "settings:save": async (input) => ({
+      defaultProjectStorageDirectory: "C:\\NovelExtractor\\projects",
+      effectiveProjectStorageDirectory: input.projectStorageDirectory ?? "C:\\NovelExtractor\\projects",
+      projectStorageDirectory: input.projectStorageDirectory
+    }),
     "providers:save": async () => undefined,
     "providers:list": async () => [],
     "books:uploadTxt": async (input) => ({
@@ -108,6 +119,8 @@ describe("desktop IPC contract", () => {
     expect(createIpcContract().channels).toEqual([
       "project:create",
       "project:list",
+      "settings:get",
+      "settings:save",
       "providers:save",
       "providers:list",
       "books:uploadTxt",
@@ -188,6 +201,9 @@ describe("desktop IPC contract", () => {
       displayName: string;
       slug: string;
       createdAt: string;
+    }>();
+    expectTypeOf<SaveDesktopSettingsDto>().toMatchTypeOf<{
+      projectStorageDirectory?: string;
     }>();
     expectTypeOf<SaveProviderDto>().toMatchTypeOf<{
       presetId: "deepseek" | "custom-openai-compatible";

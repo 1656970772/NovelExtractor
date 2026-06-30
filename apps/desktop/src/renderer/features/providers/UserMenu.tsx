@@ -3,9 +3,10 @@ import { useId, useState } from "react";
 
 export interface UserMenuProps {
   onOpenProviderConfig: () => void;
+  onOpenSettings: () => void;
 }
 
-export function UserMenu({ onOpenProviderConfig }: UserMenuProps) {
+export function UserMenu({ onOpenProviderConfig, onOpenSettings }: UserMenuProps) {
   const menuId = useId();
   const [isOpen, setOpen] = useState(false);
   const userAction = getWorkbenchNavigation().userAction;
@@ -14,6 +15,9 @@ export function UserMenu({ onOpenProviderConfig }: UserMenuProps) {
   function handleItemClick(itemId: string): void {
     if (itemId === "provider-settings") {
       onOpenProviderConfig();
+    }
+    if (itemId === "desktop-settings") {
+      onOpenSettings();
     }
     setOpen(false);
   }

@@ -1,6 +1,7 @@
 import type {
   BookUploadResultDto,
   CreateJobDto,
+  DesktopSettingsDto,
   DeleteJobDto,
   DesktopIpcChannel,
   DesktopIpcRequest,
@@ -10,6 +11,7 @@ import type {
   ProviderViewDto,
   ReportDto,
   SafeMarkdownPreviewDto,
+  SaveDesktopSettingsDto,
   SaveProviderDto,
   SaveTemplateDto,
   TemplateDto,
@@ -26,6 +28,8 @@ export type InvokeDesktopIpc = <TChannel extends DesktopIpcChannel>(
 export interface NovelExtractorDesktopApi {
   createProject(input: { displayName: string }): Promise<ProjectDto>;
   listProjects(): Promise<ProjectDto[]>;
+  getSettings(): Promise<DesktopSettingsDto>;
+  saveSettings(input: SaveDesktopSettingsDto): Promise<DesktopSettingsDto>;
   saveProvider(input: SaveProviderDto): Promise<void>;
   listProviders(): Promise<ProviderViewDto[]>;
   uploadTxt(input: UploadTxtDto): Promise<BookUploadResultDto>;
@@ -57,6 +61,8 @@ export function createNovelExtractorDesktopApi(
   const api: NovelExtractorDesktopApi = {
     createProject: (input) => invokeTyped(invoke, "project:create", input),
     listProjects: () => invokeTyped(invoke, "project:list", undefined),
+    getSettings: () => invokeTyped(invoke, "settings:get", undefined),
+    saveSettings: (input) => invokeTyped(invoke, "settings:save", input),
     saveProvider: (input) => invokeTyped(invoke, "providers:save", input),
     listProviders: () => invokeTyped(invoke, "providers:list", undefined),
     uploadTxt: (input) => invokeTyped(invoke, "books:uploadTxt", input),

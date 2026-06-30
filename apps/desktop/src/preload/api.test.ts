@@ -32,6 +32,8 @@ describe("preload desktop API", () => {
 
     await api.createProject({ displayName: "仙途资料" });
     await api.listProjects();
+    await api.getSettings();
+    await api.saveSettings({ projectStorageDirectory: "D:\\NovelExtractorProjects" });
     await api.saveProvider({
       presetId: "deepseek",
       displayName: "DeepSeek",
@@ -74,6 +76,8 @@ describe("preload desktop API", () => {
     expect(calls.map((call) => call.channel)).toEqual([
       "project:create",
       "project:list",
+      "settings:get",
+      "settings:save",
       "providers:save",
       "providers:list",
       "books:uploadTxt",
@@ -90,7 +94,7 @@ describe("preload desktop API", () => {
       "jobs:delete",
       "reports:preview"
     ]);
-    expect(invoke).toHaveBeenCalledTimes(17);
+    expect(invoke).toHaveBeenCalledTimes(19);
   });
 
   it("does not expose raw invoke or the raw Electron renderer bridge", () => {
@@ -100,6 +104,8 @@ describe("preload desktop API", () => {
     expect(Object.keys(api)).toEqual([
       "createProject",
       "listProjects",
+      "getSettings",
+      "saveSettings",
       "saveProvider",
       "listProviders",
       "uploadTxt",

@@ -2,11 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import type { TaskAction } from "@novel-extractor/config";
 import type {
   CreateJobDto,
+  DesktopSettingsDto,
   JobDto,
   ProjectDto,
   ProviderViewDto,
   ReportDto,
   SafeMarkdownPreviewDto,
+  SaveDesktopSettingsDto,
   SaveProviderDto,
   SaveTemplateDto,
   TemplateDto
@@ -27,6 +29,11 @@ import { GraphPlaceholderPage } from "./features/graph/GraphPlaceholderPage";
 import { WorkbenchNav, type WorkbenchPage } from "./features/navigation/WorkbenchNav";
 import { ProviderConfigModal } from "./features/providers/ProviderConfigModal";
 import { UserMenu } from "./features/providers/UserMenu";
+import {
+  StorageSettingsModal,
+  type SettingsLoadState,
+  type SettingsSaveState
+} from "./features/settings/StorageSettingsModal";
 import {
   getExtractionModelsFromProviders,
   type ProviderSaveState
@@ -85,6 +92,11 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
   const [providerError, setProviderError] = useState<string | undefined>();
   const [saveState, setSaveState] = useState<ProviderSaveState>("idle");
   const [saveError, setSaveError] = useState<string | undefined>();
+  const [isSettingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [desktopSettings, setDesktopSettings] = useState<DesktopSettingsDto | undefined>();
+  const [settingsLoadState, setSettingsLoadState] = useState<SettingsLoadState>("idle");
+  const [settingsSaveState, setSettingsSaveState] = useState<SettingsSaveState>("idle");
+  const [settingsError, setSettingsError] = useState<string | undefined>();
   const [books, setBooks] = useState<ExtractionBook[]>([]);
   const [assetReports, setAssetReports] = useState<ReportDto[]>([]);
   const [selectedAssetBookId, setSelectedAssetBookId] = useState<string | null>(null);
@@ -151,6 +163,52 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
     } catch (error) {
       setProviderError(error instanceof Error ? error.message : "读取大模型配置失败");
       setProviderState("error");
+    }
+  }
+
+  async function refreshSettings(): Promise<void> {
+    const api = window.novelExtractor;
+    if (!api?.getSettings) {
+      setSettingsLoadState("idle");
+      return;
+    }
+
+    setSettingsLoadState("loading");
+    setSettingsError(undefined);
+
+    try {
+      setDesktopSettings(await api.getSettings());
+      setSettingsLoadState("idle");
+    } catch (error) {
+      setSettingsError(getErrorMessage(error, "读取设置失败"));
+      setSettingsLoadState("error");
+    }
+  }
+
+  function openSettings(): void {
+    setSettingsModalOpen(true);
+    void refreshSettings();
+  }
+
+  async function saveDesktopSettings(input: SaveDesktopSettingsDto): Promise<DesktopSettingsDto | void> {
+    const api = window.novelExtractor;
+    if (!api?.saveSettings) {
+      throw new Error("保存设置失败");
+    }
+
+    setSettingsSaveState("saving");
+    setSettingsError(undefined);
+
+    try {
+      const savedSettings = await api.saveSettings(input);
+      setDesktopSettings(savedSettings);
+      await refreshProjects();
+      setSettingsSaveState("idle");
+      return savedSettings;
+    } catch (error) {
+      setSettingsError(getErrorMessage(error, "保存设置失败"));
+      setSettingsSaveState("error");
+      throw error;
     }
   }
 
@@ -514,7 +572,12 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
         activePage={activePage}
         projectName={project.displayName}
         onPageChange={setActivePage}
-        userMenu={<UserMenu onOpenProviderConfig={() => setProviderModalOpen(true)} />}
+        userMenu={
+          <UserMenu
+            onOpenProviderConfig={() => setProviderModalOpen(true)}
+            onOpenSettings={openSettings}
+          />
+        }
       />
       <main className="workbench-main" aria-label="工作台内容">
         {activePage === "assets" ? (
@@ -571,6 +634,15 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
         saveState={saveState}
         onClose={() => setProviderModalOpen(false)}
         onSaveProvider={saveProvider}
+      />
+      <StorageSettingsModal
+        errorMessage={settingsError}
+        loadState={settingsLoadState}
+        open={isSettingsModalOpen}
+        saveState={settingsSaveState}
+        settings={desktopSettings}
+        onClose={() => setSettingsModalOpen(false)}
+        onSaveSettings={saveDesktopSettings}
       />
       <TemplateManagementModal
         initialAction={templateModalInitialAction}

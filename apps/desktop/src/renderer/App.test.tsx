@@ -25,6 +25,16 @@ function installDesktopApiMock() {
   const api = {
     createProject: vi.fn().mockResolvedValue(defaultProject),
     listProjects: vi.fn().mockResolvedValue([]),
+    getSettings: vi.fn().mockResolvedValue({
+      defaultProjectStorageDirectory: "C:\\Users\\Administrator\\AppData\\Roaming\\@novel-extractor\\desktop\\projects",
+      effectiveProjectStorageDirectory: "C:\\Users\\Administrator\\AppData\\Roaming\\@novel-extractor\\desktop\\projects",
+      projectStorageDirectory: undefined
+    }),
+    saveSettings: vi.fn().mockResolvedValue({
+      defaultProjectStorageDirectory: "C:\\Users\\Administrator\\AppData\\Roaming\\@novel-extractor\\desktop\\projects",
+      effectiveProjectStorageDirectory: "D:\\NovelExtractorProjects",
+      projectStorageDirectory: "D:\\NovelExtractorProjects"
+    }),
     saveProvider: vi.fn().mockResolvedValue(undefined),
     listProviders: vi.fn().mockResolvedValue([]),
     uploadTxt: vi.fn(),
@@ -114,6 +124,30 @@ describe("desktop workbench shell", () => {
     await user.click(screen.getByRole("button", { name: "打开项目" }));
 
     expect(screen.getByRole("heading", { name: "资产" })).toBeInTheDocument();
+  });
+
+  it("opens storage settings from the user menu and saves the project directory", async () => {
+    const user = userEvent.setup();
+    const api = installDesktopApiMock();
+    render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
+
+    await user.click(screen.getByRole("button", { name: "用户菜单" }));
+    await user.click(screen.getByRole("button", { name: "设置" }));
+
+    expect(await screen.findByRole("dialog", { name: "设置" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "存储" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText("项目目录")).toHaveValue(
+      "C:\\Users\\Administrator\\AppData\\Roaming\\@novel-extractor\\desktop\\projects"
+    );
+
+    await user.clear(screen.getByLabelText("项目目录"));
+    await user.type(screen.getByLabelText("项目目录"), "D:\\NovelExtractorProjects");
+    await user.click(screen.getByRole("button", { name: "保存设置" }));
+
+    expect(api.saveSettings).toHaveBeenCalledWith({
+      projectStorageDirectory: "D:\\NovelExtractorProjects"
+    });
+    expect(await screen.findByText("已保存")).toBeInTheDocument();
   });
 
   it("switches between workbench pages from navigation", async () => {

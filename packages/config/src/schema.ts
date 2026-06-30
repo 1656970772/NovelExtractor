@@ -109,6 +109,7 @@ export type MenuItemId =
   | "extraction"
   | "graph"
   | "provider-settings"
+  | "desktop-settings"
   | "language"
   | "user-menu";
 

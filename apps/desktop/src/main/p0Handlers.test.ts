@@ -4136,6 +4136,28 @@ describe("P0 desktop IPC handlers", () => {
     );
   });
 
+  it("creates distinct project ids across handler instances in the same workspace", async () => {
+    const contract = createIpcContract();
+    const firstHandlers = createHandlers();
+    const firstProject = await contract.invoke(firstHandlers, "project:create", {
+      displayName: "仙途资料"
+    });
+
+    const restartedHandlers = createHandlers();
+    const secondProject = await contract.invoke(restartedHandlers, "project:create", {
+      displayName: "网文"
+    });
+    const projects = await contract.invoke(restartedHandlers, "project:list");
+
+    expect(secondProject.id).not.toBe(firstProject.id);
+    expect(projects).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: firstProject.id, displayName: "仙途资料" }),
+        expect.objectContaining({ id: secondProject.id, displayName: "网文" })
+      ])
+    );
+  });
+
   it("redacts raw API keys from model tool arguments before writing reports", async () => {
     const apiKey = "sk-probe-secret";
     let requestIndex = 0;

@@ -41,6 +41,10 @@ const MENU_ITEMS = {
     id: "provider-settings",
     label: "大模型配置"
   },
+  desktopSettings: {
+    id: "desktop-settings",
+    label: "设置"
+  },
   language: {
     id: "language",
     label: "语言"
@@ -209,7 +213,7 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
   ],
   menu: {
     mainNavigation: [MENU_ITEMS.assets, MENU_ITEMS.extraction, MENU_ITEMS.graph],
-    userMenu: [MENU_ITEMS.providerSettings],
+    userMenu: [MENU_ITEMS.providerSettings, MENU_ITEMS.desktopSettings],
     workbenchNavigation: {
       topFunctionLabel: "功能",
       topFunctionItems: [MENU_ITEMS.extraction, MENU_ITEMS.graph],

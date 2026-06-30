@@ -3,6 +3,10 @@ import { getThemeTokens } from "@novel-extractor/config";
 import { join } from "node:path";
 import { createAppPaths } from "./appPaths";
 import { createFileCredentialStore } from "./credentials";
+import {
+  createDesktopSettingsIpcHandlers,
+  createFileDesktopSettingsStore
+} from "./desktopSettings";
 import { createNotImplementedIpcHandlers, registerIpcHandlers } from "./ipc";
 import { createP0IpcHandlers } from "./p0Handlers";
 import { createProviderIpcHandlers } from "./providerHandlers";
@@ -75,8 +79,13 @@ function createSafeStorageCredentialCodec(): {
   };
 }
 
-void app.whenReady().then(() => {
+void app.whenReady().then(async () => {
   const appPaths = createAppPaths(process.env.NOVEL_EXTRACTOR_E2E_DATA_DIR);
+  const settingsStore = createFileDesktopSettingsStore({
+    filePath: join(appPaths.userDataDir, "settings.json"),
+    defaultProjectStorageDirectory: appPaths.projectsRoot
+  });
+  let projectStorageDirectory = (await settingsStore.getSettings()).effectiveProjectStorageDirectory;
   const credentialStore = createFileCredentialStore({
     filePath: join(appPaths.credentialsRoot, "api-keys.json"),
     ...createSafeStorageCredentialCodec()
@@ -89,9 +98,16 @@ void app.whenReady().then(() => {
     ...createP0IpcHandlers({
       credentialStore,
       providerStore,
-      workspaceRoot: appPaths.userDataDir
+      workspaceRoot: appPaths.userDataDir,
+      projectsRoot: () => projectStorageDirectory
     }),
-    ...createProviderIpcHandlers({ credentialStore, providerStore })
+    ...createProviderIpcHandlers({ credentialStore, providerStore }),
+    ...createDesktopSettingsIpcHandlers({
+      settingsStore,
+      onSettingsSaved: (settings) => {
+        projectStorageDirectory = settings.effectiveProjectStorageDirectory;
+      }
+    })
   });
   Menu.setApplicationMenu(null);
   createMainWindow();

@@ -30,6 +30,7 @@ export interface UploadBookInput {
   displayName?: string;
   clock?: Clock;
   idGenerator?: IdGenerator;
+  bookIdCollisionRetryLimit?: number;
   assetLayout?: UploadBookAssetLayout;
 }
 
@@ -62,6 +63,8 @@ const DEFAULT_ASSET_LAYOUT = {
   chapterFileName: (chapter: { index: number }) => `${chapter.index.toString().padStart(4, "0")}.txt`
 } satisfies Required<UploadBookAssetLayout>;
 
+const DEFAULT_BOOK_ID_COLLISION_RETRY_LIMIT = 20;
+
 const systemClock: Clock = {
   now: () => new Date().toISOString()
 };
@@ -82,54 +85,62 @@ export async function uploadBook(input: UploadBookInput): Promise<UploadBookResu
   const clock = input.clock ?? systemClock;
   const idGenerator = input.idGenerator ?? randomIdGenerator;
   const assetLayout = { ...DEFAULT_ASSET_LAYOUT, ...input.assetLayout };
-  const bookId = idGenerator.createId("book");
-  const sourceAssetId = idGenerator.createId("source");
   const now = clock.now();
 
   const booksRoot = createSafeProjectPath(input.project.rootPath, "assets", "books");
-  const bookRoot = createSafeProjectPath(input.project.rootPath, "assets", "books", bookId);
-  const sourceDestination = createSafeProjectPath(
-    input.project.rootPath,
-    "assets",
-    "books",
-    bookId,
-    assetLayout.sourceDirectoryName,
-    assetLayout.sourceFileName
-  );
-  const plannedChapterAssets = parsedChapters.map((parsedChapter) => ({
-    parsedChapter,
-    path: createSafeProjectPath(
+
+  let createdBookRoot = false;
+  let bookRoot = "";
+
+  try {
+    await fs.mkdir(booksRoot, { recursive: true });
+    const bookAssetRoot = await createAvailableBookAssetRoot({
+      projectRoot: input.project.rootPath,
+      booksRoot,
+      idGenerator,
+      retryLimit: input.bookIdCollisionRetryLimit ?? DEFAULT_BOOK_ID_COLLISION_RETRY_LIMIT
+    });
+    const bookId = bookAssetRoot.bookId;
+    bookRoot = bookAssetRoot.bookRoot;
+    createdBookRoot = true;
+
+    const sourceDestination = createSafeProjectPath(
       input.project.rootPath,
       "assets",
       "books",
       bookId,
-      assetLayout.chapterDirectoryName,
-      assetLayout.chapterFileName(parsedChapter)
-    )
-  }));
-  assertNoAssetPathCollisions(sourceDestination, plannedChapterAssets.map((chapterAsset) => chapterAsset.path));
+      assetLayout.sourceDirectoryName,
+      assetLayout.sourceFileName
+    );
+    const plannedChapterAssets = parsedChapters.map((parsedChapter) => ({
+      parsedChapter,
+      path: createSafeProjectPath(
+        input.project.rootPath,
+        "assets",
+        "books",
+        bookId,
+        assetLayout.chapterDirectoryName,
+        assetLayout.chapterFileName(parsedChapter)
+      )
+    }));
+    assertNoAssetPathCollisions(sourceDestination, plannedChapterAssets.map((chapterAsset) => chapterAsset.path));
 
-  const sourceDirectory = createSafeProjectPath(
-    input.project.rootPath,
-    "assets",
-    "books",
-    bookId,
-    assetLayout.sourceDirectoryName
-  );
-  const chapterDirectory = createSafeProjectPath(
-    input.project.rootPath,
-    "assets",
-    "books",
-    bookId,
-    assetLayout.chapterDirectoryName
-  );
+    const sourceDirectory = createSafeProjectPath(
+      input.project.rootPath,
+      "assets",
+      "books",
+      bookId,
+      assetLayout.sourceDirectoryName
+    );
+    const chapterDirectory = createSafeProjectPath(
+      input.project.rootPath,
+      "assets",
+      "books",
+      bookId,
+      assetLayout.chapterDirectoryName
+    );
+    const sourceAssetId = idGenerator.createId("source");
 
-  let createdBookRoot = false;
-
-  try {
-    await fs.mkdir(booksRoot, { recursive: true });
-    await createNewDirectory(bookRoot);
-    createdBookRoot = true;
     await fs.mkdir(sourceDirectory, { recursive: true });
     await fs.mkdir(chapterDirectory, { recursive: true });
 
@@ -173,6 +184,35 @@ export async function uploadBook(input: UploadBookInput): Promise<UploadBookResu
     }
     throw error;
   }
+}
+
+async function createAvailableBookAssetRoot(input: {
+  projectRoot: string;
+  booksRoot: string;
+  idGenerator: IdGenerator;
+  retryLimit: number;
+}): Promise<{ bookId: string; bookRoot: string }> {
+  const retryLimit = Math.max(1, Math.floor(input.retryLimit));
+
+  for (let attempt = 0; attempt < retryLimit; attempt += 1) {
+    const bookId = input.idGenerator.createId("book");
+    const bookRoot = createSafeProjectPath(input.projectRoot, "assets", "books", bookId);
+
+    try {
+      await createNewDirectory(bookRoot);
+      return { bookId, bookRoot };
+    } catch (error) {
+      if (error instanceof UploadBookError && error.code === "BOOK_ASSET_ALREADY_EXISTS") {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw new UploadBookError(
+    "BOOK_ASSET_ALREADY_EXISTS",
+    `Book asset directory already exists after ${retryLimit} attempts under ${input.booksRoot}`
+  );
 }
 
 function assertNoAssetPathCollisions(sourceDestination: string, chapterPaths: string[]): void {

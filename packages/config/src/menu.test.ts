@@ -37,5 +37,9 @@ describe("menu config", () => {
     ]);
     expect(workbenchNavigation?.languageAction).toMatchObject({ id: "language", label: "语言" });
     expect(workbenchNavigation?.userAction).toMatchObject({ id: "user-menu", label: "用户菜单" });
+    expect(getMenuConfig().userMenu.map((item) => item.id)).toEqual([
+      "provider-settings",
+      "desktop-settings"
+    ]);
   });
 });

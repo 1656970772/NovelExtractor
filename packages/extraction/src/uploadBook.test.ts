@@ -73,6 +73,31 @@ describe("uploadBook", () => {
     expect(result.chapters).toHaveLength(2);
   });
 
+  it("uses the next book id when a previous book asset directory already exists", async () => {
+    const { project, sourcePath } = await createProjectWithSource("novel.txt", "第一章 起始\n第一段");
+    await fs.mkdir(path.join(project.rootPath, "assets", "books", "book-1", "source"), { recursive: true });
+    await fs.writeFile(path.join(project.rootPath, "assets", "books", "book-1", "source", "original.txt"), "旧资产");
+    const repository = createFakeUploadedBookRepository();
+
+    const result = await uploadBook({
+      project,
+      sourcePath,
+      repository,
+      clock: { now: () => "2026-06-27T00:00:00.000Z" },
+      idGenerator: createSequentialIdGenerator(["book-1", "book-2", "source-2", "chapter-2"])
+    });
+
+    expect(result.book.id).toBe("book-2");
+    expect(result.book.sourceTextPath).toBe("assets/books/book-2/source/original.txt");
+    await expect(fs.readFile(path.join(project.rootPath, "assets", "books", "book-1", "source", "original.txt"), "utf8")).resolves.toBe(
+      "旧资产"
+    );
+    await expect(fs.readFile(path.join(project.rootPath, "assets", "books", "book-2", "source", "original.txt"), "utf8")).resolves.toBe(
+      "第一章 起始\n第一段"
+    );
+    expect(repository.savedUploads).toHaveLength(1);
+  });
+
   it("does not create book metadata or assets when decoding fails", async () => {
     const { project, sourcePath } = await createProjectWithSource(
       "broken.txt",
