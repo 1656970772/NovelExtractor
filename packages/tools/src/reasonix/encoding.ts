@@ -1,3 +1,5 @@
+import iconv from "iconv-lite";
+
 export enum FileEncodingKind {
   UTF8 = "UTF8",
   UTF8BOM = "UTF8BOM",
@@ -112,6 +114,26 @@ export function decodeFileBytes(bytes: Uint8Array, kind: FileEncodingKind): stri
   }
 }
 
+export function encodeFileText(text: string, kind: FileEncodingKind): Buffer {
+  switch (kind) {
+    case FileEncodingKind.UTF8BOM:
+      return Buffer.concat([Buffer.from(utf8BOM), Buffer.from(text, "utf8")]);
+    case FileEncodingKind.UTF16LE:
+      return encodeUTF16(text, "le", true);
+    case FileEncodingKind.UTF16BE:
+      return encodeUTF16(text, "be", true);
+    case FileEncodingKind.UTF16LENoBOM:
+      return encodeUTF16(text, "le", false);
+    case FileEncodingKind.UTF16BENoBOM:
+      return encodeUTF16(text, "be", false);
+    case FileEncodingKind.GB18030:
+      return iconv.encode(text, "gb18030");
+    case FileEncodingKind.UTF8:
+    case FileEncodingKind.LossyUTF8:
+      return Buffer.from(text, "utf8");
+  }
+}
+
 export function streamingDecoderName(kind: FileEncodingKind): "gb18030" | undefined {
   switch (kind) {
     case FileEncodingKind.GB18030:
@@ -160,4 +182,14 @@ function decodeUTF16(bytes: Uint8Array, endian: "le" | "be"): string {
     out += String.fromCharCode(codeUnit);
   }
   return out;
+}
+
+function encodeUTF16(text: string, endian: "le" | "be", withBom: boolean): Buffer {
+  const body = Buffer.from(text, "utf16le");
+  const out = Buffer.alloc(body.length);
+  for (let index = 0; index < body.length; index += 2) {
+    out[index] = endian === "le" ? body[index] : body[index + 1];
+    out[index + 1] = endian === "le" ? body[index + 1] : body[index];
+  }
+  return withBom ? Buffer.concat([Buffer.from(endian === "le" ? [0xff, 0xfe] : [0xfe, 0xff]), out]) : out;
 }

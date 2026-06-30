@@ -1,3 +1,5 @@
+import type { ReasonixDiffChange } from "./diff";
+
 export interface ReasonixToolDefinition {
   name: string;
   description(): string;
@@ -8,6 +10,12 @@ export interface ReasonixToolDefinition {
 export interface ReasonixTool extends ReasonixToolDefinition {
   execute(args: unknown): Promise<string> | string;
 }
+
+export interface ReasonixToolPreviewer {
+  preview(args: unknown): Promise<ReasonixDiffChange> | ReasonixDiffChange;
+}
+
+export type ReasonixPreviewableTool = ReasonixTool & ReasonixToolPreviewer;
 
 export interface ReasonixProviderToolSchema {
   name: string;

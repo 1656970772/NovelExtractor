@@ -56,6 +56,21 @@ describe("Reasonix file encoding parity", () => {
     expect(decodeFileBytes(Buffer.from([0xfe, 0xff, 0xd8, 0x00]), FileEncodingKind.UTF16BE)).toBe("�");
     expect(decodeFileBytes(Buffer.from([0xfe, 0xff, 0xdc, 0x00]), FileEncodingKind.UTF16BE)).toBe("�");
   });
+
+  it("encodes UTF-8, BOMs, UTF-16 variants, and GB18030 back to Reasonix bytes", async () => {
+    const { encodeFileText, FileEncodingKind } = await import("./encoding");
+
+    expect(encodeFileText("hello", FileEncodingKind.UTF8)).toEqual(Buffer.from("hello"));
+    expect(encodeFileText("hello", FileEncodingKind.LossyUTF8)).toEqual(Buffer.from("hello"));
+    expect(encodeFileText("hello", FileEncodingKind.UTF8BOM)).toEqual(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("hello")]));
+
+    expect(encodeFileText("写回UTF16\n", FileEncodingKind.UTF16LE)).toEqual(encodeUtf16("写回UTF16\n", "le", true));
+    expect(encodeFileText("写回UTF16\n", FileEncodingKind.UTF16BE)).toEqual(encodeUtf16("写回UTF16\n", "be", true));
+    expect(encodeFileText("写回UTF16\n", FileEncodingKind.UTF16LENoBOM)).toEqual(encodeUtf16("写回UTF16\n", "le", false));
+    expect(encodeFileText("写回UTF16\n", FileEncodingKind.UTF16BENoBOM)).toEqual(encodeUtf16("写回UTF16\n", "be", false));
+
+    expect(encodeFileText("覆盖GBK\n", FileEncodingKind.GB18030)).toEqual(Buffer.from([184, 178, 184, 199, 71, 66, 75, 10]));
+  });
 });
 
 function encodeUtf16(text: string, endian: "le" | "be", withBom: boolean): Buffer {

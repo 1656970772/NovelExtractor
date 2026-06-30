@@ -158,6 +158,9 @@ importers:
       '@novel-extractor/markdown':
         specifier: workspace:*
         version: link:../markdown
+      iconv-lite:
+        specifier: 0.7.2
+        version: 0.7.2
 
 packages:
 

@@ -3,3 +3,4 @@ export * from "./registry";
 export * from "./workspace";
 export * from "./encoding";
 export * from "./tools/readFileTool";
+export * from "./tools/writeFileTool";
