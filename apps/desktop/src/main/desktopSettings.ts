@@ -17,7 +17,10 @@ interface DesktopSettingsState {
   projectStorageDirectory?: string;
 }
 
-type DesktopSettingsHandlers = Pick<DesktopIpcHandlers, "settings:get" | "settings:save">;
+type DesktopSettingsHandlers = Pick<
+  DesktopIpcHandlers,
+  "settings:get" | "settings:save" | "settings:chooseProjectDirectory"
+>;
 
 function normalizeDirectory(value: string | undefined): string | undefined {
   const trimmedValue = value?.trim();
@@ -97,6 +100,7 @@ export function createFileDesktopSettingsStore(
 export function createDesktopSettingsIpcHandlers(options: {
   settingsStore: DesktopSettingsStore;
   onSettingsSaved?: (settings: DesktopSettingsDto) => void;
+  chooseProjectDirectory?: () => Promise<string | undefined>;
 }): DesktopSettingsHandlers {
   return {
     "settings:get": async () => options.settingsStore.getSettings(),
@@ -104,6 +108,7 @@ export function createDesktopSettingsIpcHandlers(options: {
       const settings = await options.settingsStore.saveSettings(input);
       options.onSettingsSaved?.(settings);
       return settings;
-    }
+    },
+    "settings:chooseProjectDirectory": async () => options.chooseProjectDirectory?.()
   };
 }

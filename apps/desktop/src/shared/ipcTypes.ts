@@ -9,6 +9,7 @@ export const DESKTOP_IPC_CHANNELS = [
   "project:list",
   "settings:get",
   "settings:save",
+  "settings:chooseProjectDirectory",
   "providers:save",
   "providers:list",
   "books:uploadTxt",
@@ -23,6 +24,7 @@ export const DESKTOP_IPC_CHANNELS = [
   "jobs:pause",
   "jobs:resume",
   "jobs:delete",
+  "jobs:readLog",
   "reports:preview"
 ] as const;
 
@@ -160,9 +162,16 @@ export interface JobDto {
   progressText: string;
   tokenText?: string;
   failureReason?: string;
+  logFilePath?: string;
   allowedActions: Array<"start" | "pause" | "resume" | "delete">;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface JobLogDto {
+  jobId: string;
+  logFilePath?: string;
+  content: string;
 }
 
 export interface DeleteJobDto {
@@ -175,6 +184,7 @@ export interface DesktopIpcRequestMap {
   "project:list": undefined;
   "settings:get": undefined;
   "settings:save": SaveDesktopSettingsDto;
+  "settings:chooseProjectDirectory": undefined;
   "providers:save": SaveProviderDto;
   "providers:list": undefined;
   "books:uploadTxt": UploadTxtDto;
@@ -189,6 +199,7 @@ export interface DesktopIpcRequestMap {
   "jobs:pause": { jobId: string };
   "jobs:resume": { jobId: string };
   "jobs:delete": DeleteJobDto;
+  "jobs:readLog": { jobId: string };
   "reports:preview": { reportId: string };
 }
 
@@ -197,6 +208,7 @@ export interface DesktopIpcResponseMap {
   "project:list": ProjectDto[];
   "settings:get": DesktopSettingsDto;
   "settings:save": DesktopSettingsDto;
+  "settings:chooseProjectDirectory": string | undefined;
   "providers:save": void;
   "providers:list": ProviderViewDto[];
   "books:uploadTxt": BookUploadResultDto;
@@ -211,6 +223,7 @@ export interface DesktopIpcResponseMap {
   "jobs:pause": JobDto | void;
   "jobs:resume": JobDto | void;
   "jobs:delete": void;
+  "jobs:readLog": JobLogDto;
   "reports:preview": SafeMarkdownPreviewDto;
 }
 

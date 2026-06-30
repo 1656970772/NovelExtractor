@@ -51,9 +51,8 @@ describe("ProviderConfigModal and UserMenu", () => {
   it("opens provider config from user disclosure without menu roles", async () => {
     const user = userEvent.setup();
     const onOpenProviderConfig = vi.fn();
-    const onOpenSettings = vi.fn();
 
-    render(<UserMenu onOpenProviderConfig={onOpenProviderConfig} onOpenSettings={onOpenSettings} />);
+    render(<UserMenu onOpenProviderConfig={onOpenProviderConfig} />);
 
     await user.click(screen.getByRole("button", { name: "用户菜单" }));
 
@@ -65,9 +64,8 @@ describe("ProviderConfigModal and UserMenu", () => {
     expect(onOpenProviderConfig).toHaveBeenCalledTimes(1);
 
     await user.click(screen.getByRole("button", { name: "用户菜单" }));
-    await user.click(screen.getByRole("button", { name: "设置" }));
 
-    expect(onOpenSettings).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "设置" })).not.toBeInTheDocument();
   });
 
   it("shows only the configured provider modes in a centered dialog", () => {

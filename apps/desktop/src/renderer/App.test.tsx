@@ -35,6 +35,7 @@ function installDesktopApiMock() {
       effectiveProjectStorageDirectory: "D:\\NovelExtractorProjects",
       projectStorageDirectory: "D:\\NovelExtractorProjects"
     }),
+    chooseProjectDirectory: vi.fn().mockResolvedValue("D:\\NovelExtractorProjects"),
     saveProvider: vi.fn().mockResolvedValue(undefined),
     listProviders: vi.fn().mockResolvedValue([]),
     uploadTxt: vi.fn(),
@@ -49,7 +50,8 @@ function installDesktopApiMock() {
     startJob: vi.fn(),
     pauseJob: vi.fn(),
     resumeJob: vi.fn(),
-    deleteJob: vi.fn()
+    deleteJob: vi.fn(),
+    readJobLog: vi.fn()
   };
 
   Object.defineProperty(window, "novelExtractor", {
@@ -126,12 +128,11 @@ describe("desktop workbench shell", () => {
     expect(screen.getByRole("heading", { name: "资产" })).toBeInTheDocument();
   });
 
-  it("opens storage settings from the user menu and saves the project directory", async () => {
+  it("opens storage settings from the left rail gear, picks a directory, and saves it", async () => {
     const user = userEvent.setup();
     const api = installDesktopApiMock();
     render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
 
-    await user.click(screen.getByRole("button", { name: "用户菜单" }));
     await user.click(screen.getByRole("button", { name: "设置" }));
 
     expect(await screen.findByRole("dialog", { name: "设置" })).toBeInTheDocument();
@@ -139,9 +140,14 @@ describe("desktop workbench shell", () => {
     expect(screen.getByLabelText("项目目录")).toHaveValue(
       "C:\\Users\\Administrator\\AppData\\Roaming\\@novel-extractor\\desktop\\projects"
     );
+    expect(screen.queryByText("默认")).not.toBeInTheDocument();
+    expect(screen.queryByText("当前")).not.toBeInTheDocument();
 
-    await user.clear(screen.getByLabelText("项目目录"));
-    await user.type(screen.getByLabelText("项目目录"), "D:\\NovelExtractorProjects");
+    await user.click(screen.getByRole("button", { name: "浏览" }));
+
+    expect(api.chooseProjectDirectory).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("项目目录")).toHaveValue("D:\\NovelExtractorProjects");
+
     await user.click(screen.getByRole("button", { name: "保存设置" }));
 
     expect(api.saveSettings).toHaveBeenCalledWith({
@@ -246,7 +252,22 @@ describe("desktop workbench shell", () => {
       createdAt: "2026-06-27T00:00:00.000Z",
       updatedAt: "2026-06-27T00:00:00.000Z"
     });
-    api.startJob.mockResolvedValue(undefined);
+    api.startJob.mockResolvedValue({
+      id: "job-1",
+      bookId: "book-1",
+      status: "completed",
+      progressText: "窗口 1/1",
+      tokenText: "Token 37 / 费用 0",
+      logFilePath: "runs/job-1/logs/20260630-153012.txt",
+      allowedActions: ["delete"],
+      createdAt: "2026-06-27T00:00:00.000Z",
+      updatedAt: "2026-06-27T00:00:00.000Z"
+    });
+    api.readJobLog.mockResolvedValue({
+      jobId: "job-1",
+      logFilePath: "runs/job-1/logs/20260630-153012.txt",
+      content: "[2026-06-30 15:30:12][任务信息] 任务 job-1\n[2026-06-30 15:30:13][大模型返回] 窗口完成。"
+    });
     render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
 
     await user.click(screen.getByRole("button", { name: "功能" }));
@@ -296,6 +317,9 @@ describe("desktop workbench shell", () => {
     await user.click(screen.getByRole("button", { name: "开始" }));
 
     expect(api.startJob).toHaveBeenCalledWith({ jobId: "job-1" });
+    await user.click(await screen.findByRole("button", { name: "展开日志" }));
+    expect(api.readJobLog).toHaveBeenCalledWith({ jobId: "job-1" });
+    expect(await screen.findByText(/任务 job-1/)).toBeInTheDocument();
   });
 
   it("loads project template selection, saves changes, and opens template management", async () => {

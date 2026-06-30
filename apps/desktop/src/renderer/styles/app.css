@@ -223,6 +223,7 @@ p {
   flex-direction: column;
   align-items: center;
   gap: 18px;
+  min-height: 0;
   padding: 12px 10px;
   border-right: 1px solid var(--app-color-border);
   background: var(--app-color-surface-paper);
@@ -253,6 +254,15 @@ p {
 .rail-nav__group + .rail-nav__group {
   padding-top: 12px;
   border-top: 1px solid var(--app-color-border);
+}
+
+.rail-nav__utility-group {
+  margin-top: auto;
+}
+
+.rail-nav__button--icon {
+  font-size: 19px;
+  line-height: 1;
 }
 
 .rail-nav__button[aria-pressed="true"],
@@ -676,7 +686,7 @@ p {
 .metadata-grid dt,
 .template-option p,
 .job-log-summary,
-.job-log-list {
+.job-log-path {
   color: var(--app-color-ink-muted);
   font-size: 12px;
 }
@@ -951,18 +961,42 @@ p {
   display: grid;
   gap: 6px;
   justify-items: start;
+  max-width: 100%;
 }
 
-.job-log-list {
+.job-log-content {
   display: grid;
   gap: 4px;
   width: 100%;
+  max-width: 100%;
+}
+
+.job-log-path {
+  margin: 0;
+  word-break: break-all;
+}
+
+.job-log-text {
+  width: min(100%, 58rem);
+  max-height: 320px;
+  overflow: auto;
   margin: 0;
   padding: 8px 10px;
-  list-style: none;
   border: 1px solid var(--app-color-border);
   border-radius: var(--app-radius-control);
   background: var(--app-color-surface);
+  color: var(--app-color-ink);
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.job-log-error {
+  margin: 0;
+  color: var(--app-color-danger);
+  font-size: 12px;
 }
 
 .delete-confirm__backdrop {
@@ -1051,7 +1085,7 @@ p {
 }
 
 .template-modal {
-  width: min(780px, 100%);
+  width: min(920px, 100%);
   overflow: hidden;
 }
 
@@ -1248,12 +1282,11 @@ p {
   gap: 12px;
 }
 
-.settings-modal__metadata {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.settings-modal__metadata dd {
-  overflow-wrap: anywhere;
+.settings-modal__path-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
 }
 
 .template-modal__editor-header {

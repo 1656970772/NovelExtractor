@@ -125,6 +125,7 @@ export interface WorkbenchNavigationConfig {
   topFunctionItems: MenuItemConfig[];
   railAssetItem: MenuItemConfig;
   railFunctionItems: MenuItemConfig[];
+  railUtilityItems: MenuItemConfig[];
   languageAction: MenuItemConfig;
   userAction: MenuItemConfig;
 }

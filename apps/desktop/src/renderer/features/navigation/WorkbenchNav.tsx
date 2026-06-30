@@ -8,6 +8,7 @@ export interface WorkbenchNavProps {
   activePage: WorkbenchPage;
   projectName: string;
   onPageChange: (page: WorkbenchPage) => void;
+  onOpenSettings?: () => void;
   userMenu?: ReactNode;
 }
 
@@ -15,15 +16,29 @@ interface WorkbenchNavigationItem extends MenuItemConfig {
   id: WorkbenchPage;
 }
 
+interface WorkbenchUtilityItem extends MenuItemConfig {
+  id: "desktop-settings";
+}
+
 function isWorkbenchNavigationItem(item: MenuItemConfig): item is WorkbenchNavigationItem {
   return item.id === "assets" || item.id === "extraction" || item.id === "graph";
 }
 
-function getRailLabel(item: WorkbenchNavigationItem): string {
+function isWorkbenchUtilityItem(item: MenuItemConfig): item is WorkbenchUtilityItem {
+  return item.id === "desktop-settings";
+}
+
+function getRailLabel(item: MenuItemConfig): string {
   return item.shortLabel ?? item.label.slice(0, 1);
 }
 
-export function WorkbenchNav({ activePage, projectName, onPageChange, userMenu }: WorkbenchNavProps) {
+export function WorkbenchNav({
+  activePage,
+  projectName,
+  onPageChange,
+  onOpenSettings,
+  userMenu
+}: WorkbenchNavProps) {
   const functionMenuId = useId();
   const [isFunctionMenuHovered, setFunctionMenuHovered] = useState(false);
   const [isFunctionMenuFocused, setFunctionMenuFocused] = useState(false);
@@ -35,6 +50,7 @@ export function WorkbenchNav({ activePage, projectName, onPageChange, userMenu }
     : null;
   const railFunctionItems =
     workbenchNavigation.railFunctionItems.filter(isWorkbenchNavigationItem);
+  const railUtilityItems = workbenchNavigation.railUtilityItems.filter(isWorkbenchUtilityItem);
   const isFunctionMenuOpen =
     isFunctionMenuHovered || isFunctionMenuFocused || isFunctionMenuPinnedOpen;
 
@@ -51,6 +67,12 @@ export function WorkbenchNav({ activePage, projectName, onPageChange, userMenu }
     if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) {
       setFunctionMenuFocused(false);
       setFunctionMenuPinnedOpen(false);
+    }
+  }
+
+  function handleUtilityItemClick(item: WorkbenchUtilityItem): void {
+    if (item.id === "desktop-settings") {
+      onOpenSettings?.();
     }
   }
 
@@ -89,6 +111,22 @@ export function WorkbenchNav({ activePage, projectName, onPageChange, userMenu }
             </button>
           ))}
         </div>
+        {railUtilityItems.length > 0 ? (
+          <div className="rail-nav__group rail-nav__utility-group" aria-label="底部工具入口">
+            {railUtilityItems.map((item) => (
+              <button
+                aria-label={item.label}
+                className="rail-nav__button rail-nav__button--icon"
+                key={item.id}
+                onClick={() => handleUtilityItemClick(item)}
+                title={item.label}
+                type="button"
+              >
+                {getRailLabel(item)}
+              </button>
+            ))}
+          </div>
+        ) : null}
       </aside>
       <div className="top-nav">
         <div className="top-nav__project">

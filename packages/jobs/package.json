@@ -9,7 +9,6 @@
     ".": "./src/index.ts",
     "./eventBus": "./src/eventBus.ts",
     "./jobRuntime": "./src/jobRuntime.ts",
-    "./runLogger": "./src/runLogger.ts",
     "./commands": "./src/commands.ts"
   },
   "scripts": {

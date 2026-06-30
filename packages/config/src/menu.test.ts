@@ -7,6 +7,7 @@ interface WorkbenchNavigationTestShape {
   topFunctionItems: MenuItemConfig[];
   railAssetItem: MenuItemConfig;
   railFunctionItems: MenuItemConfig[];
+  railUtilityItems: MenuItemConfig[];
   languageAction: MenuItemConfig;
   userAction: MenuItemConfig;
 }
@@ -35,11 +36,13 @@ describe("menu config", () => {
       "extraction",
       "graph"
     ]);
+    expect(workbenchNavigation?.railUtilityItems.map((item) => item.id)).toEqual([
+      "desktop-settings"
+    ]);
     expect(workbenchNavigation?.languageAction).toMatchObject({ id: "language", label: "语言" });
     expect(workbenchNavigation?.userAction).toMatchObject({ id: "user-menu", label: "用户菜单" });
     expect(getMenuConfig().userMenu.map((item) => item.id)).toEqual([
-      "provider-settings",
-      "desktop-settings"
+      "provider-settings"
     ]);
   });
 });

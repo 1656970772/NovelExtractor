@@ -575,6 +575,113 @@ describe("P0 desktop IPC handlers", () => {
     }
   });
 
+  it("writes and reads a per-task plain-text log for model prompts, responses, tools, and context", async () => {
+    const apiKey = "sk-text-log-secret";
+    let createdJobId = "";
+    const mockServer = await startMockOpenAiServer({
+      expectedApiKey: apiKey,
+      respond: ({ body, requestIndex }) => {
+        if (requestIndex === 0) {
+          return {
+            body: createChatCompletionResponse({
+              content: `准备查询窗口文本 ${apiKey}`,
+              toolCalls: [
+                createToolCall("call-grep-window", "grep", {
+                  path: `runs/${createdJobId}/windows/window-0001.txt`,
+                  pattern: "初入坊市"
+                })
+              ],
+              totalTokens: 31
+            })
+          };
+        }
+
+        if (requestIndex === 1) {
+          return {
+            body: createChatCompletionResponse({
+              content: "准备写入报告",
+              toolCalls: [
+                createToolCall("call-write-report", "write_file", {
+                  path: "丹药分析.md",
+                  content: "# 丹药分析\n\n窗口 grep 后写入的完整报告正文。"
+                })
+              ],
+              totalTokens: 29
+            })
+          };
+        }
+
+        return {
+          body: createChatCompletionResponse({ content: "窗口完成。", totalTokens: 23 })
+        };
+      }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture(apiKey);
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: mockServer.baseUrl
+        })
+      )
+    });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: utf8FixturePath,
+        displayName: "凡人修仙传.txt"
+      });
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 2,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      });
+      createdJobId = job.id;
+
+      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const projectRoot = path.join(tempRoot, "projects", "project-a");
+      const logFilePath = completedJob.logFilePath;
+
+      expect(logFilePath).toMatch(new RegExp(`^runs/${job.id}/logs/20260627-000000(?:-\\d{3})?\\.txt$`));
+      expect(existsSync(path.join(projectRoot, "runs", job.id, "tool-loop-traces"))).toBe(false);
+
+      const logText = await fs.readFile(path.join(projectRoot, logFilePath ?? ""), "utf8");
+      const readLog = await contract.invoke(handlers, "jobs:readLog", { jobId: job.id });
+
+      expect(readLog).toEqual({
+        jobId: job.id,
+        logFilePath,
+        content: logText
+      });
+      expect(logText.split("\n")[0]).toContain("[2026-06-27 00:00:00][任务信息] 任务");
+      expect(logText).toContain("[大模型请求][Prompt]");
+      expect(logText).toContain("role: system");
+      expect(logText).toContain("role: user");
+      expect(logText).toContain("窗口序号：1/1");
+      expect(logText).toContain("[大模型返回]");
+      expect(logText).toContain("准备查询窗口文本 ***");
+      expect(logText).toContain("call-grep-window");
+      expect(logText).toContain("[工具调用][grep]");
+      expect(logText).toContain("path: runs/");
+      expect(logText).toContain("pattern: 初入坊市");
+      expect(logText).toContain("[工具返回][grep]");
+      expect(logText).toContain("[上下文][窗口]");
+      expect(logText).toContain("章节范围");
+      expect(logText).not.toContain(apiKey);
+      expect(logText.trim()).not.toMatch(/^\{.*\}$/su);
+    } finally {
+      await mockServer.close();
+    }
+  });
+
   it("lets a later window read and edit an existing template report without duplicating its report asset", async () => {
     let uploadedBookId = "";
     const mockServer = await startMockOpenAiServer({
@@ -2028,28 +2135,15 @@ describe("P0 desktop IPC handlers", () => {
     }
   });
 
-  it("returns a recoverable error when grep targets the run root without leaking tool-loop traces", async () => {
+  it("returns a recoverable error when grep targets the run root without leaking run logs", async () => {
     const leakPattern = "TRACE_LEAK_MARKER";
     const leakPayload = "SHOULD_NOT_REACH_MODEL";
     const recoveredReport = "# 丹药分析\n\nrun 根目录 grep 被拒绝后改用选中报告。";
     let createdJobId = "";
     let grepReplayBody = "";
     const mockServer = await startMockOpenAiServer({
-      respond: async ({ body, requestIndex }) => {
+      respond: ({ body, requestIndex }) => {
         if (requestIndex === 0) {
-          const traceLeakPath = path.join(
-            tempRoot,
-            "projects",
-            "project-a",
-            "runs",
-            createdJobId,
-            "tool-loop-traces",
-            "window-0001",
-            "seed.jsonl"
-          );
-          await fs.mkdir(path.dirname(traceLeakPath), { recursive: true });
-          await fs.writeFile(traceLeakPath, `${leakPattern}: ${leakPayload}\n`, "utf8");
-
           return {
             body: createChatCompletionResponse({
               toolCalls: [
@@ -2125,41 +2219,22 @@ describe("P0 desktop IPC handlers", () => {
         ),
         "utf8"
       );
-      const tracePath = path.join(
-        tempRoot,
-        "projects",
-        "project-a",
-        "runs",
-        job.id,
-        "tool-loop-traces",
-        "window-0001",
-        "batch-0001.jsonl"
-      );
-      const traceText = await fs.readFile(tracePath, "utf8");
-      const traceEntries = traceText
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line) as Record<string, unknown>);
-      const grepResultTrace = traceEntries.find(
-        (entry) =>
-          entry.event === "tool_result" &&
-          entry.toolName === "grep" &&
-          entry.toolCallId === "call-grep-run-root"
-      );
+      const projectRoot = path.join(tempRoot, "projects", "project-a");
+      const logText = await fs.readFile(path.join(projectRoot, completedJob.logFilePath ?? ""), "utf8");
 
       expect(mockServer.requests).toHaveLength(3);
       expect(grepReplayBody).toContain("UNSAFE_PATH");
       expect(grepReplayBody).toContain("当前窗口文本");
       expect(grepReplayBody).toContain("reports");
       expect(grepReplayBody).not.toContain(leakPayload);
-      expect(grepReplayBody).not.toContain("tool-loop-traces");
-      expect(grepResultTrace).toMatchObject({
-        recoverableError: {
-          code: "UNSAFE_PATH",
-          message: "read_file/grep 路径不在当前窗口允许范围内。"
-        }
-      });
-      expect(traceText).not.toContain(leakPayload);
+      expect(grepReplayBody).not.toContain("/logs/");
+      expect(logText).toContain("[工具调用][grep]");
+      expect(logText).toContain("call-grep-run-root");
+      expect(logText).toContain("[工具返回][grep]");
+      expect(logText).toContain("UNSAFE_PATH");
+      expect(logText).toContain("read_file/grep 路径不在当前窗口允许范围内。");
+      expect(logText).not.toContain(leakPayload);
+      expect(existsSync(path.join(projectRoot, "runs", job.id, "tool-loop-traces"))).toBe(false);
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
@@ -2773,7 +2848,7 @@ describe("P0 desktop IPC handlers", () => {
     }
   });
 
-  it("writes tool-loop diagnostic traces with summarized arguments and recoverable errors", async () => {
+  it("writes task text logs with full tool arguments, full results, and recoverable errors", async () => {
     const apiKey = "sk-trace-secret";
     const recoveredReport = [
       "# 丹药分析",
@@ -2846,70 +2921,24 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const projectRoot = path.join(tempRoot, "projects", "project-a");
+      const logText = await fs.readFile(path.join(projectRoot, completedJob.logFilePath ?? ""), "utf8");
 
-      const tracePath = path.join(
-        tempRoot,
-        "projects",
-        "project-a",
-        "runs",
-        job.id,
-        "tool-loop-traces",
-        "window-0001",
-        "batch-0001.jsonl"
-      );
-      const traceText = await fs.readFile(tracePath, "utf8");
-      const traceEntries = traceText
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line) as Record<string, unknown>);
-      const firstToolTrace = traceEntries.find(
-        (entry) =>
-          entry.event === "tool_result" &&
-          entry.toolName === "write_file" &&
-          entry.toolCallId === "call-write-array-path-trace"
-      );
-
-      expect(firstToolTrace).toMatchObject({
-        jobId: job.id,
-        window: {
-          index: 1,
-          total: 1,
-          fileName: "window-0001.txt",
-          textPath: `runs/${job.id}/windows/window-0001.txt`
-        },
-        batch: {
-          index: 1,
-          total: 1,
-          templates: [{ outputFileName: "丹药分析.md" }]
-        },
-        roundIndex: 1,
-        toolName: "write_file",
-        toolCallId: "call-write-array-path-trace",
-        parameters: {
-          type: "object",
-          fields: {
-            path: { type: "array", length: 1 },
-            content: { type: "string", length: recoveredReport.length }
-          }
-        },
-        recoverableError: {
-          code: "INVALID_ARGUMENTS",
-          message: "path must be a string"
-        },
-        usageDelta: {
-          inputTokens: 11,
-          outputTokens: 20,
-          totalTokens: 31
-        }
-      });
-      expect(traceEntries.some((entry) => entry.event === "round_completion")).toBe(true);
-      expect(traceText).toContain("\"toolName\":\"write_file\"");
-      expect(traceText).toContain("\"path\":{\"type\":\"array\"");
-      expect(traceText).toContain("path must be a string");
-      expect(traceText).not.toContain(apiKey);
-      expect(traceText).not.toContain(recoveredReport);
-      expect(traceText).not.toContain("完整报告正文".repeat(20));
+      expect(logText).toContain("[上下文][窗口]");
+      expect(logText).toContain("窗口 1/1");
+      expect(logText).toContain(`runs/${job.id}/windows/window-0001.txt`);
+      expect(logText).toContain("[大模型返回]");
+      expect(logText).toContain("准备写入。");
+      expect(logText).toContain("[工具调用][write_file]");
+      expect(logText).toContain("call-write-array-path-trace");
+      expect(logText).toContain("path:");
+      expect(logText).toContain("- 丹药分析.md");
+      expect(logText).toContain("[工具返回][write_file]");
+      expect(logText).toContain("path must be a string");
+      expect(logText).toContain("完整报告正文".repeat(20));
+      expect(logText).not.toContain(apiKey);
+      expect(existsSync(path.join(projectRoot, "runs", job.id, "tool-loop-traces"))).toBe(false);
     } finally {
       await mockServer.close();
     }

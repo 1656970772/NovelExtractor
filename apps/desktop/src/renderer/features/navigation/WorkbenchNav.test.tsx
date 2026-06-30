@@ -15,6 +15,7 @@ describe("WorkbenchNav", () => {
         activePage="assets"
         projectName="仙途资料"
         onPageChange={vi.fn()}
+        onOpenSettings={vi.fn()}
       />
     );
 
@@ -34,6 +35,8 @@ describe("WorkbenchNav", () => {
 
     expect(screen.getByLabelText("资产入口")).toBeInTheDocument();
     expect(screen.getByLabelText("功能快捷入口")).toBeInTheDocument();
+    expect(screen.getByLabelText("底部工具入口")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "设置" })).toHaveTextContent("⚙");
     expect(screen.getByRole("button", { name: "语言" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "用户菜单" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "大模型配置" })).not.toBeInTheDocument();
@@ -46,6 +49,7 @@ describe("WorkbenchNav", () => {
         activePage="assets"
         projectName="仙途资料"
         onPageChange={vi.fn()}
+        onOpenSettings={vi.fn()}
       />
     );
 
@@ -72,6 +76,7 @@ describe("WorkbenchNav", () => {
         activePage="assets"
         projectName="仙途资料"
         onPageChange={onPageChange}
+        onOpenSettings={vi.fn()}
       />
     );
 
@@ -91,5 +96,23 @@ describe("WorkbenchNav", () => {
 
     expect(onPageChange).toHaveBeenNthCalledWith(1, "extraction");
     expect(onPageChange).toHaveBeenNthCalledWith(2, "graph");
+  });
+
+  it("opens settings from the left rail utility item", async () => {
+    const user = userEvent.setup();
+    const onOpenSettings = vi.fn();
+
+    render(
+      <WorkbenchNav
+        activePage="assets"
+        projectName="仙途资料"
+        onPageChange={vi.fn()}
+        onOpenSettings={onOpenSettings}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: "设置" }));
+
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
   });
 });
