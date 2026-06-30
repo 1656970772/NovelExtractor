@@ -1,7 +1,13 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getDefaultConfig, getProviderPresets } from "@novel-extractor/config";
 import type { Book, Clock, IdGenerator, Project, ReportAsset } from "@novel-extractor/domain";
+import {
+  buildTemplatePromptProfile,
+  renderTemplatePromptProfileCard,
+  type TemplatePromptProfile
+} from "@novel-extractor/extraction/templatePromptProfile";
 import {
   createJobRuntime,
   type FeeAmount,
@@ -31,11 +37,15 @@ import {
   isWriteTool,
   ToolExecutionError,
   type GrepResult,
+  type ToolNoUpdateSummary,
   type ToolWriteSummary
 } from "@novel-extractor/tools";
 import type { TemplateDto } from "../shared/ipcTypes";
+import { createBatchOutcomeTracker, type BatchOutcome, type BatchOutcomeTracker } from "./batchOutcomeTracker";
 import { redactSecrets, type MemoryCredentialStore } from "./credentials";
 import type { MainProviderStore } from "./providerStore";
+import { loadReportCoverageIndex, type ReportCoverageTarget } from "./reportCoverageIndex";
+import { planTemplateBatches } from "./templateBatchPlanner";
 import type { TaskTextLogger } from "./taskTextLogger";
 
 interface WindowRunJobInput {
@@ -44,6 +54,7 @@ interface WindowRunJobInput {
   input: {
     modelId: string;
     providerConfigId: string;
+    skipAlreadyExtracted: boolean;
     templateIds: string[];
   };
 }
@@ -81,8 +92,10 @@ const NO_TOOL_FEE: FeeAmount = {
 };
 const REPLACEMENT_TEXT_NOT_FOUND_MESSAGE = "Replacement text was not found";
 
-const TOOL_LOOP_DEFAULTS = getDefaultConfig().toolLoopDefaults;
-const MAX_FULL_TEMPLATES_PER_CALL = getDefaultConfig().extractionRuleDefaults.maxFullTemplatesPerCall;
+const DEFAULT_CONFIG = getDefaultConfig();
+const TOOL_LOOP_DEFAULTS = DEFAULT_CONFIG.toolLoopDefaults;
+const TEMPLATE_PROMPT_PROFILE_DEFAULTS = DEFAULT_CONFIG.templatePromptProfileDefaults;
+const COVERAGE_INDEX_DEFAULTS = DEFAULT_CONFIG.coverageIndexDefaults;
 const ENABLED_TOOL_NAMES = TOOL_LOOP_DEFAULTS.enabledToolNames;
 const ENABLED_TOOL_NAME_SET = new Set<string>(ENABLED_TOOL_NAMES);
 const TOOL_SCHEMAS = getEnabledTools([...ENABLED_TOOL_NAMES]).map(toLlmToolSchema);
@@ -95,12 +108,14 @@ const EMPTY_USAGE: TokenUsage = {
 };
 const TOOL_ARGUMENTS_MUST_BE_OBJECT_MESSAGE = "Tool arguments must be an object";
 const UNEXPECTED_TOOL_ARGUMENT_MESSAGE_PREFIX = "Unexpected argument: ";
+const MARK_NO_UPDATE_TOOL_NAME = "mark_no_update";
 const TOOL_SCHEMA_STRING_ARGUMENT_ERROR_MESSAGES = new Set([
   "path must be a string",
   "content must be a string",
   "pattern must be a string",
   "oldText must be a string",
-  "newText must be a string"
+  "newText must be a string",
+  "reason must be a string"
 ]);
 const FILE_LARGER_THAN_MAX_READ_BYTES_MESSAGE = "File is larger than maxReadBytes";
 const NO_TOOL_PROTOCOL_ERROR_MESSAGE =
@@ -108,6 +123,7 @@ const NO_TOOL_PROTOCOL_ERROR_MESSAGE =
 const NO_TOOL_PROTOCOL_CORRECTION_MESSAGE =
   "上一轮没有调用任何工具，也没有成功写入报告，最终文本不是精确的 NO_UPDATE。\n" +
   "如果本窗口没有可写入的新信息，必须精确返回 NO_UPDATE；如果有可写入内容，必须先调用写工具写入正式报告。";
+const BATCH_OUTCOME_CORRECTION_PREFIX = "上一轮尚未为本批次所有选中模板提供处理结果";
 const WRITE_FILE_EXISTING_REPORT_MESSAGE =
   "已有报告不能用 write_file 覆盖；需先 read_file/grep 查询已有内容，再使用 edit_file/multi_edit 追加或修改。";
 const WRITE_FILE_LOSSY_REWRITE_MESSAGE =
@@ -186,15 +202,6 @@ function addUsage(left: TokenUsage, right: TokenUsage): TokenUsage {
   };
 }
 
-function chunkTemplates(templates: TemplateDto[], maxFullTemplatesPerCall: number): TemplateDto[][] {
-  const batchSize = Math.max(1, Math.floor(maxFullTemplatesPerCall));
-  const batches: TemplateDto[][] = [];
-  for (let index = 0; index < templates.length; index += batchSize) {
-    batches.push(templates.slice(index, index + batchSize));
-  }
-  return batches;
-}
-
 function toLlmToolSchema(tool: ReturnType<typeof getEnabledTools>[number]): LlmToolSchema {
   return {
     type: "function",
@@ -210,26 +217,79 @@ function toPromptDate(timestamp: string): string {
   return timestamp.match(/^\d{4}-\d{2}-\d{2}/u)?.[0] ?? timestamp;
 }
 
+function createTemplatePromptHash(template: TemplateDto): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        outputFileName: template.fileName,
+        templateBody: template.body,
+        templateId: template.id,
+        templateName: template.name
+      })
+    )
+    .digest("hex");
+}
+
+function sha256Json(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function createRulesSemanticHash(templates: readonly TemplateDto[]): string {
+  return sha256Json({
+    toolLoopSystemInstruction: TOOL_LOOP_DEFAULTS.systemInstruction,
+    toolLoopWindowInstructionLines: TOOL_LOOP_DEFAULTS.windowInstructionLines,
+    templateProfileCompressionVersion: TEMPLATE_PROMPT_PROFILE_DEFAULTS.compressionVersion,
+    templates: templates.map((template) => ({
+      templateId: template.id,
+      outputFileName: template.fileName,
+      templateHash: createTemplatePromptHash(template)
+    }))
+  });
+}
+
+function createCoverageTarget(input: {
+  artifacts: WindowRunArtifacts;
+  manifestWindow: RuntimeWindowManifestWindow;
+  rulesSemanticHash: string;
+  template: TemplateDto;
+}): ReportCoverageTarget {
+  return {
+    bookId: input.artifacts.book.id,
+    templateId: input.template.id,
+    outputFileName: input.template.fileName,
+    templateHash: createTemplatePromptHash(input.template),
+    windowHash: input.manifestWindow.windowHash,
+    rulesSemanticHash: input.rulesSemanticHash,
+    submittedChapterRange: input.manifestWindow.submittedChapterRange
+  };
+}
+
+function buildTemplatePromptProfiles(templates: readonly TemplateDto[]): TemplatePromptProfile[] {
+  return templates.map((template) =>
+    buildTemplatePromptProfile({
+      defaults: TEMPLATE_PROMPT_PROFILE_DEFAULTS,
+      template: {
+        id: template.id,
+        name: template.name,
+        fileName: template.fileName,
+        body: template.body
+      },
+      templateHash: createTemplatePromptHash(template)
+    })
+  );
+}
+
 function buildWindowPrompt(input: {
   artifacts: WindowRunArtifacts;
   currentDate: string;
   manifestWindow: RuntimeWindowManifestWindow;
+  templatePromptProfiles: readonly TemplatePromptProfile[];
   totalWindowCount: number;
   windowText: string;
 }): string {
-  const { artifacts, currentDate, manifestWindow, totalWindowCount, windowText } = input;
+  const { artifacts, currentDate, manifestWindow, templatePromptProfiles, totalWindowCount, windowText } = input;
   const windowNumber = manifestWindow.index + 1;
-  const templateSection = artifacts.templates
-    .map((template) =>
-      [
-        `### ${template.name}`,
-        `- templateId: ${template.id}`,
-        `- outputFileName: ${template.fileName}`,
-        "",
-        template.body.trim()
-      ].join("\n")
-    )
-    .join("\n\n");
+  const templateSection = templatePromptProfiles.map(renderTemplatePromptProfileCard).join("\n\n");
 
   return [
     `小说：${artifacts.book.displayName}`,
@@ -247,7 +307,7 @@ function buildWindowPrompt(input: {
     "请根据当前窗口文本和选中模板抽取信息，并使用文件工具写入或更新正式模板 Markdown。",
     ...TOOL_LOOP_DEFAULTS.windowInstructionLines,
     "",
-    "## 选中模板",
+    "## 选中模板 Prompt Profile",
     templateSection,
     "",
     "## 当前窗口文本",
@@ -379,6 +439,15 @@ function isToolWriteSummary(result: unknown): result is ToolWriteSummary {
     (result.operation === "write_file" ||
       result.operation === "edit_file" ||
       result.operation === "multi_edit")
+  );
+}
+
+function isToolNoUpdateSummary(result: unknown): result is ToolNoUpdateSummary {
+  return (
+    isPlainRecord(result) &&
+    typeof result.path === "string" &&
+    result.operation === MARK_NO_UPDATE_TOOL_NAME &&
+    typeof result.reason === "string"
   );
 }
 
@@ -517,7 +586,7 @@ function normalizeWriteToolExecutionArguments(input: {
   artifacts: WindowRunArtifacts;
   toolCall: ChatCompletionRequestToolCall;
 }): unknown {
-  if (!isWriteTool(input.toolCall.name)) {
+  if (!isWriteTool(input.toolCall.name) && input.toolCall.name !== MARK_NO_UPDATE_TOOL_NAME) {
     return input.toolCall.arguments;
   }
 
@@ -680,6 +749,24 @@ async function validateToolCallBeforeExecution(input: {
 
   if (!ENABLED_TOOL_NAME_SET.has(toolCall.name)) {
     throw new Error(`Tool is not enabled: ${toolCall.name}`);
+  }
+
+  if (toolCall.name === MARK_NO_UPDATE_TOOL_NAME) {
+    const pathArgument = getToolPathArgument(toolCall.arguments);
+    if (pathArgument === undefined) {
+      return;
+    }
+
+    if (containsKnownSecret(pathArgument, input.secrets)) {
+      throw new Error(`工具 ${toolCall.name} 的 path 包含已知 secret，已拒绝执行。`);
+    }
+
+    if (!input.allowedOutputFileNames.has(pathArgument)) {
+      throw new Error(
+        `工具 ${toolCall.name} 的 path 必须属于本轮选中模板 outputFileName：${redactSecrets(pathArgument, input.secrets)}`
+      );
+    }
+    return;
   }
 
   if (!isWriteTool(toolCall.name)) {
@@ -983,6 +1070,38 @@ function shouldRecordSuccessfulReportQuery(input: {
   );
 }
 
+function createBatchOutcomeCorrectionMessage(tracker: BatchOutcomeTracker): string {
+  const missingOutputs = tracker.missingOutputFileNames().join("、");
+  return [
+    `上一轮尚未为本批次所有选中模板提供处理结果，缺少 outputFileName：${missingOutputs}。`,
+    "下一轮只处理上述缺失 outputFileName；已完成处理结果的输出文件不要继续读取、编辑或重写。",
+    "请对每个缺失 outputFileName 调用 write_file/edit_file/multi_edit 写入正式报告，或调用 mark_no_update 标记本窗口无新增信息。",
+    "如果缺失模板没有当前窗口明确证据，立即调用 mark_no_update；不要为了无新增模板继续查询或修改其他报告。",
+    "如果本批所有模板都没有可写入的新信息，最终文本必须严格返回 NO_UPDATE。"
+  ].join("\n");
+}
+
+function replaceBatchOutcomeCorrectionMessage(
+  messages: ChatCompletionMessage[],
+  correctionMessage: string
+): void {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (
+      message.role === "user" &&
+      typeof message.content === "string" &&
+      message.content.startsWith(BATCH_OUTCOME_CORRECTION_PREFIX)
+    ) {
+      messages.splice(index, 1);
+    }
+  }
+
+  messages.push({
+    role: "user",
+    content: correctionMessage
+  });
+}
+
 export function createWindowRunService(options: WindowRunServiceOptions): WindowRunService {
   const llmCredentialStore: LlmCredentialStore = {
     async resolveApiKey(ref) {
@@ -1043,16 +1162,23 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
     providerId: string;
     totalWindowCount: number;
     windowText: string;
-  }): Promise<{ content: string; usage: TokenUsage }> {
+  }): Promise<{ content: string; outcomes: BatchOutcome[]; usage: TokenUsage }> {
     const reportsRoot = toReportsRoot(input.artifacts);
     await fs.mkdir(reportsRoot, { recursive: true });
 
     const secrets = await getReportRedactionSecrets(input.job.input.providerConfigId);
     options.taskLogger?.setSecrets(secrets);
     const allowedOutputFileNames = new Set(input.artifacts.templates.map((template) => template.fileName));
+    const outcomeTracker = createBatchOutcomeTracker(
+      input.artifacts.templates.map((template) => ({
+        templateId: template.id,
+        templateName: template.name,
+        outputFileName: template.fileName
+      }))
+    );
+    const templatePromptProfiles = buildTemplatePromptProfiles(input.artifacts.templates);
     const queriedReportFileNames = new Set<string>();
     const writtenReportFileNames = new Set<string>();
-    let hasSuccessfulWrite = false;
     const messages: ChatCompletionMessage[] = [
       {
         role: "system",
@@ -1064,6 +1190,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
           artifacts: input.artifacts,
           currentDate: toPromptDate(options.clock.now()),
           manifestWindow: input.manifestWindow,
+          templatePromptProfiles,
           totalWindowCount: input.totalWindowCount,
           windowText: input.windowText
         })
@@ -1086,6 +1213,18 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
           模板ID: template.id,
           模板名称: template.name,
           输出文件: template.fileName
+        })),
+        模板Prompt压缩: templatePromptProfiles.map((profile) => ({
+          模板ID: profile.templateId,
+          模板名称: profile.templateName,
+          输出文件: profile.outputFileName,
+          模板Hash: profile.templateHash,
+          压缩版本: profile.compressionVersion,
+          原始字符数: profile.originalChars,
+          卡片字符数: profile.profileChars,
+          压缩率: Number(profile.compressionRatio.toFixed(4)),
+          是否回退: profile.fallback,
+          回退原因: profile.fallbackReason
         }))
       });
 
@@ -1115,25 +1254,43 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         });
 
         if (completion.toolCalls.length === 0) {
-          if (completion.content.trim() !== "NO_UPDATE" && !hasSuccessfulWrite) {
+          const completionText = completion.content.trim();
+          if (completionText === "NO_UPDATE" && outcomeTracker.outcomes().length === 0) {
+            outcomeTracker.recordBatchNoUpdate("NO_UPDATE");
+          }
+
+          if (!outcomeTracker.isComplete()) {
             if (roundIndex + 1 >= TOOL_LOOP_DEFAULTS.maxRounds) {
               throw new Error(NO_TOOL_PROTOCOL_ERROR_MESSAGE);
             }
 
-            await options.taskLogger?.append(["上下文", "重试"], NO_TOOL_PROTOCOL_CORRECTION_MESSAGE);
+            const correctionMessage =
+              outcomeTracker.outcomes().length === 0 && completionText !== "NO_UPDATE"
+                ? NO_TOOL_PROTOCOL_CORRECTION_MESSAGE
+                : createBatchOutcomeCorrectionMessage(outcomeTracker);
+            await options.taskLogger?.append(["上下文", "重试"], correctionMessage);
             messages.push({
               role: "assistant",
               content: redactSecrets(completion.content, secrets)
             });
-            messages.push({
-              role: "user",
-              content: NO_TOOL_PROTOCOL_CORRECTION_MESSAGE
-            });
+            if (correctionMessage === NO_TOOL_PROTOCOL_CORRECTION_MESSAGE) {
+              messages.push({
+                role: "user",
+                content: correctionMessage
+              });
+            } else {
+              replaceBatchOutcomeCorrectionMessage(messages, correctionMessage);
+            }
             continue;
           }
 
+          await options.taskLogger?.append(["上下文", "批次结果"], {
+            批次: `${input.batchIndex + 1}/${input.batchTotal}`,
+            处理结果: outcomeTracker.outcomes()
+          });
           return {
             content: redactSecrets(completion.content, secrets),
+            outcomes: outcomeTracker.outcomes(),
             usage
           };
         }
@@ -1153,17 +1310,18 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
               arguments: toToolCallArguments(normalizedReadExecutionArguments)
             }
           });
+          const normalizesOutputPath = isWriteTool(toolCall.name) || toolCall.name === MARK_NO_UPDATE_TOOL_NAME;
           const executionArguments = redactWritableToolArguments(toolCall.name, executionSourceArguments, secrets);
           const replaySourceArguments = redactWritableToolArguments(
             toolCall.name,
-            isWriteTool(toolCall.name) ? executionSourceArguments : toolCall.arguments,
+            normalizesOutputPath ? executionSourceArguments : toolCall.arguments,
             secrets
           );
           const replayArguments = redactJsonValue(replaySourceArguments, secrets);
 
           return {
             ...toolCall,
-            arguments: isWriteTool(toolCall.name) ? toToolCallArguments(executionSourceArguments) : toolCall.arguments,
+            arguments: normalizesOutputPath ? toToolCallArguments(executionSourceArguments) : toolCall.arguments,
             executionArguments,
             replayArguments: toToolCallArguments(replayArguments)
           };
@@ -1279,7 +1437,15 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
               writtenReportFileNames,
               toolResult
             });
-            hasSuccessfulWrite = true;
+            outcomeTracker.recordWritten(toolResult.path);
+          }
+
+          if (toolCall.name === MARK_NO_UPDATE_TOOL_NAME && !returnedRecoverableToolError) {
+            if (!isToolNoUpdateSummary(toolResult)) {
+              throw new Error(`工具 ${toolCall.name} 未返回无更新摘要`);
+            }
+
+            outcomeTracker.recordNoUpdate(toolResult.path, toolResult.reason);
           }
 
           messages.push({
@@ -1289,11 +1455,26 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             content: stringifyToolResult(toolResult, secrets)
           });
         }
+
+        if (
+          !outcomeTracker.isComplete() &&
+          outcomeTracker.outcomes().length > 0 &&
+          roundIndex + 1 < TOOL_LOOP_DEFAULTS.maxRounds
+        ) {
+          const correctionMessage = createBatchOutcomeCorrectionMessage(outcomeTracker);
+          await options.taskLogger?.append(["上下文", "重试"], correctionMessage);
+          replaceBatchOutcomeCorrectionMessage(messages, correctionMessage);
+        }
       }
 
-      if (hasSuccessfulWrite) {
+      if (outcomeTracker.isComplete()) {
+        await options.taskLogger?.append(["上下文", "批次结果"], {
+          批次: `${input.batchIndex + 1}/${input.batchTotal}`,
+          处理结果: outcomeTracker.outcomes()
+        });
         return {
-          content: "tool loop 达到最大轮次，已保留本窗口成功写入结果",
+          content: "tool loop 达到最大轮次，已保留本批次处理结果",
+          outcomes: outcomeTracker.outcomes(),
           usage
         };
       }
@@ -1365,15 +1546,71 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         try {
           secrets = await getReportRedactionSecrets(input.job.input.providerConfigId);
           const windowText = await readWindowText(input.artifacts.project, manifestWindow);
-          const templateBatches = chunkTemplates(input.artifacts.templates, MAX_FULL_TEMPLATES_PER_CALL);
+          const coverageIndex = await loadReportCoverageIndex({
+            projectRoot: input.artifacts.project.rootPath,
+            relativePath: COVERAGE_INDEX_DEFAULTS.relativePath,
+            corruptionStrategy: COVERAGE_INDEX_DEFAULTS.corruptionStrategy
+          });
+          const coverageTargets = input.artifacts.templates.map((template) => ({
+            template,
+            target: createCoverageTarget({
+              artifacts: input.artifacts,
+              manifestWindow,
+              rulesSemanticHash: createRulesSemanticHash([template]),
+              template
+            })
+          }));
+          const skippedCoverageTargets =
+            input.job.input.skipAlreadyExtracted
+              ? coverageTargets.filter(({ target }) => coverageIndex.isCovered(target))
+              : [];
+          const skippedOutputFileNames = new Set(
+            skippedCoverageTargets.map(({ template }) => template.fileName)
+          );
+          const templatesToProcess = input.artifacts.templates.filter(
+            (template) => !skippedOutputFileNames.has(template.fileName)
+          );
+
+          await options.taskLogger?.append(["上下文", "覆盖索引"], {
+            索引路径: COVERAGE_INDEX_DEFAULTS.relativePath,
+            跳过已提取: input.job.input.skipAlreadyExtracted,
+            命中模板: skippedCoverageTargets.map(({ template }) => ({
+              模板ID: template.id,
+              模板名称: template.name,
+              输出文件: template.fileName
+            })),
+            待处理模板: templatesToProcess.map((template) => ({
+              模板ID: template.id,
+              模板名称: template.name,
+              输出文件: template.fileName
+            }))
+          });
+
+          if (templatesToProcess.length === 0) {
+            return {
+              content: "skipped_covered",
+              usage: { ...EMPTY_USAGE },
+              fee: NO_TOOL_FEE,
+              toolCalls: []
+            };
+          }
+
+          const templateBatches = planTemplateBatches({
+            templates: templatesToProcess,
+            maxTemplatesPerCall: getDefaultConfig().extractionRuleDefaults.maxFullTemplatesPerCall
+          });
+          const templatesByOutputFileName = new Map(
+            templatesToProcess.map((template) => [template.fileName, template])
+          );
           const contentParts: string[] = [];
           let usage = { ...EMPTY_USAGE };
+          let coverageRecordCount = 0;
 
           for (const [templateBatchIndex, templateBatch] of templateBatches.entries()) {
             const result = await executeWindowToolLoop({
               artifacts: {
                 ...input.artifacts,
-                templates: templateBatch
+                templates: templateBatch.templates
               },
               batchIndex: templateBatchIndex,
               batchTotal: templateBatches.length,
@@ -1387,6 +1624,37 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             });
             usage = addUsage(usage, result.usage);
             contentParts.push(result.content);
+
+            for (const outcome of result.outcomes) {
+              if (outcome.status !== "written" && outcome.status !== "no_update") {
+                continue;
+              }
+
+              const template = templatesByOutputFileName.get(outcome.outputFileName);
+              if (!template) {
+                continue;
+              }
+
+              coverageIndex.recordCovered({
+                ...createCoverageTarget({
+                  artifacts: input.artifacts,
+                  manifestWindow,
+                  rulesSemanticHash: createRulesSemanticHash([template]),
+                  template
+                }),
+                status: outcome.status,
+                updatedAt: options.clock.now()
+              });
+              coverageRecordCount += 1;
+            }
+          }
+
+          if (coverageRecordCount > 0) {
+            await coverageIndex.save();
+            await options.taskLogger?.append(["上下文", "覆盖索引更新"], {
+              索引路径: COVERAGE_INDEX_DEFAULTS.relativePath,
+              新增或更新记录数: coverageRecordCount
+            });
           }
 
           return {

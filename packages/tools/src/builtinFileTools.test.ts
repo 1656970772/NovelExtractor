@@ -2,7 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { executeBuiltinFileTool, ToolExecutionError, type ToolWriteSummary } from "./builtinFileTools";
+import {
+  executeBuiltinFileTool,
+  ToolExecutionError,
+  type ToolNoUpdateSummary,
+  type ToolWriteSummary
+} from "./builtinFileTools";
 
 function makeContext() {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "novel-tools-"));
@@ -143,6 +148,22 @@ describe("builtin file tools", () => {
       operation: "multi_edit"
     });
     expect(fs.readFileSync(path.join(context.reportsRoot, "人物.md"), "utf8")).toBe("# 人物小传\n\n韩立：主角，谨慎\n");
+  });
+
+  it("records mark_no_update outcomes without creating or editing report files", async () => {
+    const context = makeContext();
+    const summary = (await executeBuiltinFileTool(
+      "mark_no_update",
+      { path: "人物.md", reason: "当前窗口没有新增人物信息。" },
+      context
+    )) as ToolNoUpdateSummary;
+
+    expect(summary).toEqual({
+      path: "人物.md",
+      operation: "mark_no_update",
+      reason: "当前窗口没有新增人物信息。"
+    });
+    expect(fs.existsSync(path.join(context.reportsRoot, "人物.md"))).toBe(false);
   });
 
   it("rejects write tools when reports root resolves outside project root", async () => {

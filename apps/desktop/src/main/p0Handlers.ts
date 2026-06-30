@@ -408,12 +408,43 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     return { projectId, templateIds };
   }
 
-  async function resolveJobTemplates(job: P0JobRecord): Promise<TemplateDto[]> {
-    const book = requireBook(job.bookId);
+  function normalizeTemplateOutputFileNameForUniqueness(fileName: string): string {
+    return fileName.trim().replace(/\\/g, "/").toLowerCase();
+  }
+
+  function assertUniqueTemplateOutputFileNames(templates: readonly TemplateDto[]): void {
+    const templatesByOutput = new Map<string, TemplateDto[]>();
+
+    for (const template of templates) {
+      const normalizedOutputFileName = normalizeTemplateOutputFileNameForUniqueness(template.fileName);
+      templatesByOutput.set(normalizedOutputFileName, [
+        ...(templatesByOutput.get(normalizedOutputFileName) ?? []),
+        template
+      ]);
+    }
+
+    const duplicateGroups = [...templatesByOutput.values()].filter((group) => group.length > 1);
+    if (duplicateGroups.length === 0) {
+      return;
+    }
+
+    const duplicateDescriptions = duplicateGroups.map((group) => {
+      const outputFileName = group[0].fileName;
+      const templateNames = group.map((template) => template.name).join("、");
+      return `${outputFileName}（${templateNames}）`;
+    });
+
+    throw new Error(`模板输出文件名不能重复：${duplicateDescriptions.join("；")}`);
+  }
+
+  async function resolveTemplatesForProject(
+    projectId: string,
+    templateIds: readonly string[]
+  ): Promise<TemplateDto[]> {
     const templatesById = new Map(
-      (await listTemplatesForProject(book.projectId)).map((template) => [template.id, template])
+      (await listTemplatesForProject(projectId)).map((template) => [template.id, template])
     );
-    const templates = job.input.templateIds
+    const templates = templateIds
       .map((templateId) => templatesById.get(templateId))
       .filter((template): template is TemplateDto => Boolean(template));
 
@@ -421,7 +452,13 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       throw new Error("请选择模板");
     }
 
+    assertUniqueTemplateOutputFileNames(templates);
     return templates;
+  }
+
+  async function resolveJobTemplates(job: P0JobRecord): Promise<TemplateDto[]> {
+    const book = requireBook(job.bookId);
+    return resolveTemplatesForProject(book.projectId, job.input.templateIds);
   }
 
   function createTemplateGroupId(prefix: string, value: string): string {
@@ -1026,6 +1063,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       const normalizedInput = normalizeCreateJobInput(input);
       const book = requireBook(normalizedInput.bookId);
       const project = await ensureProject(book.projectId);
+      await resolveTemplatesForProject(book.projectId, normalizedInput.templateIds);
       const now = clock.now();
       const job: P0JobRecord = {
         id: await createUniqueJobId(project.rootPath),

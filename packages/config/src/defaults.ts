@@ -144,14 +144,19 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
       ]
     },
     templateGroupFallbackStrategy: "by-output-file",
-    maxFullTemplatesPerCall: 1
+    templateBatching: {
+      maxTemplatesPerCall: 4,
+      promptBudgetChars: 48000,
+      nonMergeableTemplateTags: []
+    },
+    maxFullTemplatesPerCall: 4
   },
   rawWindowReportDefaults: {
     fileNamePrefix: "raw-window",
     displayNamePrefix: "原始窗口"
   },
   toolLoopDefaults: {
-    enabledToolNames: ["read_file", "grep", "write_file", "edit_file", "multi_edit"],
+    enabledToolNames: ["read_file", "grep", "write_file", "edit_file", "multi_edit", "mark_no_update"],
     maxRounds: 12,
     systemInstruction:
       "你是小说资料抽取助手。必须通过文件工具写入或更新正式模板 Markdown；如果本窗口没有任何可写入的新信息，最终文本必须严格返回 NO_UPDATE。最终文本只简短说明本窗口处理结果，不要放完整报告正文。",
@@ -167,8 +172,63 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
       PUBLIC_REPORT_METADATA_RULE,
       TEMPLATE_EXAMPLE_EVIDENCE_RULE,
       "更新既有报告前，必须先在本轮使用 read_file 或 grep 查询同一个报告文件。",
+      "如果本批次只有部分模板无新增信息，必须对这些模板调用 mark_no_update，并继续为其他模板写入或更新报告。",
       "如果当前窗口没有可写入的新信息，且未执行写工具，最终文本必须严格返回 NO_UPDATE。"
     ]
+  },
+  templatePromptProfileDefaults: {
+    compressionVersion: "template-profile-v1",
+    exampleSectionPatterns: ["^#{1,6}\\s*示例", "^#{1,6}\\s*案例", "^示例[:：]", "^案例\\d*[:：]"],
+    referenceSectionPatterns: ["^#{1,6}\\s*参考", "^#{1,6}\\s*资料来源", "^参考范围[:：]"],
+    placeholderPatterns: ["^状态[:：]\\s*模板", "待补充", "原文未说明", "\\{\\{[^}]+\\}\\}", "<[^>]+>"],
+    alwaysKeepHeadingPatterns: ["^#{1,6}\\s*字段", "^#{1,6}\\s*输出", "^#{1,6}\\s*禁止", "^#{1,6}\\s*规则"],
+    minProfileChars: 120
+  },
+  batchOutcomeDefaults: {
+    outcomeKeyMode: "outputFileName",
+    noUpdateToolName: "mark_no_update",
+    missingOutcomeCorrectionTemplate:
+      "上一轮尚未为本批次所有选中模板提供处理结果，缺少 outputFileName：{{missingOutputFileNames}}。",
+    maxCorrectionRounds: 3
+  },
+  coverageIndexDefaults: {
+    relativePath: "metadata/coverage/coverage-index.json",
+    corruptionStrategy: "fail",
+    keyFields: [
+      "bookId",
+      "templateId",
+      "outputFileName",
+      "templateHash",
+      "windowHash",
+      "rulesSemanticHash",
+      "submittedChapterRange"
+    ]
+  },
+  reportPathPolicyDefaults: {
+    mode: "flat",
+    reportsAlias: "reports",
+    allowSubdirectories: false
+  },
+  ruleLayerDefaults: {
+    p0HardRules: [
+      NO_WHOLE_BOOK_PRIOR_KNOWLEDGE_RULE,
+      REPORT_METADATA_SOURCE_RULE,
+      PUBLIC_REPORT_METADATA_RULE
+    ],
+    qualityRules: [MATERIAL_RESOURCE_COVERAGE_RULE, TEMPLATE_EXAMPLE_EVIDENCE_RULE],
+    formatRules: [
+      "正式报告标题必须使用 outputFileName 去掉扩展名后的报告名。",
+      "正式报告不得复制模板状态、前置声明、示例或占位正文。"
+    ],
+    postWriteGuards: [
+      "正式报告不得包含 runs/job、assets/books、本机绝对路径或 window-0001 等内部运行标识。",
+      "正式报告不得包含状态：模板或状态：草案。"
+    ]
+  },
+  quantityPolicyDefaults: {
+    allowZeroWhenNoEvidence: true,
+    defaultMinItemsWhenEvidenceExists: 1,
+    evidenceScope: "current-window"
   },
   taskActions: {
     start: {

@@ -9,6 +9,7 @@ describe("tool policy", () => {
     expect(classifyToolEffects("write_file")).toBe("write");
     expect(classifyToolEffects("edit_file")).toBe("write");
     expect(classifyToolEffects("multi_edit")).toBe("write");
+    expect(classifyToolEffects("mark_no_update")).toBe("state");
   });
 
   it("offers helpers for runtime scheduling", () => {
@@ -16,6 +17,8 @@ describe("tool policy", () => {
     expect(isReadTool("write_file")).toBe(false);
     expect(isWriteTool("multi_edit")).toBe(true);
     expect(isWriteTool("read_file")).toBe(false);
+    expect(isReadTool("mark_no_update")).toBe(false);
+    expect(isWriteTool("mark_no_update")).toBe(false);
   });
 
   it("fails clearly for unknown tools", () => {

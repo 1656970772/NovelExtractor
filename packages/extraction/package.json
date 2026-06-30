@@ -13,7 +13,8 @@
     "./windowPlanner": "./src/windowPlanner.ts",
     "./templateRouter": "./src/templateRouter.ts",
     "./runtimeWindows": "./src/runtimeWindows.ts",
-    "./extractionRules": "./src/extractionRules.ts"
+    "./extractionRules": "./src/extractionRules.ts",
+    "./templatePromptProfile": "./src/templatePromptProfile.ts"
   },
   "scripts": {
     "test": "vitest run",

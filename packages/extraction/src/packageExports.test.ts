@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildTemplatePromptProfile as buildTemplatePromptProfileFromRoot,
   generateExtractionRules as generateExtractionRulesFromRoot,
   generateRuntimeWindows as generateRuntimeWindowsFromRoot
 } from "@novel-extractor/extraction";
 import { generateExtractionRules } from "@novel-extractor/extraction/extractionRules";
 import { generateRuntimeWindows } from "@novel-extractor/extraction/runtimeWindows";
+import { buildTemplatePromptProfile } from "@novel-extractor/extraction/templatePromptProfile";
 import { createTemplateSnapshots } from "@novel-extractor/extraction/templateRouter";
 import { planChapterWindows } from "@novel-extractor/extraction/windowPlanner";
 
@@ -40,8 +42,13 @@ describe("@novel-extractor/extraction package exports", () => {
     expect(typeof generateExtractionRules).toBe("function");
   });
 
+  it("exposes the template prompt profile subpath", () => {
+    expect(typeof buildTemplatePromptProfile).toBe("function");
+  });
+
   it("exposes new extraction services from the root entry", () => {
     expect(typeof generateRuntimeWindowsFromRoot).toBe("function");
     expect(typeof generateExtractionRulesFromRoot).toBe("function");
+    expect(typeof buildTemplatePromptProfileFromRoot).toBe("function");
   });
 });

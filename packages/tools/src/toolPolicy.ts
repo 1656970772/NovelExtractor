@@ -1,4 +1,4 @@
-export type ToolEffect = "read" | "write";
+export type ToolEffect = "read" | "write" | "state";
 
 const TOOL_EFFECTS = {
   ls: "read",
@@ -6,7 +6,8 @@ const TOOL_EFFECTS = {
   grep: "read",
   write_file: "write",
   edit_file: "write",
-  multi_edit: "write"
+  multi_edit: "write",
+  mark_no_update: "state"
 } as const;
 
 export type BuiltinToolName = keyof typeof TOOL_EFFECTS;
