@@ -36,6 +36,43 @@ export interface BuiltInTemplate {
 export interface ExtractionParameterDefaults {
   singleRunChapterCount: number;
   extractionChapterCount: number;
+  overlapChapterCount: number;
+}
+
+export interface RouteFailurePolicyConfig {
+  maxRetries: number;
+  fallbackStrategy: "none" | "semanticRuleFilter" | "matchAll";
+  fallbackSource: "runtimePolicySnapshot" | "rulesSnapshot";
+  onFallbackNoMatch: "no-update" | "blocked_for_user";
+}
+
+export interface ExtractionRuleSectionDefaults {
+  commonExtractionRules: string[];
+  writeRules: string[];
+  skipAlreadyExtractedRules: string[];
+}
+
+export type TemplateGroupFallbackStrategy = "one-template-per-group" | "by-output-file";
+
+export interface ExtractionRuleDefaults {
+  routeFailurePolicy: RouteFailurePolicyConfig;
+  ruleSections: ExtractionRuleSectionDefaults;
+  templateGroupFallbackStrategy: TemplateGroupFallbackStrategy;
+  maxFullTemplatesPerCall: number;
+}
+
+export interface RawWindowReportDefaults {
+  fileNamePrefix: string;
+  displayNamePrefix: string;
+}
+
+export type ToolLoopToolName = "read_file" | "grep" | "write_file" | "edit_file" | "multi_edit";
+
+export interface ToolLoopDefaults {
+  enabledToolNames: ToolLoopToolName[];
+  maxRounds: number;
+  systemInstruction: string;
+  windowInstructionLines: string[];
 }
 
 export interface ReportFileNameInput {
@@ -139,6 +176,9 @@ export interface NovelExtractorConfig {
   providerPresets: ProviderPreset[];
   builtInTemplates: BuiltInTemplate[];
   extractionParameterDefaults: ExtractionParameterDefaults;
+  extractionRuleDefaults: ExtractionRuleDefaults;
+  rawWindowReportDefaults: RawWindowReportDefaults;
+  toolLoopDefaults: ToolLoopDefaults;
   taskActions: TaskActionConfig;
   taskStatus: TaskStatusConfig;
   assetTypes: AssetTypeConfig[];

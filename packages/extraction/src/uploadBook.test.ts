@@ -49,6 +49,7 @@ describe("uploadBook", () => {
       projectId: project.id,
       displayName: "测试小说",
       sourceAssetId: "source-1",
+      sourceTextPath: "assets/books/book-1/source/original.txt",
       chapterCount: 2
     });
     expect(repository.savedUploads[0].chapters).toEqual([
@@ -68,6 +69,7 @@ describe("uploadBook", () => {
       }
     ]);
     expect(result.book.id).toBe("book-1");
+    expect(result.sourceRelativePath).toBe(result.book.sourceTextPath);
     expect(result.chapters).toHaveLength(2);
   });
 

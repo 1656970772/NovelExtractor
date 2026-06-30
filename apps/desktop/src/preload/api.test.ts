@@ -61,7 +61,9 @@ describe("preload desktop API", () => {
       providerConfigId: "provider-1",
       modelId: "model-1",
       singleRunChapterCount: 1,
-      extractionChapterCount: 2
+      extractionChapterCount: 2,
+      overlapChapterCount: 0,
+      skipAlreadyExtracted: true
     });
     await api.startJob({ jobId: "job-1" });
     await api.pauseJob({ jobId: "job-1" });

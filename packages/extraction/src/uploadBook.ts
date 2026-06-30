@@ -134,6 +134,7 @@ export async function uploadBook(input: UploadBookInput): Promise<UploadBookResu
     await fs.mkdir(chapterDirectory, { recursive: true });
 
     await copyFileExclusively(input.sourcePath, sourceDestination);
+    const sourceRelativePath = toSafeRelativePath(input.project.rootPath, sourceDestination);
 
     const chapters: Chapter[] = [];
     for (const { parsedChapter, path: chapterPath } of plannedChapterAssets) {
@@ -154,6 +155,7 @@ export async function uploadBook(input: UploadBookInput): Promise<UploadBookResu
         input.displayName ?? path.basename(input.sourcePath, path.extname(input.sourcePath))
       ),
       sourceAssetId,
+      sourceTextPath: sourceRelativePath,
       chapterCount: chapters.length,
       createdAt: now
     };
@@ -162,7 +164,7 @@ export async function uploadBook(input: UploadBookInput): Promise<UploadBookResu
 
     return {
       ...saved,
-      sourceRelativePath: toSafeRelativePath(input.project.rootPath, sourceDestination),
+      sourceRelativePath,
       encoding: decoded.encoding
     };
   } catch (error) {

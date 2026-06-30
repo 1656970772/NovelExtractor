@@ -11,7 +11,9 @@
     "./chapterParser": "./src/chapterParser.ts",
     "./uploadBook": "./src/uploadBook.ts",
     "./windowPlanner": "./src/windowPlanner.ts",
-    "./templateRouter": "./src/templateRouter.ts"
+    "./templateRouter": "./src/templateRouter.ts",
+    "./runtimeWindows": "./src/runtimeWindows.ts",
+    "./extractionRules": "./src/extractionRules.ts"
   },
   "scripts": {
     "test": "vitest run",

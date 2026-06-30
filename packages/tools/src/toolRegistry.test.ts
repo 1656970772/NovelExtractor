@@ -35,6 +35,13 @@ describe("P0 tool registry", () => {
     });
   });
 
+  it("describes write_file as creating new reports instead of overwriting existing reports", () => {
+    const [writeFileTool] = getEnabledTools(["write_file"]);
+
+    expect(writeFileTool.description).toContain("Create a new Markdown report file");
+    expect(writeFileTool.description).not.toContain("overwrite");
+  });
+
   it("fails clearly for unknown tool names", () => {
     expect(() => getEnabledTools(["read_file", "unknown_tool"])).toThrow(/Unknown tool: unknown_tool/u);
   });

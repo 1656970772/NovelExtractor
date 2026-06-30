@@ -196,6 +196,7 @@ describe("desktop workbench shell", () => {
       bookId: "book-1",
       displayName: "凡人修仙传",
       sourceAssetId: "asset-1",
+      sourceTextPath: "assets/books/book-1/source/original.txt",
       fileName: "凡人修仙传.txt",
       byteSize: 2048,
       encoding: "utf-8",
@@ -238,6 +239,10 @@ describe("desktop workbench shell", () => {
     await user.type(screen.getByRole("spinbutton", { name: "单次运行章节数" }), "4");
     await user.clear(screen.getByRole("spinbutton", { name: "提取章节窗口" }));
     await user.type(screen.getByRole("spinbutton", { name: "提取章节窗口" }), "12");
+    expect(screen.getByRole("checkbox", { name: "跳过已提取章节" })).toBeChecked();
+    await user.clear(screen.getByRole("spinbutton", { name: "重叠章节数" }));
+    await user.type(screen.getByRole("spinbutton", { name: "重叠章节数" }), "0");
+    await user.click(screen.getByRole("checkbox", { name: "跳过已提取章节" }));
     await user.click(screen.getByRole("button", { name: "创建任务" }));
 
     await waitFor(() => {
@@ -247,7 +252,9 @@ describe("desktop workbench shell", () => {
         providerConfigId: "provider-1",
         modelId: "model-a",
         singleRunChapterCount: 4,
-        extractionChapterCount: 12
+        extractionChapterCount: 12,
+        overlapChapterCount: 0,
+        skipAlreadyExtracted: false
       });
     });
     expect(await screen.findByText("待开始")).toBeInTheDocument();
@@ -375,6 +382,7 @@ describe("desktop workbench shell", () => {
       bookId: "book-1",
       displayName: "凡人修仙传",
       sourceAssetId: "asset-1",
+      sourceTextPath: "assets/books/book-1/source/original.txt",
       fileName: "凡人修仙传.txt",
       byteSize: 2048,
       encoding: "utf-8",
@@ -426,6 +434,7 @@ describe("desktop workbench shell", () => {
       bookId: "book-1",
       displayName: "凡人修仙传",
       sourceAssetId: "asset-1",
+      sourceTextPath: "assets/books/book-1/source/original.txt",
       fileName: "凡人修仙传.txt",
       byteSize: 2048,
       encoding: "utf-8",

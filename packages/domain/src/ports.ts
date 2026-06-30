@@ -11,7 +11,7 @@ export interface ProjectRepository {
 
 export interface BookRepository {
   createBook(
-    input: Pick<Book, "projectId" | "displayName" | "sourceAssetId" | "chapterCount">
+    input: Pick<Book, "projectId" | "displayName" | "sourceAssetId" | "sourceTextPath" | "chapterCount">
   ): Promise<Book>;
   listBooks(projectId: string): Promise<Book[]>;
   listChapters(bookId: string): Promise<Chapter[]>;

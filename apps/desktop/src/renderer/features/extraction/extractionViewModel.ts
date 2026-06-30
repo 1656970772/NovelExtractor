@@ -41,6 +41,8 @@ export interface ExtractionFormState {
   modelOptionId: string;
   singleRunChapterCount: number;
   extractionChapterCount: number;
+  overlapChapterCount: number;
+  skipAlreadyExtracted: boolean;
 }
 
 export interface ExtractionFormStateInput {
@@ -92,7 +94,9 @@ export function createExtractionFormState({
     templateIds: getInitialTemplateIds(templates, selectedTemplateIds),
     modelOptionId: models[0]?.id ?? "",
     singleRunChapterCount: defaults.singleRunChapterCount,
-    extractionChapterCount: defaults.extractionChapterCount
+    extractionChapterCount: defaults.extractionChapterCount,
+    overlapChapterCount: defaults.overlapChapterCount,
+    skipAlreadyExtracted: true
   };
 }
 
@@ -123,6 +127,10 @@ function toPositiveInteger(value: number): number {
   return Number.isFinite(value) ? Math.max(1, Math.trunc(value)) : 1;
 }
 
+function toNonNegativeInteger(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
+}
+
 export function buildCreateJobDto(
   state: ExtractionFormState,
   context: BuildCreateJobDtoContext
@@ -141,13 +149,25 @@ export function buildCreateJobDto(
     throw new Error("请选择模板");
   }
 
+  const singleRunChapterCount = toPositiveInteger(state.singleRunChapterCount);
+  const extractionChapterCount = Math.max(
+    singleRunChapterCount,
+    toPositiveInteger(state.extractionChapterCount)
+  );
+  const overlapChapterCount = Math.min(
+    singleRunChapterCount - 1,
+    toNonNegativeInteger(state.overlapChapterCount)
+  );
+
   return {
     bookId: state.bookId,
     templateIds: state.templateIds,
     providerConfigId: selectedModel.providerConfigId,
     modelId: selectedModel.modelId,
-    singleRunChapterCount: toPositiveInteger(state.singleRunChapterCount),
-    extractionChapterCount: toPositiveInteger(state.extractionChapterCount)
+    singleRunChapterCount,
+    extractionChapterCount,
+    overlapChapterCount,
+    skipAlreadyExtracted: state.skipAlreadyExtracted
   };
 }
 

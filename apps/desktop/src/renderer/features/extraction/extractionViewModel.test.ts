@@ -11,6 +11,7 @@ const book: BookUploadResultDto = {
   bookId: "book-1",
   displayName: "凡人修仙传",
   sourceAssetId: "asset-1",
+  sourceTextPath: "assets/books/book-1/source/original.txt",
   fileName: "凡人修仙传.txt",
   byteSize: 2048,
   encoding: "utf-8",
@@ -42,7 +43,8 @@ describe("extractionViewModel", () => {
       ],
       defaults: {
         singleRunChapterCount: 2,
-        extractionChapterCount: 8
+        extractionChapterCount: 8,
+        overlapChapterCount: 1
       }
     });
 
@@ -51,6 +53,8 @@ describe("extractionViewModel", () => {
     expect(state.templateIds).toEqual(["pill-analysis"]);
     expect(state.singleRunChapterCount).toBe(2);
     expect(state.extractionChapterCount).toBe(8);
+    expect(state.overlapChapterCount).toBe(1);
+    expect(state.skipAlreadyExtracted).toBe(true);
   });
 
   it("uses configured extraction parameter defaults when none are passed", () => {
@@ -58,16 +62,20 @@ describe("extractionViewModel", () => {
 
     expect(state.singleRunChapterCount).toBe(3);
     expect(state.extractionChapterCount).toBe(9);
+    expect(state.overlapChapterCount).toBe(1);
+    expect(state.skipAlreadyExtracted).toBe(true);
   });
 
-  it("builds a CreateJobDto without parsing display labels", () => {
+  it("builds a CreateJobDto with extraction window and ledger strategy parameters", () => {
     const dto = buildCreateJobDto(
       {
         bookId: "book-1",
         templateIds: ["pill-analysis"],
         modelOptionId: "provider-1:model-a",
         singleRunChapterCount: 4,
-        extractionChapterCount: 12
+        extractionChapterCount: 12,
+        overlapChapterCount: 0,
+        skipAlreadyExtracted: false
       },
       { models: [model] }
     );
@@ -78,8 +86,40 @@ describe("extractionViewModel", () => {
       providerConfigId: "provider-1",
       modelId: "model-a",
       singleRunChapterCount: 4,
-      extractionChapterCount: 12
+      extractionChapterCount: 12,
+      overlapChapterCount: 0,
+      skipAlreadyExtracted: false
     });
+  });
+
+  it("normalizes cross-field extraction parameters when building a CreateJobDto", () => {
+    const equalOverlapDto = buildCreateJobDto(
+      {
+        bookId: "book-1",
+        templateIds: ["pill-analysis"],
+        modelOptionId: "provider-1:model-a",
+        singleRunChapterCount: 3,
+        extractionChapterCount: 9,
+        overlapChapterCount: 3,
+        skipAlreadyExtracted: true
+      },
+      { models: [model] }
+    );
+    const shortExtractionDto = buildCreateJobDto(
+      {
+        bookId: "book-1",
+        templateIds: ["pill-analysis"],
+        modelOptionId: "provider-1:model-a",
+        singleRunChapterCount: 5,
+        extractionChapterCount: 3,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      },
+      { models: [model] }
+    );
+
+    expect(equalOverlapDto.overlapChapterCount).toBe(2);
+    expect(shortExtractionDto.extractionChapterCount).toBe(5);
   });
 
   it("formats uploaded byte size for compact metadata rows", () => {

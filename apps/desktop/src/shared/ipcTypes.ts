@@ -66,6 +66,7 @@ export interface BookUploadResultDto {
   bookId: string;
   displayName: string;
   sourceAssetId: string;
+  sourceTextPath: string;
   fileName: string;
   byteSize: number;
   encoding: "utf-8" | "utf-8-bom" | "gbk" | "cp936";
@@ -77,6 +78,7 @@ export interface ReportDto {
   bookId: string;
   fileName: string;
   displayName: string;
+  reportKind?: "raw-window" | "template-output";
   byteSize: number;
   createdAt: string;
   updatedAt: string;
@@ -135,6 +137,8 @@ export interface CreateJobDto {
   modelId: string;
   singleRunChapterCount: number;
   extractionChapterCount: number;
+  overlapChapterCount: number;
+  skipAlreadyExtracted: boolean;
 }
 
 export interface JobDto {

@@ -15,8 +15,10 @@
     "@novel-extractor/config": "workspace:*",
     "@novel-extractor/domain": "workspace:*",
     "@novel-extractor/extraction": "workspace:*",
+    "@novel-extractor/jobs": "workspace:*",
     "@novel-extractor/llm": "workspace:*",
     "@novel-extractor/markdown": "workspace:*",
+    "@novel-extractor/tools": "workspace:*",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

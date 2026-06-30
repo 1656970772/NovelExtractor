@@ -11,6 +11,7 @@ export interface Book {
   projectId: string;
   displayName: string;
   sourceAssetId: string;
+  sourceTextPath: string;
   chapterCount: number;
   createdAt: string;
 }
@@ -28,6 +29,7 @@ export interface ReportAsset {
   bookId: string;
   fileName: string;
   displayName: string;
+  reportKind?: "raw-window" | "template-output";
   relativePath: string;
   byteSize: number;
   createdAt: string;
@@ -56,6 +58,10 @@ export function createProjectSlug(displayName: string): string {
   }
 
   return `project-${readablePart}-${hashPart}`;
+}
+
+export function createDefaultBookSourceTextPath(bookId: string): string {
+  return `assets/books/${bookId}/source/original.txt`;
 }
 
 function hashToBase36(value: string): string {
