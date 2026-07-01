@@ -443,6 +443,7 @@ function normalizeEnvPathComparable(value: string): string {
 interface BashReportSyncResult {
   persistedReportFileNames: string[];
   recoverableError?: ToolExecutionError;
+  sandboxRefreshReportFileNames: string[];
 }
 
 async function syncBashSandboxReportsToReal(input: {
@@ -455,6 +456,7 @@ async function syncBashSandboxReportsToReal(input: {
 }): Promise<BashReportSyncResult> {
   await fs.mkdir(input.reportsRoot, { recursive: true });
   const persistedReportFileNames: string[] = [];
+  const sandboxRefreshReportFileNames: string[] = [];
 
   for (const reportFileName of input.allowedOutputFileNames) {
     const sandboxReportPath = toSafeReportFilePathForExistenceCheck(input.sandbox.reportsRoot, reportFileName);
@@ -466,16 +468,22 @@ async function syncBashSandboxReportsToReal(input: {
     const sandboxState = await regularFileSyncState(sandboxReportPath);
     const realState = await regularFileSyncState(realReportPath);
     if (sandboxState.kind === "other") {
+      if (realState.kind === "file") {
+        sandboxRefreshReportFileNames.push(reportFileName);
+      }
       return {
         persistedReportFileNames,
+        sandboxRefreshReportFileNames,
         recoverableError: new ToolExecutionError("bash 生成的选中报告不是普通文件，已拒绝同步。", "UNSAFE_PATH")
       };
     }
 
     if (sandboxState.kind === "missing") {
       if (realState.kind === "file") {
+        sandboxRefreshReportFileNames.push(reportFileName);
         return {
           persistedReportFileNames,
+          sandboxRefreshReportFileNames,
           recoverableError: new ToolExecutionError("bash 不能删除既有选中报告；请使用 edit_file/multi_edit 修改内容。", "INVALID_ARGUMENTS")
         };
       }
@@ -483,7 +491,12 @@ async function syncBashSandboxReportsToReal(input: {
     }
 
     if (realState.kind === "other") {
-      throw new Error(`拒绝覆盖 reports 中的非普通文件: ${reportFileName}`);
+      sandboxRefreshReportFileNames.push(reportFileName);
+      return {
+        persistedReportFileNames,
+        sandboxRefreshReportFileNames,
+        recoverableError: new ToolExecutionError(`拒绝覆盖 reports 中的非普通文件: ${reportFileName}`, "UNSAFE_PATH")
+      };
     }
 
     if (realState.kind === "file") {
@@ -495,8 +508,10 @@ async function syncBashSandboxReportsToReal(input: {
         continue;
       }
       if (!input.queriedReportFileNames.has(reportFileName) && !input.writtenReportFileNames.has(reportFileName)) {
+        sandboxRefreshReportFileNames.push(reportFileName);
         return {
           persistedReportFileNames,
+          sandboxRefreshReportFileNames,
           recoverableError: new ToolExecutionError(WRITE_FILE_EXISTING_REPORT_MESSAGE, "INVALID_ARGUMENTS")
         };
       }
@@ -507,9 +522,10 @@ async function syncBashSandboxReportsToReal(input: {
     await fs.copyFile(sandboxReportPath, realReportPath);
     await input.onReportPersisted(reportFileName);
     persistedReportFileNames.push(reportFileName);
+    sandboxRefreshReportFileNames.push(reportFileName);
   }
 
-  return { persistedReportFileNames };
+  return { persistedReportFileNames, sandboxRefreshReportFileNames };
 }
 
 async function regularFileSyncState(filePath: string): Promise<{ kind: "file" | "missing" | "other" }> {
@@ -524,26 +540,42 @@ async function regularFileSyncState(filePath: string): Promise<{ kind: "file" | 
   }
 }
 
-async function syncRealReportsToBashSandbox(reportsRoot: string, sandbox: BashSandbox): Promise<void> {
+async function syncRealReportsToBashSandbox(
+  reportsRoot: string,
+  sandbox: BashSandbox,
+  reportFileNames: readonly string[]
+): Promise<void> {
   await fs.mkdir(sandbox.reportsRoot, { recursive: true });
-  await copyRegularTreeWithinReports({
-    fromRoot: reportsRoot,
-    relativePath: "",
-    toRoot: sandbox.reportsRoot
-  });
+  for (const reportFileName of reportFileNames) {
+    await syncRealReportToBashSandbox(reportsRoot, sandbox, reportFileName, "skip");
+  }
 }
 
 async function syncRealReportToBashSandbox(
   reportsRoot: string,
   sandbox: BashSandbox,
-  reportFileName: string
+  reportFileName: string,
+  unsafeEntryBehavior: "skip" | "throw" = "throw"
 ): Promise<void> {
   await fs.mkdir(sandbox.reportsRoot, { recursive: true });
-  await copyRegularTreeWithinReports({
-    fromRoot: reportsRoot,
-    relativePath: reportFileName,
-    toRoot: sandbox.reportsRoot
-  });
+  const sourcePath = resolvePathWithinReportsRoot(reportsRoot, reportFileName);
+  const targetPath = resolvePathWithinReportsRoot(sandbox.reportsRoot, reportFileName);
+  const stat = await fs.lstat(sourcePath);
+  if (stat.isSymbolicLink()) {
+    if (unsafeEntryBehavior === "skip") {
+      return;
+    }
+    throw new Error(`拒绝同步 bash sandbox 中的符号链接: ${reportFileName}`);
+  }
+  if (!stat.isFile()) {
+    if (unsafeEntryBehavior === "skip") {
+      return;
+    }
+    throw new Error(`拒绝同步 bash sandbox 中的非普通文件: ${reportFileName}`);
+  }
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await assertNoSymlinkTarget(targetPath);
+  await fs.copyFile(sourcePath, targetPath);
 }
 
 async function copyRegularTreeWithinReports(input: {
@@ -1730,8 +1762,8 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         writtenReportFileNames
       });
 
-      if (syncResult.persistedReportFileNames.length > 0 || syncResult.recoverableError !== undefined) {
-        await syncRealReportsToBashSandbox(reportsRoot, bashSandbox);
+      if (syncResult.sandboxRefreshReportFileNames.length > 0) {
+        await syncRealReportsToBashSandbox(reportsRoot, bashSandbox, syncResult.sandboxRefreshReportFileNames);
       }
 
       if (syncResult.recoverableError === undefined) {

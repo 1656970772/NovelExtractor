@@ -538,6 +538,174 @@ describe("window run Reasonix tool loop integration", () => {
     expect(bashReadResult).not.toContain("SECRET_OUTSIDE_REPORTS");
   }, 20000);
 
+  it("does not let unselected unsafe real reports break bash report resync after a selected write", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-unselected-symlink-"));
+    const externalRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-external-"));
+    scratchDirs.push(projectRoot, externalRoot);
+    const reportsRoot = path.join(projectRoot, "assets", "books", "book-1", "reports");
+    const windowTextPath = path.join(projectRoot, "runs", "job-1", "windows", "window-0001.txt");
+    const externalSecretPath = path.join(externalRoot, "secret.txt");
+    const requestBodies: Record<string, unknown>[] = [];
+    let bashWriteResult = "";
+    const registerReport = vi.fn(async () => {});
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+    const providerConfig = createProviderConfig(apiKeyRef);
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requestBodies.push(body);
+
+      const responseBody = (() => {
+        if (requestBodies.length === 1) {
+          return createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-bash-write-selected-report", "bash", {
+                command: "node -e \"require('fs').writeFileSync('人物.md','OK'); console.log('BASH_OK')\""
+              })
+            ]
+          });
+        }
+
+        if (requestBodies.length === 2) {
+          bashWriteResult = requireToolResult(body, "bash", "call-bash-write-selected-report");
+          return createChatCompletionResponse({ content: "窗口完成。" });
+        }
+
+        return createChatCompletionResponse({ content: "窗口完成。" });
+      })();
+
+      return new Response(JSON.stringify(responseBody), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      });
+    });
+
+    await fs.mkdir(path.dirname(windowTextPath), { recursive: true });
+    await fs.mkdir(reportsRoot, { recursive: true });
+    await fs.writeFile(windowTextPath, "第一章\n\n主角整理旧资料。", "utf8");
+    await fs.writeFile(externalSecretPath, "SECRET_OUTSIDE_REPORTS", "utf8");
+    await fs.symlink(externalSecretPath, path.join(reportsRoot, "地点.md"), "file");
+
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      fetch,
+      findExistingReport: () => undefined,
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeState: async () => {},
+      providerStore: createProviderStore(providerConfig),
+      registerReport
+    });
+
+    await service.runJobWindows({
+      artifacts: createWindowArtifacts({
+        projectRoot,
+        templates: [createTemplate({ id: "template-1", name: "人物", fileName: "人物.md" })]
+      }),
+      job: createWindowRunJob({ templateIds: ["template-1"] })
+    });
+
+    expect(requestBodies).toHaveLength(2);
+    expect(bashWriteResult).toContain("BASH_OK");
+    await expect(fs.readFile(path.join(reportsRoot, "人物.md"), "utf8")).resolves.toBe("OK");
+    await expect(fs.readFile(externalSecretPath, "utf8")).resolves.toBe("SECRET_OUTSIDE_REPORTS");
+    expect(registerReport).toHaveBeenCalledWith({
+      path: path.join(reportsRoot, "人物.md"),
+      report: expect.objectContaining({
+        fileName: "人物.md",
+        reportKind: "template-output"
+      })
+    });
+  }, 20000);
+
+  it("returns report sync rejection with foreground bash output when selected real report is unsafe", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-selected-symlink-"));
+    const externalRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-external-"));
+    scratchDirs.push(projectRoot, externalRoot);
+    const reportsRoot = path.join(projectRoot, "assets", "books", "book-1", "reports");
+    const windowTextPath = path.join(projectRoot, "runs", "job-1", "windows", "window-0001.txt");
+    const externalSecretPath = path.join(externalRoot, "secret.txt");
+    const requestBodies: Record<string, unknown>[] = [];
+    let bashWriteResult = "";
+    const registerReport = vi.fn(async () => {});
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+    const providerConfig = createProviderConfig(apiKeyRef);
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requestBodies.push(body);
+
+      const responseBody = (() => {
+        if (requestBodies.length === 1) {
+          return createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-bash-write-selected-symlink-report", "bash", {
+                command: "node -e \"require('fs').writeFileSync('人物.md','NEW'); console.log('BASH_WROTE')\""
+              })
+            ]
+          });
+        }
+
+        if (requestBodies.length === 2) {
+          bashWriteResult = requireToolResult(body, "bash", "call-bash-write-selected-symlink-report");
+          return createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-mark-no-update-after-sync-rejection", "mark_no_update", {
+                path: "人物.md",
+                reason: "bash report_sync 拒绝后本轮不再更新人物。"
+              })
+            ]
+          });
+        }
+
+        return createChatCompletionResponse({ content: "窗口完成。" });
+      })();
+
+      return new Response(JSON.stringify(responseBody), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      });
+    });
+
+    await fs.mkdir(path.dirname(windowTextPath), { recursive: true });
+    await fs.mkdir(reportsRoot, { recursive: true });
+    await fs.writeFile(windowTextPath, "第一章\n\n主角整理旧资料。", "utf8");
+    await fs.writeFile(externalSecretPath, "SECRET_OUTSIDE_REPORTS", "utf8");
+    await fs.symlink(externalSecretPath, path.join(reportsRoot, "人物.md"), "file");
+
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      fetch,
+      findExistingReport: () => undefined,
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeState: async () => {},
+      providerStore: createProviderStore(providerConfig),
+      registerReport
+    });
+
+    await service.runJobWindows({
+      artifacts: createWindowArtifacts({
+        projectRoot,
+        templates: [createTemplate({ id: "template-1", name: "人物", fileName: "人物.md" })]
+      }),
+      job: createWindowRunJob({ templateIds: ["template-1"] })
+    });
+
+    expect(requestBodies).toHaveLength(3);
+    expect(bashWriteResult).toContain("BASH_WROTE");
+    expect(bashWriteResult).toContain("report_sync");
+    expect(bashWriteResult).toContain("拒绝覆盖 reports 中的非普通文件");
+    await expect(fs.readFile(externalSecretPath, "utf8")).resolves.toBe("SECRET_OUTSIDE_REPORTS");
+    expect(registerReport).not.toHaveBeenCalled();
+  }, 20000);
+
   it("preserves pending background bash report edits when a non-bash write updates another report", async () => {
     const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-bg-preserve-"));
     scratchDirs.push(projectRoot);
