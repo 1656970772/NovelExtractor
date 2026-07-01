@@ -355,7 +355,7 @@ export function parsedJSONValueForError(value: ParsedRawJSONValue): unknown {
   }
 }
 
-export function goJSONTypeError(value: unknown, field: string, goType: "string" | "int", rawNumberLiteral?: string): string {
+export function goJSONTypeError(value: unknown, field: string, goType: "string" | "int" | "bool", rawNumberLiteral?: string): string {
   if (typeof value === "number") {
     const token =
       goType === "int" && rawNumberLiteral !== undefined ? `number ${rawNumberLiteral}` : goType === "int" && !Number.isInteger(value) ? `number ${value}` : "number";

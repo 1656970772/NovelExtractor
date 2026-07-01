@@ -11,3 +11,4 @@ export * from "./tools/editFileTool";
 export * from "./tools/multiEditTool";
 export * from "./tools/grepTool";
 export * from "./tools/globTool";
+export * from "./tools/lsTool";
