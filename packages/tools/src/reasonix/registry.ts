@@ -1,4 +1,5 @@
 import type { ReasonixDiffChange } from "./diff";
+import type { BashJobManager } from "./bashJobs";
 
 export interface ReasonixToolDefinition {
   name: string;
@@ -9,6 +10,8 @@ export interface ReasonixToolDefinition {
 
 export interface ReasonixToolExecutionContext {
   signal?: AbortSignal;
+  jobManager?: BashJobManager;
+  sessionId?: string;
 }
 
 export interface ReasonixTool extends ReasonixToolDefinition {

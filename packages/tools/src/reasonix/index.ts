@@ -1,6 +1,8 @@
 export * from "./pathResolver";
 export * from "./registry";
 export * from "./workspace";
+export * from "./shell";
+export * from "./bashJobs";
 export * from "./encoding";
 export * from "./encodedFile";
 export * from "./searchWalk";
@@ -12,3 +14,4 @@ export * from "./tools/multiEditTool";
 export * from "./tools/grepTool";
 export * from "./tools/globTool";
 export * from "./tools/lsTool";
+export * from "./tools/bashTool";

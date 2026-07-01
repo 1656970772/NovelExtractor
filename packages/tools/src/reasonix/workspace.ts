@@ -4,7 +4,19 @@ import path from "node:path";
 import { PathResolver, realRoots } from "./pathResolver";
 import type { ReasonixToolDefinition } from "./registry";
 
-export const reasonixToolOrder = ["read_file", "write_file", "edit_file", "multi_edit", "grep", "glob", "ls", "bash"] as const;
+export const reasonixToolOrder = [
+  "bash",
+  "bash_output",
+  "edit_file",
+  "glob",
+  "grep",
+  "kill_shell",
+  "ls",
+  "multi_edit",
+  "read_file",
+  "wait",
+  "write_file"
+] as const;
 
 export type ReasonixToolName = (typeof reasonixToolOrder)[number];
 
@@ -37,6 +49,7 @@ export interface ReasonixWorkspaceConfig {
   search?: ReasonixSearchConfig;
   shell?: ReasonixShellConfig;
   shellResolver?: ReasonixShellResolver;
+  bashTimeoutSeconds?: number;
   enabledTools?: readonly string[];
 }
 
@@ -50,6 +63,7 @@ export class Workspace {
   readonly search: ReasonixSearchConfig;
   readonly shell: ReasonixShellConfig;
   readonly shellResolver?: ReasonixShellResolver;
+  readonly bashTimeoutSeconds: number;
   readonly enabledTools?: readonly string[];
 
   constructor(config: ReasonixWorkspaceConfig = {}) {
@@ -62,6 +76,7 @@ export class Workspace {
     this.search = { ...(config.search ?? {}) };
     this.shell = { ...(config.shell ?? {}) };
     this.shellResolver = config.shellResolver;
+    this.bashTimeoutSeconds = config.bashTimeoutSeconds ?? 0;
     this.enabledTools = config.enabledTools;
   }
 
@@ -92,7 +107,10 @@ const toolReadOnly: Record<ReasonixToolName, boolean> = {
   grep: true,
   glob: true,
   ls: true,
-  bash: false
+  bash: false,
+  bash_output: true,
+  wait: true,
+  kill_shell: false
 };
 
 const toolDescriptions: Record<ReasonixToolName, (workspace: Workspace) => string> = {
@@ -111,7 +129,13 @@ const toolDescriptions: Record<ReasonixToolName, (workspace: Workspace) => strin
     'Find files matching a glob pattern (e.g. "*.go", "internal/*/*.go", "**/*.test.ts"). Supports shell metacharacters * ? [] and the recursive ** pattern.',
   ls: () =>
     "List the entries of a directory. Directories are shown with a trailing slash; files show their byte size. Set recursive=true to list all nested files depth-first (skips .git/node_modules).",
-  bash: (workspace) => bashDescription(resolveWorkspaceShell(workspace))
+  bash: (workspace) => bashDescription(resolveWorkspaceShell(workspace)),
+  bash_output: () =>
+    "Read new output from a background job started with bash(run_in_background=true) or task(run_in_background=true). Returns the output produced since the last bash_output call for that job, plus its status (running/done/failed/killed). Does not block.",
+  wait: () =>
+    "Block until background jobs finish, then return each job's status and final output/answer. Use to collect the result of a task(run_in_background) or bash(run_in_background) before continuing. Omit job_ids to wait for every running job.",
+  kill_shell: () =>
+    "Terminate a running background job (bash or task) started with run_in_background. A no-op if the job has already finished or the id is unknown."
 };
 
 const toolSchemas: Record<ReasonixToolName, unknown> = {
@@ -206,6 +230,36 @@ const toolSchemas: Record<ReasonixToolName, unknown> = {
       }
     },
     required: ["command"]
+  },
+  bash_output: {
+    type: "object",
+    properties: {
+      job_id: { type: "string", description: 'The background job id (e.g. "bash-1") returned when it was started.' },
+      filter: { type: "string", description: "Optional regular expression; only matching lines of the new output are returned." }
+    },
+    required: ["job_id"]
+  },
+  wait: {
+    type: "object",
+    properties: {
+      job_ids: {
+        type: "array",
+        items: { type: "string" },
+        description: "Background job ids to wait for. Omit to wait for every currently-running job."
+      },
+      timeout_seconds: {
+        type: "integer",
+        description: "Optional maximum seconds to block before returning current progress. Omit to wait until the jobs finish.",
+        minimum: 1
+      }
+    }
+  },
+  kill_shell: {
+    type: "object",
+    properties: {
+      job_id: { type: "string", description: 'The background job id to terminate (e.g. "bash-1").' }
+    },
+    required: ["job_id"]
   }
 };
 
@@ -235,7 +289,7 @@ function bashDescription(shell: ReasonixResolvedShell): string {
   return "Execute a command in the shell and return combined stdout/stderr." + bashToolSteer;
 }
 
-function resolveWorkspaceShell(workspace: Workspace): ReasonixResolvedShell {
+export function resolveWorkspaceShell(workspace: Workspace): ReasonixResolvedShell {
   const shell = workspace.shell;
   if (shell.kind !== undefined) {
     return {

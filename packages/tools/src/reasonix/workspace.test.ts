@@ -1,7 +1,19 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-const reasonixOrder = ["read_file", "write_file", "edit_file", "multi_edit", "grep", "glob", "ls", "bash"];
+const reasonixOrder = [
+  "bash",
+  "bash_output",
+  "edit_file",
+  "glob",
+  "grep",
+  "kill_shell",
+  "ls",
+  "multi_edit",
+  "read_file",
+  "wait",
+  "write_file"
+];
 
 interface ReasonixToolDefinitionForTest {
   name: string;
@@ -11,21 +23,23 @@ interface ReasonixToolDefinitionForTest {
 }
 
 describe("Reasonix workspace parity", () => {
-  it("exposes the configured eight desktop Reasonix tools in plan-defined Reasonix desktop tool order", async () => {
+  it("exposes the configured desktop Reasonix tools in Reasonix Go name-sorted order", async () => {
     const { Workspace } = await import("./workspace");
     const workspace = new Workspace({ dir: path.resolve("C:\\tmp", "project") });
 
     expect(workspace.tools().map((tool: { name: string }) => tool.name)).toEqual(reasonixOrder);
   });
 
-  it("filters enabled tools by plan-defined Reasonix desktop tool order and ignores unknown names", async () => {
+  it("filters enabled tools by Reasonix Go name-sorted order and ignores unknown names", async () => {
     const { Workspace } = await import("./workspace");
     const workspace = new Workspace({ dir: path.resolve("C:\\tmp", "project") });
 
-    expect(workspace.tools(["bash", "read_file", "todo_write", "grep"]).map((tool: { name: string }) => tool.name)).toEqual([
-      "read_file",
+    expect(workspace.tools(["wait", "bash", "read_file", "todo_write", "grep", "kill_shell"]).map((tool: { name: string }) => tool.name)).toEqual([
+      "bash",
       "grep",
-      "bash"
+      "kill_shell",
+      "read_file",
+      "wait"
     ]);
   });
 
@@ -36,7 +50,14 @@ describe("Reasonix workspace parity", () => {
       enabledTools: ["ls", "read_file"]
     });
 
-    expect(workspace.tools().map((tool: { name: string }) => tool.name)).toEqual(["read_file", "ls"]);
+    expect(workspace.tools().map((tool: { name: string }) => tool.name)).toEqual(["ls", "read_file"]);
+  });
+
+  it("defaults bash foreground timeout to Reasonix zero and preserves explicit configuration", async () => {
+    const { Workspace } = await import("./workspace");
+
+    expect(new Workspace().bashTimeoutSeconds).toBe(0);
+    expect(new Workspace({ bashTimeoutSeconds: 0.25 }).bashTimeoutSeconds).toBe(0.25);
   });
 
   it("defaults writable roots to the workspace dir and preserves injected config", async () => {
@@ -80,7 +101,7 @@ describe("Reasonix workspace parity", () => {
     }
   });
 
-  it("defines Reasonix model-visible schemas and read-only flags for the eight tools", async () => {
+  it("defines Reasonix model-visible schemas and read-only flags for the configured tools", async () => {
     const { Workspace } = await import("./workspace");
     const tools = Object.fromEntries(new Workspace({}).tools().map((tool: ReasonixToolDefinitionForTest) => [tool.name, tool])) as Record<
       string,
@@ -91,6 +112,9 @@ describe("Reasonix workspace parity", () => {
     expect(tools.write_file.readOnly()).toBe(false);
     expect(tools.grep.readOnly()).toBe(true);
     expect(tools.bash.readOnly()).toBe(false);
+    expect(tools.bash_output.readOnly()).toBe(true);
+    expect(tools.wait.readOnly()).toBe(true);
+    expect(tools.kill_shell.readOnly()).toBe(false);
     expect(tools.read_file.schema()).toMatchObject({
       type: "object",
       required: ["path"],
@@ -119,6 +143,28 @@ describe("Reasonix workspace parity", () => {
         pattern: { type: "string", description: "Glob pattern (supports ** for recursive matching)" }
       },
       required: ["pattern"]
+    });
+    expect(tools.bash_output.schema()).toMatchObject({
+      type: "object",
+      required: ["job_id"],
+      properties: {
+        job_id: { type: "string" },
+        filter: { type: "string" }
+      }
+    });
+    expect(tools.wait.schema()).toMatchObject({
+      type: "object",
+      properties: {
+        job_ids: { type: "array", items: { type: "string" } },
+        timeout_seconds: { type: "integer", minimum: 1 }
+      }
+    });
+    expect(tools.kill_shell.schema()).toMatchObject({
+      type: "object",
+      required: ["job_id"],
+      properties: {
+        job_id: { type: "string" }
+      }
     });
   });
 
