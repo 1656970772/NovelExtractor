@@ -37,6 +37,7 @@ import {
   executeBuiltinFileTool,
   getEnabledTools,
   ToolExecutionError,
+  type BashTeardownResult
 } from "@novel-extractor/tools";
 import type { TemplateDto } from "../shared/ipcTypes";
 import { createBatchOutcomeTracker, type BatchOutcome, type BatchOutcomeTracker } from "./batchOutcomeTracker";
@@ -167,6 +168,7 @@ const GREP_BUDGET_ERROR_MESSAGES = new Set([
 ]);
 
 interface BashSandbox {
+  env: NodeJS.ProcessEnv;
   parentRoot: string;
   reportsRoot: string;
 }
@@ -330,11 +332,12 @@ function toReportsRoot(artifacts: WindowRunArtifacts): string {
   return path.join(artifacts.project.rootPath, "assets", "books", artifacts.book.id, "reports");
 }
 
-async function createBashSandbox(reportsRoot: string): Promise<BashSandbox> {
+async function createBashSandbox(reportsRoot: string, projectRoot: string): Promise<BashSandbox> {
   const parentRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-bash-sandbox-"));
   const sandboxReportsRoot = path.join(parentRoot, "reports");
   await fs.cp(reportsRoot, sandboxReportsRoot, { recursive: true });
   return {
+    env: await createBashSandboxEnv(process.env, [projectRoot, reportsRoot]),
     parentRoot,
     reportsRoot: sandboxReportsRoot
   };
@@ -342,6 +345,171 @@ async function createBashSandbox(reportsRoot: string): Promise<BashSandbox> {
 
 async function removeBashSandbox(sandbox: BashSandbox): Promise<void> {
   await fs.rm(sandbox.parentRoot, { force: true, recursive: true });
+}
+
+async function createBashSandboxEnv(
+  sourceEnv: NodeJS.ProcessEnv,
+  blockedRoots: readonly string[]
+): Promise<NodeJS.ProcessEnv> {
+  const blockedValues = await normalizedBlockedPathValues(blockedRoots);
+  const env: NodeJS.ProcessEnv = {};
+
+  for (const [key, value] of Object.entries(sourceEnv)) {
+    if (value === undefined || containsBlockedPath(value, blockedValues)) {
+      continue;
+    }
+    env[key] = value;
+  }
+
+  return env;
+}
+
+async function normalizedBlockedPathValues(paths: readonly string[]): Promise<readonly string[]> {
+  const out = new Set<string>();
+  for (const item of paths) {
+    for (const candidate of [item, await realpathOrOriginal(item)]) {
+      const normalized = normalizeEnvPathComparable(candidate);
+      if (normalized !== "") {
+        out.add(normalized);
+      }
+    }
+  }
+  return [...out];
+}
+
+async function realpathOrOriginal(item: string): Promise<string> {
+  try {
+    return await fs.realpath(item);
+  } catch {
+    return item;
+  }
+}
+
+function containsBlockedPath(value: string, blockedValues: readonly string[]): boolean {
+  const normalized = normalizeEnvPathComparable(value);
+  return blockedValues.some((blockedValue) => normalized.includes(blockedValue));
+}
+
+function normalizeEnvPathComparable(value: string): string {
+  const normalized = value.replace(/\\/gu, "/");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+async function syncBashSandboxReportsToReal(sandbox: BashSandbox, reportsRoot: string): Promise<void> {
+  await fs.mkdir(reportsRoot, { recursive: true });
+  await copyRegularTreeWithinReports({
+    fromRoot: sandbox.reportsRoot,
+    relativePath: "",
+    toRoot: reportsRoot
+  });
+}
+
+async function syncRealReportsToBashSandbox(reportsRoot: string, sandbox: BashSandbox): Promise<void> {
+  await fs.mkdir(sandbox.reportsRoot, { recursive: true });
+  await copyRegularTreeWithinReports({
+    fromRoot: reportsRoot,
+    relativePath: "",
+    toRoot: sandbox.reportsRoot
+  });
+}
+
+async function copyRegularTreeWithinReports(input: {
+  fromRoot: string;
+  relativePath: string;
+  toRoot: string;
+}): Promise<void> {
+  const sourcePath = path.join(input.fromRoot, input.relativePath);
+  const targetPath = path.join(input.toRoot, input.relativePath);
+  const stat = await fs.lstat(sourcePath);
+  if (stat.isSymbolicLink()) {
+    throw new Error(`拒绝同步 bash sandbox 中的符号链接: ${input.relativePath || "."}`);
+  }
+  if (stat.isDirectory()) {
+    await assertNoSymlinkTarget(targetPath);
+    await fs.mkdir(targetPath, { recursive: true });
+    const entries = await fs.readdir(sourcePath, { withFileTypes: true });
+    for (const entry of entries) {
+      await copyRegularTreeWithinReports({
+        fromRoot: input.fromRoot,
+        relativePath: path.join(input.relativePath, entry.name),
+        toRoot: input.toRoot
+      });
+    }
+    return;
+  }
+  if (!stat.isFile()) {
+    throw new Error(`拒绝同步 bash sandbox 中的非普通文件: ${input.relativePath}`);
+  }
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await assertNoSymlinkTarget(targetPath);
+  await fs.copyFile(sourcePath, targetPath);
+}
+
+async function assertNoSymlinkTarget(targetPath: string): Promise<void> {
+  try {
+    const targetStat = await fs.lstat(targetPath);
+    if (targetStat.isSymbolicLink()) {
+      throw new Error(`拒绝覆盖符号链接目标: ${targetPath}`);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+}
+
+export async function cleanupBashSandboxAfterWindow(input: {
+  bashJobManager: Pick<BashJobManager, "closeWithGrace">;
+  bashSandbox: BashSandbox;
+  removeSandbox?: (sandbox: BashSandbox) => Promise<void>;
+  syncReportsToReal?: (sandbox: BashSandbox) => Promise<void>;
+  taskLogger?: TaskTextLogger;
+  windowError?: unknown;
+}): Promise<void> {
+  const syncReportsToReal = input.syncReportsToReal ?? (async () => {});
+  const removeSandboxFn = input.removeSandbox ?? removeBashSandbox;
+  const teardownResult = await input.bashJobManager.closeWithGrace(1000);
+  if (teardownResult.hasTimedOut()) {
+    await appendBashTeardownWarning(input.taskLogger, teardownResult);
+  }
+
+  try {
+    await syncReportsToReal(input.bashSandbox);
+  } catch (error) {
+    if (input.windowError === undefined) {
+      throw error;
+    }
+    await appendBashCleanupWarning(input.taskLogger, "sandbox 报告同步失败", error);
+  }
+
+  try {
+    await removeSandboxFn(input.bashSandbox);
+  } catch (error) {
+    await appendBashCleanupWarning(input.taskLogger, "sandbox 清理失败", error);
+  }
+}
+
+async function appendBashTeardownWarning(
+  taskLogger: TaskTextLogger | undefined,
+  result: BashTeardownResult
+): Promise<void> {
+  await taskLogger?.append(["警告", "bash"], {
+    类型: "后台任务关闭超时",
+    原因: result.cause,
+    未完成任务: result.timedOut
+  });
+}
+
+async function appendBashCleanupWarning(
+  taskLogger: TaskTextLogger | undefined,
+  type: string,
+  error: unknown
+): Promise<void> {
+  await taskLogger?.append(["警告", "bash"], {
+    类型: type,
+    错误: error instanceof Error ? error.message : String(error)
+  });
 }
 
 function toSafeErrorMessage(error: unknown, secrets: readonly string[] = []): string {
@@ -1362,7 +1530,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
     const writtenReportFileNames = new Set<string>();
     const bashJobManager = new BashJobManager();
     const bashSessionId = `${input.job.id}:${input.manifestWindow.windowId}:batch-${input.batchIndex + 1}`;
-    const bashSandbox = await createBashSandbox(reportsRoot);
+    const bashSandbox = await createBashSandbox(reportsRoot, input.artifacts.project.rootPath);
     const messages: ChatCompletionMessage[] = [
       {
         role: "system",
@@ -1382,6 +1550,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
     ];
     let usage = { ...EMPTY_USAGE };
     let currentRoundIndex: number | undefined;
+    let caughtWindowError: unknown;
 
     try {
       await options.taskLogger?.append(["上下文", "窗口"], {
@@ -1416,6 +1585,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         currentRoundIndex = roundIndex + 1;
         const backgroundJobNote = bashJobManager.drainCompletedNoteForSession(bashSessionId);
         if (backgroundJobNote !== "") {
+          await syncBashSandboxReportsToReal(bashSandbox, reportsRoot);
           messages.push({
             role: "user",
             content: backgroundJobNote
@@ -1594,8 +1764,12 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
                   }
                 ],
                 jobManager: bashJobManager,
-                sessionId: bashSessionId
+                sessionId: bashSessionId,
+                env: isBashToolFamily(toolCall.name) ? bashSandbox.env : undefined
               });
+              if (isBashToolFamily(toolCall.name)) {
+                await syncBashSandboxReportsToReal(bashSandbox, reportsRoot);
+              }
             } catch (error) {
               if (!shouldReturnRecoverableToolError(toolCall.name, error)) {
                 throw error;
@@ -1643,6 +1817,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
               toolCall
             });
             outcomeTracker.recordWritten(reportFileName);
+            await syncRealReportsToBashSandbox(reportsRoot, bashSandbox);
           }
 
           if (toolCall.name === MARK_NO_UPDATE_TOOL_NAME && !returnedRecoverableToolError) {
@@ -1676,6 +1851,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         }
       }
     } catch (error) {
+      caughtWindowError = error;
       await options.taskLogger?.append(["错误", "窗口"], {
         ...(currentRoundIndex ? { 轮次: currentRoundIndex } : {}),
         错误: toSafeErrorMessage(error, secrets),
@@ -1683,8 +1859,13 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
       });
       throw error;
     } finally {
-      await bashJobManager.closeWithGrace(1000);
-      await removeBashSandbox(bashSandbox);
+      await cleanupBashSandboxAfterWindow({
+        bashJobManager,
+        bashSandbox,
+        syncReportsToReal: (sandbox) => syncBashSandboxReportsToReal(sandbox, reportsRoot),
+        taskLogger: options.taskLogger,
+        windowError: caughtWindowError
+      });
     }
   }
 

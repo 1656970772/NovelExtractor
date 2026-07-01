@@ -32,6 +32,7 @@ export interface ToolExecutionContext {
   jobManager?: BashJobManager;
   sessionId?: string;
   signal?: AbortSignal;
+  env?: NodeJS.ProcessEnv;
   bashTimeoutSeconds?: number;
   shell?: ReasonixShellConfig;
 }
@@ -69,7 +70,8 @@ export async function executeBuiltinFileTool(name: string, rawArguments: unknown
     return await tool.execute(executionArguments, {
       jobManager: context.jobManager,
       sessionId: context.sessionId,
-      signal: context.signal
+      signal: context.signal,
+      env: context.env
     });
   } catch (error) {
     throw toToolError(error, "IO_ERROR");

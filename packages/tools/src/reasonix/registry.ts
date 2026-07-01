@@ -12,6 +12,7 @@ export interface ReasonixToolExecutionContext {
   signal?: AbortSignal;
   jobManager?: BashJobManager;
   sessionId?: string;
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface ReasonixTool extends ReasonixToolDefinition {

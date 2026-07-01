@@ -107,6 +107,39 @@ describe("Reasonix bash tool parity", () => {
     );
   });
 
+  it("allows callers to override the bash subprocess environment without changing the default env", async () => {
+    const shell = shellFixture();
+    if (shell === undefined) {
+      return;
+    }
+    const { Workspace, createBashTool } = await import("../index");
+    const previous = process.env.NOVEL_EXTRACTOR_REASONIX_ENV_PROBE;
+    process.env.NOVEL_EXTRACTOR_REASONIX_ENV_PROBE = "leaked-parent-env";
+    const tool = createBashTool(
+      new Workspace({
+        dir: await scratchDir(),
+        shell: shell.config
+      })
+    );
+
+    try {
+      const command =
+        shell.config.kind === "powershell"
+          ? 'if ($env:NOVEL_EXTRACTOR_REASONIX_ENV_PROBE) { Write-Output $env:NOVEL_EXTRACTOR_REASONIX_ENV_PROBE } else { Write-Output "missing-env" }'
+          : 'printf "%s\\n" "${NOVEL_EXTRACTOR_REASONIX_ENV_PROBE:-missing-env}"';
+      const sanitizedEnv = { ...process.env };
+      delete sanitizedEnv.NOVEL_EXTRACTOR_REASONIX_ENV_PROBE;
+      await expect(tool.execute({ command })).resolves.toContain("leaked-parent-env");
+      await expect(tool.execute({ command }, { env: sanitizedEnv })).resolves.toContain("missing-env");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.NOVEL_EXTRACTOR_REASONIX_ENV_PROBE;
+      } else {
+        process.env.NOVEL_EXTRACTOR_REASONIX_ENV_PROBE = previous;
+      }
+    }
+  });
+
   it("runs commands in the workspace and returns combined stdout/stderr", async () => {
     const powershell = powershellPath();
     if (powershell === undefined) {

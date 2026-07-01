@@ -85,8 +85,8 @@ export function mergePathLists(primary: string, secondary: string): string {
   return out.join(path.delimiter);
 }
 
-export function bashCommandEnv(): NodeJS.ProcessEnv {
-  const env = { ...process.env };
+export function bashCommandEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env = { ...baseEnv };
   if (process.platform === "win32") {
     return env;
   }

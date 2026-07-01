@@ -90,7 +90,8 @@ export function createBashTool(workspace: Workspace): ReasonixTool {
             timeoutMs: 0,
             signal: jobContext.signal,
             onOutput: jobContext.write,
-            captureOutput: false
+            captureOutput: false,
+            env: context?.env
           });
           const error = backgroundShellResultError(result);
           if (error !== undefined) {
@@ -108,7 +109,8 @@ export function createBashTool(workspace: Workspace): ReasonixTool {
         workDir: workspace.dir,
         preserveBackgroundProcesses: params.preserveBackgroundProcesses,
         timeoutMs,
-        signal: context?.signal
+        signal: context?.signal,
+        env: context?.env
       });
 
       const error = shellResultError(result, timeoutMs);
@@ -597,6 +599,7 @@ async function runShellCommand(options: {
   signal?: AbortSignal;
   onOutput?: (chunk: Uint8Array) => void;
   captureOutput?: boolean;
+  env?: NodeJS.ProcessEnv;
 }): Promise<RunShellResult> {
   if (options.signal?.aborted === true) {
     return { output: "", code: null, signal: null, timedOut: false, canceled: true, waitDelayExpired: false };
@@ -605,7 +608,7 @@ async function runShellCommand(options: {
   const argv = shellArgv(options.shell, options.command);
   const child = spawn(argv[0], argv.slice(1), {
     cwd: options.workDir === "" ? undefined : options.workDir,
-    env: bashCommandEnv(),
+    env: bashCommandEnv(options.env),
     detached: process.platform !== "win32",
     windowsHide: true
   });
