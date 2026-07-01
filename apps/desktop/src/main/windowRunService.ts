@@ -1070,7 +1070,7 @@ function assertBashToolExecutionScope(input: {
 function bashCommandReferencesPosixAbsolutePath(command: string): boolean {
   return command
     .split(/[\s"'`|;&<>()[\]{}]+/u)
-    .some((token) => token.startsWith("/") && token.length > 1);
+    .some((token) => token.startsWith("/"));
 }
 
 function bashCommandReferencesProjectRelativeRoot(command: string): boolean {
