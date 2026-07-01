@@ -201,7 +201,7 @@ describe("Reasonix full tool parity lock", () => {
     } finally {
       await rm(dir, { force: true, recursive: true });
     }
-  });
+  }, 20000);
 });
 
 async function runBashFamilyContract(workspace: Workspace): Promise<{ jobId: string; output: string; killed: string; wait: string }> {

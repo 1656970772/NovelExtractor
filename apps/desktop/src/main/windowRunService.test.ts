@@ -293,6 +293,167 @@ describe("window run Reasonix tool loop integration", () => {
       })
     );
   }, 20000);
+
+  it("returns foreground bash failure output to the model so the desktop loop can recover", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-bash-failure-"));
+    scratchDirs.push(projectRoot);
+    const reportsRoot = path.join(projectRoot, "assets", "books", "book-1", "reports");
+    const windowTextPath = path.join(projectRoot, "runs", "job-1", "windows", "window-0001.txt");
+    const requestBodies: Record<string, unknown>[] = [];
+    const registerReport = vi.fn(async () => {});
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+    const providerConfig = {
+      id: "provider-1",
+      presetId: "custom-openai-compatible" as const,
+      displayName: "Mock Provider",
+      kind: "openai-compatible" as const,
+      baseUrl: "https://mock.local/v1",
+      apiKeyRef,
+      models: [{ id: "mock-model", displayName: "mock-model", enabled: true, isDefault: true }],
+      enabled: true
+    };
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requestBodies.push(body);
+
+      const responseBody = (() => {
+        if (requestBodies.length === 1) {
+          return createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-bash-fails", "bash", {
+                command: "node -e \"console.log('before'); process.exit(7)\""
+              })
+            ]
+          });
+        }
+
+        if (requestBodies.length === 2) {
+          const bashResult = requireToolResult(body, "bash", "call-bash-fails");
+          expect(bashResult).toContain("before");
+          expect(bashResult).toContain("command exited");
+          return createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-write-after-bash-failure", "write_file", {
+                path: "人物.md",
+                content: "# 人物\n\nbash 失败输出可见后改用写文件收口。\n"
+              })
+            ]
+          });
+        }
+
+        return createChatCompletionResponse({ content: "窗口完成。" });
+      })();
+
+      return new Response(JSON.stringify(responseBody), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      });
+    });
+
+    await fs.mkdir(path.dirname(windowTextPath), { recursive: true });
+    await fs.mkdir(reportsRoot, { recursive: true });
+    await fs.writeFile(windowTextPath, "第一章\n\n主角整理旧资料。", "utf8");
+
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      fetch,
+      findExistingReport: () => undefined,
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeState: async () => {},
+      providerStore: {
+        async listProviderConfigs() {
+          return [providerConfig];
+        },
+        async saveProviderConfig(config) {
+          return config;
+        }
+      },
+      registerReport
+    });
+
+    await service.runJobWindows({
+      artifacts: {
+        book: {
+          id: "book-1",
+          projectId: "project-1",
+          displayName: "测试小说",
+          sourceAssetId: "source-1",
+          sourceTextPath: "assets/books/book-1/source/original.txt",
+          chapterCount: 1,
+          createdAt: "2026-07-01T00:00:00.000Z"
+        },
+        project: {
+          id: "project-1",
+          displayName: "测试项目",
+          slug: "test-project",
+          rootPath: projectRoot,
+          createdAt: "2026-07-01T00:00:00.000Z"
+        },
+        runtimeWindowManifest: {
+          jobId: "job-1",
+          bookId: "book-1",
+          sourceTextPath: "assets/books/book-1/source/original.txt",
+          sourceTextHash: sha256("source"),
+          splitConfigHash: sha256("split"),
+          splitterVersion: "test",
+          generatedAt: "2026-07-01T00:00:00.000Z",
+          totalDetectedChapterCount: 1,
+          windows: [
+            {
+              windowId: "window-1",
+              index: 0,
+              fileName: "window-0001.txt",
+              textPath: "runs/job-1/windows/window-0001.txt",
+              windowHash: sha256("第一章\n\n主角整理旧资料。"),
+              contextChapterRange: "1",
+              submittedChapterRange: "1",
+              contextChapterTitles: ["第一章"],
+              submittedChapterTitles: ["第一章"],
+              characterCount: "第一章\n\n主角整理旧资料。".length
+            }
+          ]
+        },
+        rulesSnapshotPath: "runs/job-1/rules.json",
+        templates: [
+          {
+            id: "template-1",
+            scope: "project",
+            projectId: "project-1",
+            name: "人物",
+            fileName: "人物.md",
+            body: "记录人物变化。",
+            createdAt: "2026-07-01T00:00:00.000Z",
+            updatedAt: "2026-07-01T00:00:00.000Z"
+          }
+        ]
+      },
+      job: {
+        id: "job-1",
+        bookId: "book-1",
+        input: {
+          modelId: "mock-model",
+          providerConfigId: "provider-1",
+          skipAlreadyExtracted: false,
+          templateIds: ["template-1"]
+        }
+      }
+    });
+
+    expect(requestBodies).toHaveLength(3);
+    await expect(fs.readFile(path.join(reportsRoot, "人物.md"), "utf8")).resolves.toContain("bash 失败输出可见");
+    expect(registerReport).toHaveBeenCalledWith({
+      path: path.join(reportsRoot, "人物.md"),
+      report: expect.objectContaining({
+        fileName: "人物.md",
+        reportKind: "template-output"
+      })
+    });
+  }, 20000);
 });
 
 function createToolCall(id: string, name: string, args: Record<string, unknown>): Record<string, unknown> {

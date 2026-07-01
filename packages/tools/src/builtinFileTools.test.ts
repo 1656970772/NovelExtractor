@@ -125,6 +125,19 @@ describe("builtin file tools", () => {
     expect(fs.existsSync(path.join(context.reportsRoot, "人物.md"))).toBe(false);
   });
 
+  it("preserves Reasonix bash partial output on foreground command failure", async () => {
+    const context = makeContext();
+
+    await expect(
+      executeBuiltinFileTool("bash", { command: "node -e \"console.log('before'); process.exit(7)\"" }, context)
+    ).rejects.toSatisfy((error: unknown) => {
+      expectToolExecutionErrorCode(error, "IO_ERROR");
+      expect((error as ToolExecutionError & { output?: string }).message).toContain("command exited");
+      expect((error as ToolExecutionError & { output?: string }).output).toContain("before");
+      return true;
+    });
+  });
+
   it("rejects write tools when reports root resolves outside project root", async () => {
     const context = makeContext();
     const outsideReportsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "novel-tools-outside-reports-"));

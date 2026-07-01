@@ -4279,8 +4279,8 @@ describe("P0 desktop IPC handlers", () => {
     }
   });
 
-  it("syncs files created by bash inside sandbox reports back to real reports", async () => {
-    const recoveredReport = "# 丹药分析\n\nbash 报告同步后继续写正式选中报告。";
+  it("does not persist unselected reports created by bash inside sandbox reports", async () => {
+    const recoveredReport = "# 丹药分析\n\nbash 未选中报告创建被隔离后继续写正式选中报告。";
     let bashReplayBody = "";
     const mockServer = await startMockOpenAiServer({
       respond: ({ body, requestIndex }) => {
@@ -4349,7 +4349,6 @@ describe("P0 desktop IPC handlers", () => {
       const reportsRoot = path.join(projectRoot, "assets", "books", book.bookId, "reports");
 
       const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
-      const bashCreatedReport = await fs.readFile(path.join(reportsRoot, "bash-created.md"), "utf8");
       const reportMarkdown = await fs.readFile(path.join(reportsRoot, "丹药分析.md"), "utf8");
 
       expect(mockServer.requests).toHaveLength(3);
@@ -4359,15 +4358,15 @@ describe("P0 desktop IPC handlers", () => {
         failureReason: undefined,
         status: "completed"
       });
-      expect(bashCreatedReport).toContain("bash synced");
+      expect(await pathExists(path.join(reportsRoot, "bash-created.md"))).toBe(false);
       expect(reportMarkdown).toBe(recoveredReport);
     } finally {
       await mockServer.close();
     }
   });
 
-  it("syncs files deleted by bash inside sandbox reports back to real reports", async () => {
-    const recoveredReport = "# 丹药分析\n\nbash 删除报告同步后继续写正式选中报告。";
+  it("does not persist unselected report deletions from bash inside sandbox reports", async () => {
+    const recoveredReport = "# 丹药分析\n\nbash 未选中报告删除被隔离后继续写正式选中报告。";
     let bashReplayBody = "";
     const mockServer = await startMockOpenAiServer({
       respond: ({ body, requestIndex }) => {
@@ -4448,8 +4447,104 @@ describe("P0 desktop IPC handlers", () => {
         failureReason: undefined,
         status: "completed"
       });
-      expect(await pathExists(bashDeletedReportPath)).toBe(false);
+      await expect(fs.readFile(bashDeletedReportPath, "utf8")).resolves.toBe("real report that bash deletes");
       expect(reportMarkdown).toBe(recoveredReport);
+    } finally {
+      await mockServer.close();
+    }
+  });
+
+  it("does not persist bash-created, overwritten, or deleted unselected reports before mark_no_update", async () => {
+    const sentinelExisting = "real report must survive bash";
+    const sentinelDelete = "real delete target must survive bash";
+    let bashReplayBody = "";
+    const mockServer = await startMockOpenAiServer({
+      respond: ({ body, requestIndex }) => {
+        if (requestIndex === 0) {
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-bash-unselected-side-effects", "bash", {
+                  command: createPowerShellCommand(
+                    [
+                      'Set-Content -LiteralPath "bash-created.md" -Value "created by bash"',
+                      'Set-Content -LiteralPath "其他.md" -Value "overwritten by bash"',
+                      'Remove-Item -LiteralPath "bash-delete.md"',
+                      '"side-effects-finished"'
+                    ].join("; ")
+                  )
+                })
+              ]
+            })
+          };
+        }
+
+        if (requestIndex === 1) {
+          bashReplayBody = JSON.stringify(body);
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-no-update-after-bash-side-effects", "mark_no_update", {
+                  path: "丹药分析.md",
+                  reason: "当前窗口没有丹药新增信息。"
+                })
+              ]
+            })
+          };
+        }
+
+        return {
+          body: createChatCompletionResponse({ content: "窗口完成。" })
+        };
+      }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: mockServer.baseUrl
+        })
+      )
+    });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: utf8FixturePath,
+        displayName: "凡人修仙传.txt"
+      });
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 2,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      });
+      const projectRoot = path.join(tempRoot, "projects", "project-a");
+      const reportsRoot = path.join(projectRoot, "assets", "books", book.bookId, "reports");
+      await fs.mkdir(reportsRoot, { recursive: true });
+      await fs.writeFile(path.join(reportsRoot, "其他.md"), sentinelExisting, "utf8");
+      await fs.writeFile(path.join(reportsRoot, "bash-delete.md"), sentinelDelete, "utf8");
+
+      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+
+      expect(mockServer.requests).toHaveLength(3);
+      expect(bashReplayBody).toContain("side-effects-finished");
+      expect(completedJob).toMatchObject({
+        id: job.id,
+        failureReason: undefined,
+        status: "completed"
+      });
+      expect(await pathExists(path.join(reportsRoot, "bash-created.md"))).toBe(false);
+      await expect(fs.readFile(path.join(reportsRoot, "其他.md"), "utf8")).resolves.toBe(sentinelExisting);
+      await expect(fs.readFile(path.join(reportsRoot, "bash-delete.md"), "utf8")).resolves.toBe(sentinelDelete);
+      expect(await pathExists(path.join(reportsRoot, "丹药分析.md"))).toBe(false);
     } finally {
       await mockServer.close();
     }
@@ -4554,6 +4649,113 @@ describe("P0 desktop IPC handlers", () => {
       } else {
         process.env.NOVEL_EXTRACTOR_TEST_PROJECT_ROOT = previousEnv;
       }
+      await mockServer.close();
+    }
+  });
+
+  it("does not let bash read external paths leaked through inherited environment variables", async () => {
+    const sentinelText = "DESKTOP_BASH_EXTERNAL_ENV_SENTINEL";
+    const recoveredReport = "# 丹药分析\n\nbash 外部环境变量路径泄露被隔离后改用选中报告。";
+    let bashReplayBody = "";
+    const outsideTempDir = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-external-env-"));
+    const previousEnv = process.env.NOVEL_EXTRACTOR_TEST_EXTERNAL_ROOT;
+    const mockServer = await startMockOpenAiServer({
+      respond: ({ body, requestIndex }) => {
+        if (requestIndex === 0) {
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-bash-external-env-read", "bash", {
+                  command: createPowerShellCommand(
+                    [
+                      "$root=$env:NOVEL_EXTRACTOR_TEST_EXTERNAL_ROOT",
+                      "if ([string]::IsNullOrWhiteSpace($root)) { 'env-empty'; return }",
+                      "$target=Join-Path $root 'sentinel.txt'",
+                      "if (Test-Path -LiteralPath $target) { Get-Content -LiteralPath $target } else { 'sentinel-miss' }",
+                      '"HOME="+$env:HOME',
+                      '"USERPROFILE="+$env:USERPROFILE'
+                    ].join("; ")
+                  )
+                })
+              ]
+            })
+          };
+        }
+
+        if (requestIndex === 1) {
+          bashReplayBody = JSON.stringify(body);
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-write-after-external-env-boundary", "write_file", {
+                  path: "丹药分析.md",
+                  content: recoveredReport
+                })
+              ]
+            })
+          };
+        }
+
+        return {
+          body: createChatCompletionResponse({ content: "窗口完成。" })
+        };
+      }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: mockServer.baseUrl
+        })
+      )
+    });
+
+    try {
+      await fs.writeFile(path.join(outsideTempDir, "sentinel.txt"), sentinelText, "utf8");
+      process.env.NOVEL_EXTRACTOR_TEST_EXTERNAL_ROOT = outsideTempDir;
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: utf8FixturePath,
+        displayName: "凡人修仙传.txt"
+      });
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 2,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      });
+      const projectRoot = path.join(tempRoot, "projects", "project-a");
+
+      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const reportMarkdown = await fs.readFile(
+        path.join(projectRoot, "assets", "books", book.bookId, "reports", "丹药分析.md"),
+        "utf8"
+      );
+
+      expect(mockServer.requests).toHaveLength(3);
+      expect(bashReplayBody).not.toContain(sentinelText);
+      expect(bashReplayBody).not.toContain(outsideTempDir);
+      expect(bashReplayBody).not.toContain(os.homedir());
+      expect(completedJob).toMatchObject({
+        id: job.id,
+        failureReason: undefined,
+        status: "completed"
+      });
+      expect(reportMarkdown).toBe(recoveredReport);
+    } finally {
+      if (previousEnv === undefined) {
+        delete process.env.NOVEL_EXTRACTOR_TEST_EXTERNAL_ROOT;
+      } else {
+        process.env.NOVEL_EXTRACTOR_TEST_EXTERNAL_ROOT = previousEnv;
+      }
+      await fs.rm(outsideTempDir, { force: true, recursive: true });
       await mockServer.close();
     }
   });

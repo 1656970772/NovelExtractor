@@ -40,7 +40,8 @@ export interface ToolExecutionContext {
 export class ToolExecutionError extends Error {
   constructor(
     message: string,
-    readonly code: "UNKNOWN_TOOL" | "INVALID_ARGUMENTS" | "UNSAFE_PATH" | "NOT_FOUND" | "IO_ERROR"
+    readonly code: "UNKNOWN_TOOL" | "INVALID_ARGUMENTS" | "UNSAFE_PATH" | "NOT_FOUND" | "IO_ERROR",
+    readonly output?: string
   ) {
     super(message);
     this.name = "ToolExecutionError";
@@ -262,20 +263,21 @@ function toToolError(error: unknown, fallbackCode: ToolExecutionError["code"]): 
   }
 
   const message = error instanceof Error ? error.message : String(error);
+  const output = error instanceof Error && "output" in error && typeof error.output === "string" ? error.output : undefined;
   if (/^Unknown tool: /u.test(message)) {
-    return new ToolExecutionError(message, "UNKNOWN_TOOL");
+    return new ToolExecutionError(message, "UNKNOWN_TOOL", output);
   }
   if (isUnsafePathMessage(message)) {
-    return new ToolExecutionError(message, "UNSAFE_PATH");
+    return new ToolExecutionError(message, "UNSAFE_PATH", output);
   }
   if (isNotFoundMessage(message)) {
-    return new ToolExecutionError("Path does not exist", "NOT_FOUND");
+    return new ToolExecutionError("Path does not exist", "NOT_FOUND", output);
   }
   if (isInvalidArgumentMessage(message)) {
-    return new ToolExecutionError(message, "INVALID_ARGUMENTS");
+    return new ToolExecutionError(message, "INVALID_ARGUMENTS", output);
   }
 
-  return new ToolExecutionError(message, fallbackCode);
+  return new ToolExecutionError(message, fallbackCode, output);
 }
 
 function isUnsafePathMessage(message: string): boolean {
