@@ -4378,6 +4378,95 @@ describe("P0 desktop IPC handlers", () => {
     }
   });
 
+  it("syncs files deleted by bash inside sandbox reports back to real reports", async () => {
+    const recoveredReport = "# 丹药分析\n\nbash 删除报告同步后继续写正式选中报告。";
+    let bashReplayBody = "";
+    const mockServer = await startMockOpenAiServer({
+      respond: ({ body, requestIndex }) => {
+        if (requestIndex === 0) {
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-bash-delete-report", "bash", {
+                  command: createPowerShellCommand(
+                    'Remove-Item -LiteralPath "bash-delete.md"; "delete-finished"'
+                  )
+                })
+              ]
+            })
+          };
+        }
+
+        if (requestIndex === 1) {
+          bashReplayBody = JSON.stringify(body);
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-write-after-bash-report-delete", "write_file", {
+                  path: "丹药分析.md",
+                  content: recoveredReport
+                })
+              ]
+            })
+          };
+        }
+
+        return {
+          body: createChatCompletionResponse({ content: "窗口完成。" })
+        };
+      }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: mockServer.baseUrl
+        })
+      )
+    });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: utf8FixturePath,
+        displayName: "凡人修仙传.txt"
+      });
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 2,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      });
+      const projectRoot = path.join(tempRoot, "projects", "project-a");
+      const reportsRoot = path.join(projectRoot, "assets", "books", book.bookId, "reports");
+      const bashDeletedReportPath = path.join(reportsRoot, "bash-delete.md");
+      await fs.mkdir(reportsRoot, { recursive: true });
+      await fs.writeFile(bashDeletedReportPath, "real report that bash deletes", "utf8");
+
+      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const reportMarkdown = await fs.readFile(path.join(reportsRoot, "丹药分析.md"), "utf8");
+
+      expect(mockServer.requests).toHaveLength(3);
+      expect(bashReplayBody).toContain("delete-finished");
+      expect(completedJob).toMatchObject({
+        id: job.id,
+        failureReason: undefined,
+        status: "completed"
+      });
+      expect(await pathExists(bashDeletedReportPath)).toBe(false);
+      expect(reportMarkdown).toBe(recoveredReport);
+    } finally {
+      await mockServer.close();
+    }
+  });
+
   it("does not let bash read real project paths leaked through inherited environment variables", async () => {
     const sentinelText = "DESKTOP_BASH_ENV_SENTINEL";
     const recoveredReport = "# 丹药分析\n\nbash 环境变量路径泄露被隔离后改用选中报告。";

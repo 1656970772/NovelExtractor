@@ -397,7 +397,7 @@ function normalizeEnvPathComparable(value: string): string {
 
 async function syncBashSandboxReportsToReal(sandbox: BashSandbox, reportsRoot: string): Promise<void> {
   await fs.mkdir(reportsRoot, { recursive: true });
-  await copyRegularTreeWithinReports({
+  await mirrorRegularTreeWithinReports({
     fromRoot: sandbox.reportsRoot,
     relativePath: "",
     toRoot: reportsRoot
@@ -413,13 +413,56 @@ async function syncRealReportsToBashSandbox(reportsRoot: string, sandbox: BashSa
   });
 }
 
+async function mirrorRegularTreeWithinReports(input: {
+  fromRoot: string;
+  relativePath: string;
+  toRoot: string;
+}): Promise<void> {
+  const sourcePath = resolvePathWithinReportsRoot(input.fromRoot, input.relativePath);
+  const targetPath = resolvePathWithinReportsRoot(input.toRoot, input.relativePath);
+  const stat = await fs.lstat(sourcePath);
+  if (stat.isSymbolicLink()) {
+    throw new Error(`拒绝同步 bash sandbox 中的符号链接: ${input.relativePath || "."}`);
+  }
+  if (stat.isDirectory()) {
+    await assertNoSymlinkTarget(targetPath);
+    await fs.mkdir(targetPath, { recursive: true });
+    const sourceEntries = await fs.readdir(sourcePath, { withFileTypes: true });
+    const sourceEntryNames = new Set(sourceEntries.map((entry) => entry.name));
+    for (const entry of sourceEntries) {
+      await mirrorRegularTreeWithinReports({
+        fromRoot: input.fromRoot,
+        relativePath: path.join(input.relativePath, entry.name),
+        toRoot: input.toRoot
+      });
+    }
+
+    const targetEntries = await fs.readdir(targetPath, { withFileTypes: true });
+    for (const entry of targetEntries) {
+      if (!sourceEntryNames.has(entry.name)) {
+        await removeRegularTreeWithinReports({
+          relativePath: path.join(input.relativePath, entry.name),
+          root: input.toRoot
+        });
+      }
+    }
+    return;
+  }
+  if (!stat.isFile()) {
+    throw new Error(`拒绝同步 bash sandbox 中的非普通文件: ${input.relativePath}`);
+  }
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await assertNoSymlinkTarget(targetPath);
+  await fs.copyFile(sourcePath, targetPath);
+}
+
 async function copyRegularTreeWithinReports(input: {
   fromRoot: string;
   relativePath: string;
   toRoot: string;
 }): Promise<void> {
-  const sourcePath = path.join(input.fromRoot, input.relativePath);
-  const targetPath = path.join(input.toRoot, input.relativePath);
+  const sourcePath = resolvePathWithinReportsRoot(input.fromRoot, input.relativePath);
+  const targetPath = resolvePathWithinReportsRoot(input.toRoot, input.relativePath);
   const stat = await fs.lstat(sourcePath);
   if (stat.isSymbolicLink()) {
     throw new Error(`拒绝同步 bash sandbox 中的符号链接: ${input.relativePath || "."}`);
@@ -443,6 +486,42 @@ async function copyRegularTreeWithinReports(input: {
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
   await assertNoSymlinkTarget(targetPath);
   await fs.copyFile(sourcePath, targetPath);
+}
+
+async function removeRegularTreeWithinReports(input: { root: string; relativePath: string }): Promise<void> {
+  if (input.relativePath === "") {
+    throw new Error("拒绝删除 reports 根目录");
+  }
+  const targetPath = resolvePathWithinReportsRoot(input.root, input.relativePath);
+  const stat = await fs.lstat(targetPath);
+  if (stat.isSymbolicLink()) {
+    throw new Error(`拒绝删除 reports 中的符号链接: ${input.relativePath}`);
+  }
+  if (stat.isDirectory()) {
+    const entries = await fs.readdir(targetPath, { withFileTypes: true });
+    for (const entry of entries) {
+      await removeRegularTreeWithinReports({
+        relativePath: path.join(input.relativePath, entry.name),
+        root: input.root
+      });
+    }
+    await fs.rmdir(targetPath);
+    return;
+  }
+  if (!stat.isFile()) {
+    throw new Error(`拒绝删除 reports 中的非普通文件: ${input.relativePath}`);
+  }
+  await fs.unlink(targetPath);
+}
+
+function resolvePathWithinReportsRoot(root: string, relativePath: string): string {
+  const resolvedRoot = path.resolve(root);
+  const resolvedPath = path.resolve(resolvedRoot, relativePath);
+  const rootRelativePath = path.relative(resolvedRoot, resolvedPath);
+  if (rootRelativePath.startsWith("..") || path.isAbsolute(rootRelativePath)) {
+    throw new Error(`拒绝同步 reports 根目录外的路径: ${relativePath}`);
+  }
+  return resolvedPath;
 }
 
 async function assertNoSymlinkTarget(targetPath: string): Promise<void> {
