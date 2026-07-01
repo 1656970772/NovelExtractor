@@ -1,12 +1,22 @@
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   BashJobManager,
   Registry,
   Workspace,
+  createBashTool,
   createBashOutputTool,
+  createEditFileTool,
+  createGlobTool,
+  createGrepTool,
   createKillShellTool,
+  createLsTool,
+  createMultiEditTool,
+  createReadFileTool,
   createWaitTool,
+  createWriteFileTool,
   reasonixToolOrder
 } from "./index";
 
@@ -65,45 +75,6 @@ const protocolDescriptionSnippets = {
   wait: ["Block until background jobs finish", "Omit job_ids"],
   write_file: ["Write content to a file", "overwriting existing content"]
 } as const;
-
-const behaviorCoverageInventory = [
-  {
-    file: "./tools/readFileTool.test.ts",
-    snippets: ["Reasonix read_file tool parity", "line-numbered text windows", "Go struct JSON fields case-insensitively"]
-  },
-  {
-    file: "./tools/writeFileTool.test.ts",
-    snippets: ["Reasonix write_file tool parity", "overwrites files", "preserves GB18030"]
-  },
-  {
-    file: "./tools/editFileTool.test.ts",
-    snippets: ["Reasonix edit_file tool parity", "edits exactly once", "fuzzy edit modes"]
-  },
-  {
-    file: "./tools/multiEditTool.test.ts",
-    snippets: ["Reasonix multi_edit tool parity", "applies chained edits in memory", "edits applied"]
-  },
-  {
-    file: "./tools/grepTool.test.ts",
-    snippets: ["Reasonix grep tool parity", "Go RE2 pattern semantics", "200-match truncation"]
-  },
-  {
-    file: "./tools/globTool.test.ts",
-    snippets: ["Reasonix glob tool parity", "recursive ** patterns", "1000 results"]
-  },
-  {
-    file: "./tools/lsTool.test.ts",
-    snippets: ["Reasonix ls tool parity", "Go ReadDir sorting", "depth-first"]
-  },
-  {
-    file: "./tools/bashTool.test.ts",
-    snippets: ["Reasonix bash tool parity", "starts background bash jobs", "bash_output"]
-  },
-  {
-    file: "./bashJobs.test.ts",
-    snippets: ["Reasonix BashJobManager lifecycle parity", "background job teardown", "session artifacts"]
-  }
-] as const;
 
 describe("Reasonix full tool parity lock", () => {
   it("locks the complete Reasonix tool order including the bash job family", () => {
@@ -177,12 +148,106 @@ describe("Reasonix full tool parity lock", () => {
     }
   });
 
-  it("documents that the detailed core behavior parity checks already exist per tool family", async () => {
-    for (const item of behaviorCoverageInventory) {
-      const source = await readFile(new URL(item.file, import.meta.url), "utf8");
-      for (const snippet of item.snippets) {
-        expect(source).toContain(snippet);
-      }
+  it("executes a minimal behavior contract for every core Reasonix tool family", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "reasonix-parity-contract-"));
+    const workspace = new Workspace({ dir, shell: { kind: "powershell", path: "powershell" } });
+    const target = path.join(dir, "notes.txt");
+    const multiTarget = path.join(dir, "multi.txt");
+
+    try {
+      await writeFile(target, "alpha\nneedle\n", "utf8");
+      await writeFile(multiTarget, "one two two\n", "utf8");
+
+      await expect(createReadFileTool(workspace).execute({ path: "notes.txt", limit: 2 })).resolves.toBe(
+        "1→alpha\n2→needle\n"
+      );
+
+      await expect(createWriteFileTool(workspace).execute({ path: "write.txt", content: "old value\n" })).resolves.toBe(
+        `wrote 10 bytes to ${path.join(dir, "write.txt")}`
+      );
+
+      await expect(
+        createEditFileTool(workspace).execute({ path: "write.txt", old_string: "old value", new_string: "edited value" })
+      ).resolves.toBe(`edited ${path.join(dir, "write.txt")}`);
+      await expect(readFile(path.join(dir, "write.txt"), "utf8")).resolves.toBe("edited value\n");
+
+      await expect(
+        createMultiEditTool(workspace).execute({
+          path: "multi.txt",
+          edits: [
+            { old_string: "one", new_string: "ONE" },
+            { old_string: "two", new_string: "TWO", replace_all: true }
+          ]
+        })
+      ).resolves.toBe(`multi_edit ${multiTarget}: 2 edits applied (3 total replacements)`);
+      await expect(readFile(multiTarget, "utf8")).resolves.toBe("ONE TWO TWO\n");
+
+      await expect(createGrepTool(workspace).execute({ pattern: "needle", path: "notes.txt" })).resolves.toBe(
+        `${target}:2:needle`
+      );
+
+      await expect(createGlobTool(workspace).execute({ pattern: "*.txt" })).resolves.toContain(target);
+      await expect(createLsTool(workspace).execute({ path: "." })).resolves.toContain("notes.txt\t13\n");
+
+      await expect(createBashTool(workspace).execute({ command: "Write-Output parity-bash" })).resolves.toContain("parity-bash");
+      await expect(runBashFamilyContract(workspace)).resolves.toEqual(
+        expect.objectContaining({
+          jobId: expect.stringMatching(/^bash-\d+$/u),
+          output: expect.stringContaining("parity-bg"),
+          killed: expect.stringContaining("Killed background job"),
+          wait: expect.stringContaining("killed")
+        })
+      );
+    } finally {
+      await rm(dir, { force: true, recursive: true });
     }
   });
 });
+
+async function runBashFamilyContract(workspace: Workspace): Promise<{ jobId: string; output: string; killed: string; wait: string }> {
+  const manager = new BashJobManager();
+  const context = { jobManager: manager, sessionId: "parity-contract-session" };
+
+  try {
+    const started = await createBashTool(workspace).execute(
+      {
+        command: "Write-Output parity-bg; Start-Sleep -Seconds 30",
+        run_in_background: true
+      },
+      context
+    );
+    const jobId = extractBackgroundJobId(started);
+    const output = await readBackgroundOutputUntil(workspace, context, jobId, "parity-bg");
+    const killed = await createKillShellTool(workspace).execute({ job_id: jobId }, context);
+    const wait = await createWaitTool(workspace).execute({ job_ids: [jobId], timeout_seconds: 1 }, context);
+
+    return { jobId, output, killed, wait };
+  } finally {
+    await manager.close();
+  }
+}
+
+async function readBackgroundOutputUntil(
+  workspace: Workspace,
+  context: { jobManager: BashJobManager; sessionId: string },
+  jobId: string,
+  expected: string
+): Promise<string> {
+  let lastOutput = "";
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    lastOutput = await createBashOutputTool(workspace).execute({ job_id: jobId }, context);
+    if (lastOutput.includes(expected)) {
+      return lastOutput;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return lastOutput;
+}
+
+function extractBackgroundJobId(content: string): string {
+  const match = /Started background job "([^"]+)"/u.exec(content);
+  if (match === null) {
+    throw new Error(`missing background job id in bash result: ${content}`);
+  }
+  return match[1];
+}

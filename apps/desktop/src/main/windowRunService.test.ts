@@ -69,12 +69,13 @@ describe("window run bash sandbox cleanup", () => {
 });
 
 describe("window run Reasonix tool loop integration", () => {
-  it("sends the full Reasonix tool protocol to the model and executes bash through the desktop loop", async () => {
+  it("sends the full Reasonix tool protocol to the model and executes the bash job family through the desktop loop", async () => {
     const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-loop-"));
     scratchDirs.push(projectRoot);
     const reportsRoot = path.join(projectRoot, "assets", "books", "book-1", "reports");
     const windowTextPath = path.join(projectRoot, "runs", "job-1", "windows", "window-0001.txt");
     const requestBodies: Record<string, unknown>[] = [];
+    let backgroundJobId = "";
     const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
     const apiKeyRef = credentialStore.saveApiKey({
       providerConfigId: "provider-1",
@@ -94,23 +95,47 @@ describe("window run Reasonix tool loop integration", () => {
       const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
       requestBodies.push(body);
 
-      const responseBody =
-        requestBodies.length === 1
-          ? createChatCompletionResponse({
-              toolCalls: [
-                {
-                  id: "call-bash",
-                  type: "function",
-                  function: {
-                    name: "bash",
-                    arguments: JSON.stringify({
-                      command: "node -e \"console.log('desktop-bash-ok')\""
-                    })
-                  }
-                }
-              ]
-            })
-          : createChatCompletionResponse({ content: "NO_UPDATE" });
+      const responseBody = (() => {
+        if (requestBodies.length === 1) {
+          return createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-bash", "bash", {
+                command: "node -e \"console.log('desktop-bash-ready'); setInterval(() => {}, 1000)\"",
+                run_in_background: true
+              })
+            ]
+          });
+        }
+
+        if (requestBodies.length === 2) {
+          const bashResult = requireToolResult(body, "bash", "call-bash");
+          backgroundJobId = extractBackgroundJobId(bashResult);
+          return createChatCompletionResponse({
+            toolCalls: [createToolCall("call-bash-output", "bash_output", { job_id: backgroundJobId })]
+          });
+        }
+
+        if (requestBodies.length === 3) {
+          requireToolResult(body, "bash_output", "call-bash-output");
+          return createChatCompletionResponse({
+            toolCalls: [createToolCall("call-kill-shell", "kill_shell", { job_id: backgroundJobId })]
+          });
+        }
+
+        if (requestBodies.length === 4) {
+          requireToolResult(body, "kill_shell", "call-kill-shell");
+          return createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-mark-no-update", "mark_no_update", {
+                path: "人物.md",
+                reason: "bash 背景任务族已完成验证，当前窗口没有人物新增信息。"
+              })
+            ]
+          });
+        }
+
+        return createChatCompletionResponse({ content: "窗口完成。" });
+      })();
 
       return new Response(JSON.stringify(responseBody), {
         headers: { "Content-Type": "application/json" },
@@ -208,7 +233,7 @@ describe("window run Reasonix tool loop integration", () => {
       }
     });
 
-    expect(requestBodies).toHaveLength(2);
+    expect(requestBodies).toHaveLength(5);
     const expectedToolNames = [...reasonixToolOrder, "mark_no_update"];
     const firstTools = requestBodies[0].tools as Array<{ function: { name: string; parameters: Record<string, unknown> } }>;
     expect(firstTools.map((tool) => tool.function.name)).toEqual(expectedToolNames);
@@ -226,17 +251,60 @@ describe("window run Reasonix tool loop integration", () => {
     expect(toolsByName.get("wait")?.parameters).toMatchObject({ properties: { job_ids: { items: { type: "string" } } } });
     expect(toolsByName.get("kill_shell")?.parameters).toMatchObject({ required: ["job_id"] });
 
-    const secondMessages = requestBodies[1].messages as Array<Record<string, unknown>>;
+    expect(backgroundJobId).toMatch(/^bash-\d+$/u);
+
+    const secondMessages = messagesOf(requestBodies[1]);
     expect(secondMessages).toContainEqual(
       expect.objectContaining({
         role: "tool",
         name: "bash",
         tool_call_id: "call-bash",
-        content: expect.stringContaining("desktop-bash-ok")
+        content: expect.stringContaining(`Started background job "${backgroundJobId}"`)
+      })
+    );
+
+    const thirdMessages = messagesOf(requestBodies[2]);
+    expect(thirdMessages).toContainEqual(
+      expect.objectContaining({
+        role: "tool",
+        name: "bash_output",
+        tool_call_id: "call-bash-output",
+        content: expect.stringContaining(`[${backgroundJobId}]`)
+      })
+    );
+
+    const fourthMessages = messagesOf(requestBodies[3]);
+    expect(fourthMessages).toContainEqual(
+      expect.objectContaining({
+        role: "tool",
+        name: "kill_shell",
+        tool_call_id: "call-kill-shell",
+        content: expect.stringContaining(`background job "${backgroundJobId}"`)
+      })
+    );
+
+    const fifthMessages = messagesOf(requestBodies[4]);
+    expect(fifthMessages).toContainEqual(
+      expect.objectContaining({
+        role: "tool",
+        name: "mark_no_update",
+        tool_call_id: "call-mark-no-update",
+        content: expect.stringContaining("marked no update for 人物.md")
       })
     );
   }, 20000);
 });
+
+function createToolCall(id: string, name: string, args: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id,
+    type: "function",
+    function: {
+      name,
+      arguments: JSON.stringify(args)
+    }
+  };
+}
 
 function createChatCompletionResponse(input: {
   content?: string;
@@ -258,6 +326,28 @@ function createChatCompletionResponse(input: {
       total_tokens: 18
     }
   };
+}
+
+function messagesOf(body: Record<string, unknown>): Array<Record<string, unknown>> {
+  return body.messages as Array<Record<string, unknown>>;
+}
+
+function requireToolResult(body: Record<string, unknown>, name: string, toolCallId: string): string {
+  const message = messagesOf(body).find(
+    (item) => item.role === "tool" && item.name === name && item.tool_call_id === toolCallId
+  );
+  if (message === undefined || typeof message.content !== "string") {
+    throw new Error(`missing ${name} tool result for ${toolCallId}`);
+  }
+  return message.content;
+}
+
+function extractBackgroundJobId(content: string): string {
+  const match = /Started background job "([^"]+)"/u.exec(content);
+  if (match === null) {
+    throw new Error(`missing background job id in bash result: ${content}`);
+  }
+  return match[1];
 }
 
 function sha256(value: string): string {
