@@ -1950,15 +1950,26 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
                 throw error;
               }
 
-              if (isBashToolFamily(toolCall.name)) {
-                await persistBashSandboxReportChanges();
-              }
               returnedRecoverableToolError = true;
-              toolResult = toRecoverableToolErrorResult({
+              const recoverableToolResult = toRecoverableToolErrorResult({
                 executionArguments: toolCall.executionArguments,
                 error,
                 secrets
               });
+              if (isBashToolFamily(toolCall.name)) {
+                const bashReportSyncError = await persistBashSandboxReportChanges();
+                toolResult =
+                  bashReportSyncError === undefined
+                    ? recoverableToolResult
+                    : {
+                        ...(isPlainRecord(recoverableToolResult)
+                          ? recoverableToolResult
+                          : { error: recoverableToolResult }),
+                        report_sync: bashReportSyncError
+                      };
+              } else {
+                toolResult = recoverableToolResult;
+              }
             }
           }
 
@@ -2040,9 +2051,6 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
       await cleanupBashSandboxAfterWindow({
         bashJobManager,
         bashSandbox,
-        syncReportsToReal: async () => {
-          await persistBashSandboxReportChanges();
-        },
         taskLogger: options.taskLogger,
         windowError: caughtWindowError
       });
