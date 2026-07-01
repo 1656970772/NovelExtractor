@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { ApiKeyRef, ProviderConfig } from "@novel-extractor/domain";
 import { reasonixToolOrder } from "@novel-extractor/tools";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMemoryCredentialStore } from "./credentials";
@@ -455,6 +456,219 @@ describe("window run Reasonix tool loop integration", () => {
     });
   }, 20000);
 
+  it("does not expose real reports symlink targets inside the initial bash sandbox", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-bash-symlink-"));
+    const externalRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-external-"));
+    scratchDirs.push(projectRoot, externalRoot);
+    const reportsRoot = path.join(projectRoot, "assets", "books", "book-1", "reports");
+    const windowTextPath = path.join(projectRoot, "runs", "job-1", "windows", "window-0001.txt");
+    const externalSecretPath = path.join(externalRoot, "secret.txt");
+    const requestBodies: Record<string, unknown>[] = [];
+    let bashReadResult = "";
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+    const providerConfig = createProviderConfig(apiKeyRef);
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requestBodies.push(body);
+
+      const responseBody = (() => {
+        if (requestBodies.length === 1) {
+          return createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-read-symlink-report", "bash", {
+                command:
+                  "node -e \"const fs=require('fs'); try { console.log(fs.readFileSync('人物.md','utf8')); } catch (error) { console.log('READ_FAILED:' + (error.code || error.message)); } try { fs.unlinkSync('人物.md'); } catch {}\""
+              })
+            ]
+          });
+        }
+
+        if (requestBodies.length === 2) {
+          bashReadResult = requireToolResult(body, "bash", "call-read-symlink-report");
+          return createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-mark-no-update-after-symlink-read", "mark_no_update", {
+                path: "人物.md",
+                reason: "当前窗口没有人物新增信息。"
+              })
+            ]
+          });
+        }
+
+        return createChatCompletionResponse({ content: "窗口完成。" });
+      })();
+
+      return new Response(JSON.stringify(responseBody), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      });
+    });
+
+    await fs.mkdir(path.dirname(windowTextPath), { recursive: true });
+    await fs.mkdir(reportsRoot, { recursive: true });
+    await fs.writeFile(windowTextPath, "第一章\n\n主角整理旧资料。", "utf8");
+    await fs.writeFile(externalSecretPath, "SECRET_OUTSIDE_REPORTS", "utf8");
+    await fs.symlink(externalSecretPath, path.join(reportsRoot, "人物.md"), "file");
+
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      fetch,
+      findExistingReport: () => undefined,
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeState: async () => {},
+      providerStore: createProviderStore(providerConfig),
+      registerReport: () => {}
+    });
+
+    await service.runJobWindows({
+      artifacts: createWindowArtifacts({
+        projectRoot,
+        templates: [createTemplate({ id: "template-1", name: "人物", fileName: "人物.md" })]
+      }),
+      job: createWindowRunJob({ templateIds: ["template-1"] })
+    });
+
+    expect(requestBodies).toHaveLength(3);
+    expect(bashReadResult).toContain("READ_FAILED");
+    expect(bashReadResult).not.toContain("SECRET_OUTSIDE_REPORTS");
+  }, 20000);
+
+  it("preserves pending background bash report edits when a non-bash write updates another report", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-bg-preserve-"));
+    scratchDirs.push(projectRoot);
+    const reportsRoot = path.join(projectRoot, "assets", "books", "book-1", "reports");
+    const windowTextPath = path.join(projectRoot, "runs", "job-1", "windows", "window-0001.txt");
+    const requestBodies: Record<string, unknown>[] = [];
+    let backgroundJobId = "";
+    let bashReadAfterNonBashWrite = "";
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+    const providerConfig = createProviderConfig(apiKeyRef);
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requestBodies.push(body);
+
+      const responseBody = await (async () => {
+        if (requestBodies.length === 1) {
+          return createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-start-pending-bash-write", "bash", {
+                command:
+                  "node -e \"const fs=require('fs'); setTimeout(()=>fs.writeFileSync('人物.md','BG_PENDING'),250); setInterval(()=>{},1000);\"",
+                run_in_background: true
+              })
+            ]
+          });
+        }
+
+        if (requestBodies.length === 2) {
+          const bashResult = requireToolResult(body, "bash", "call-start-pending-bash-write");
+          backgroundJobId = extractBackgroundJobId(bashResult);
+          await new Promise((resolve) => setTimeout(resolve, 600));
+          return createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-write-other-report", "write_file", {
+                path: "地点.md",
+                content: "# 地点\n\nNON_BASH_WRITE\n"
+              })
+            ]
+          });
+        }
+
+        if (requestBodies.length === 3) {
+          requireToolResult(body, "write_file", "call-write-other-report");
+          return createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-read-pending-bash-report", "bash", {
+                command: "node -e \"const fs=require('fs'); console.log(fs.readFileSync('人物.md','utf8'))\""
+              })
+            ]
+          });
+        }
+
+        if (requestBodies.length === 4) {
+          bashReadAfterNonBashWrite = requireToolResult(body, "bash", "call-read-pending-bash-report");
+          return createChatCompletionResponse({
+            toolCalls: [createToolCall("call-kill-pending-bash-write", "kill_shell", { job_id: backgroundJobId })]
+          });
+        }
+
+        if (requestBodies.length === 5) {
+          requireToolResult(body, "kill_shell", "call-kill-pending-bash-write");
+          return createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-mark-person-no-update", "mark_no_update", {
+                path: "人物.md",
+                reason: "后台 bash 暂存改动已对模型可见，当前窗口不写入人物报告。"
+              })
+            ]
+          });
+        }
+
+        return createChatCompletionResponse({ content: "窗口完成。" });
+      })();
+
+      return new Response(JSON.stringify(responseBody), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      });
+    });
+
+    await fs.mkdir(path.dirname(windowTextPath), { recursive: true });
+    await fs.mkdir(reportsRoot, { recursive: true });
+    await fs.writeFile(windowTextPath, "第一章\n\n主角整理旧资料。", "utf8");
+    await fs.writeFile(path.join(reportsRoot, "人物.md"), "OLD_REAL", "utf8");
+
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      fetch,
+      findExistingReport: ({ fileName }) =>
+        fileName === "人物.md"
+          ? {
+              id: "report-1",
+              bookId: "book-1",
+              fileName: "人物.md",
+              displayName: "人物",
+              relativePath: "assets/books/book-1/reports/人物.md",
+              reportKind: "template-output",
+              templateId: "template-1",
+              byteSize: Buffer.byteLength("OLD_REAL", "utf8"),
+              createdAt: "2026-07-01T00:00:00.000Z",
+              updatedAt: "2026-07-01T00:00:00.000Z"
+            }
+          : undefined,
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeState: async () => {},
+      providerStore: createProviderStore(providerConfig),
+      registerReport: () => {}
+    });
+
+    await service.runJobWindows({
+      artifacts: createWindowArtifacts({
+        projectRoot,
+        templates: [
+          createTemplate({ id: "template-1", name: "人物", fileName: "人物.md" }),
+          createTemplate({ id: "template-2", name: "地点", fileName: "地点.md" })
+        ]
+      }),
+      job: createWindowRunJob({ templateIds: ["template-1", "template-2"] })
+    });
+
+    expect(requestBodies).toHaveLength(6);
+    expect(bashReadAfterNonBashWrite).toContain("BG_PENDING");
+    expect(bashReadAfterNonBashWrite).not.toContain("OLD_REAL");
+    await expect(fs.readFile(path.join(reportsRoot, "地点.md"), "utf8")).resolves.toContain("NON_BASH_WRITE");
+  }, 20000);
+
   it("does not let final bash cleanup persist report changes after returned no-update outcomes", async () => {
     const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-bash-cleanup-"));
     scratchDirs.push(projectRoot);
@@ -848,6 +1062,106 @@ function extractBackgroundJobId(content: string): string {
     throw new Error(`missing background job id in bash result: ${content}`);
   }
   return match[1];
+}
+
+function createProviderConfig(apiKeyRef: ApiKeyRef): ProviderConfig {
+  return {
+    id: "provider-1",
+    presetId: "custom-openai-compatible" as const,
+    displayName: "Mock Provider",
+    kind: "openai-compatible" as const,
+    baseUrl: "https://mock.local/v1",
+    apiKeyRef,
+    models: [{ id: "mock-model", displayName: "mock-model", enabled: true, isDefault: true }],
+    enabled: true
+  };
+}
+
+function createProviderStore(providerConfig: ProviderConfig) {
+  return {
+    async listProviderConfigs() {
+      return [providerConfig];
+    },
+    async saveProviderConfig(config: ProviderConfig) {
+      return config;
+    }
+  };
+}
+
+function createTemplate(input: { fileName: string; id: string; name: string }) {
+  return {
+    id: input.id,
+    scope: "project" as const,
+    projectId: "project-1",
+    name: input.name,
+    fileName: input.fileName,
+    body: `记录${input.name}变化。`,
+    createdAt: "2026-07-01T00:00:00.000Z",
+    updatedAt: "2026-07-01T00:00:00.000Z"
+  };
+}
+
+function createWindowArtifacts(input: {
+  projectRoot: string;
+  templates: Array<ReturnType<typeof createTemplate>>;
+}) {
+  return {
+    book: {
+      id: "book-1",
+      projectId: "project-1",
+      displayName: "测试小说",
+      sourceAssetId: "source-1",
+      sourceTextPath: "assets/books/book-1/source/original.txt",
+      chapterCount: 1,
+      createdAt: "2026-07-01T00:00:00.000Z"
+    },
+    project: {
+      id: "project-1",
+      displayName: "测试项目",
+      slug: "test-project",
+      rootPath: input.projectRoot,
+      createdAt: "2026-07-01T00:00:00.000Z"
+    },
+    runtimeWindowManifest: {
+      jobId: "job-1",
+      bookId: "book-1",
+      sourceTextPath: "assets/books/book-1/source/original.txt",
+      sourceTextHash: sha256("source"),
+      splitConfigHash: sha256("split"),
+      splitterVersion: "test",
+      generatedAt: "2026-07-01T00:00:00.000Z",
+      totalDetectedChapterCount: 1,
+      windows: [
+        {
+          windowId: "window-1",
+          index: 0,
+          fileName: "window-0001.txt",
+          textPath: "runs/job-1/windows/window-0001.txt",
+          windowHash: sha256("第一章\n\n主角整理旧资料。"),
+          contextChapterRange: "1",
+          submittedChapterRange: "1",
+          contextChapterTitles: ["第一章"],
+          submittedChapterTitles: ["第一章"],
+          characterCount: "第一章\n\n主角整理旧资料。".length
+        }
+      ]
+    },
+    rulesSnapshotPath: "runs/job-1/rules.json",
+    templates: input.templates
+  };
+}
+
+function createWindowRunJob(input: { templateIds: string[] }) {
+  return {
+    id: "job-1",
+    bookId: "book-1",
+    input: {
+      modelId: "mock-model",
+      providerConfigId: "provider-1",
+      skipAlreadyExtracted: false,
+      templateIds: input.templateIds
+    }
+  };
 }
 
 function sha256(value: string): string {

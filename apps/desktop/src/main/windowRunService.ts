@@ -335,7 +335,13 @@ function toReportsRoot(artifacts: WindowRunArtifacts): string {
 async function createBashSandbox(reportsRoot: string, projectRoot: string): Promise<BashSandbox> {
   const parentRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-bash-sandbox-"));
   const sandboxReportsRoot = path.join(parentRoot, "reports");
-  await fs.cp(reportsRoot, sandboxReportsRoot, { recursive: true });
+  await fs.mkdir(sandboxReportsRoot, { recursive: true });
+  await copyRegularTreeWithinReports({
+    fromRoot: reportsRoot,
+    relativePath: "",
+    toRoot: sandboxReportsRoot,
+    unsafeEntryBehavior: "skip"
+  });
   return {
     env: await createBashSandboxEnv(process.env, [projectRoot, reportsRoot, os.homedir()], parentRoot),
     parentRoot,
@@ -527,15 +533,33 @@ async function syncRealReportsToBashSandbox(reportsRoot: string, sandbox: BashSa
   });
 }
 
+async function syncRealReportToBashSandbox(
+  reportsRoot: string,
+  sandbox: BashSandbox,
+  reportFileName: string
+): Promise<void> {
+  await fs.mkdir(sandbox.reportsRoot, { recursive: true });
+  await copyRegularTreeWithinReports({
+    fromRoot: reportsRoot,
+    relativePath: reportFileName,
+    toRoot: sandbox.reportsRoot
+  });
+}
+
 async function copyRegularTreeWithinReports(input: {
   fromRoot: string;
   relativePath: string;
   toRoot: string;
+  unsafeEntryBehavior?: "skip" | "throw";
 }): Promise<void> {
+  const unsafeEntryBehavior = input.unsafeEntryBehavior ?? "throw";
   const sourcePath = resolvePathWithinReportsRoot(input.fromRoot, input.relativePath);
   const targetPath = resolvePathWithinReportsRoot(input.toRoot, input.relativePath);
   const stat = await fs.lstat(sourcePath);
   if (stat.isSymbolicLink()) {
+    if (unsafeEntryBehavior === "skip") {
+      return;
+    }
     throw new Error(`拒绝同步 bash sandbox 中的符号链接: ${input.relativePath || "."}`);
   }
   if (stat.isDirectory()) {
@@ -546,12 +570,16 @@ async function copyRegularTreeWithinReports(input: {
       await copyRegularTreeWithinReports({
         fromRoot: input.fromRoot,
         relativePath: path.join(input.relativePath, entry.name),
-        toRoot: input.toRoot
+        toRoot: input.toRoot,
+        unsafeEntryBehavior
       });
     }
     return;
   }
   if (!stat.isFile()) {
+    if (unsafeEntryBehavior === "skip") {
+      return;
+    }
     throw new Error(`拒绝同步 bash sandbox 中的非普通文件: ${input.relativePath}`);
   }
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
@@ -2006,7 +2034,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
               toolCall
             });
             outcomeTracker.recordWritten(reportFileName);
-            await syncRealReportsToBashSandbox(reportsRoot, bashSandbox);
+            await syncRealReportToBashSandbox(reportsRoot, bashSandbox, reportFileName);
           }
 
           if (toolCall.name === MARK_NO_UPDATE_TOOL_NAME && !returnedRecoverableToolError) {
