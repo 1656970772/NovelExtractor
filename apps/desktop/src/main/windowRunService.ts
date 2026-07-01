@@ -32,13 +32,10 @@ import {
 } from "@novel-extractor/llm";
 import type { RuntimeWindowManifest, RuntimeWindowManifestWindow } from "@novel-extractor/extraction/runtimeWindows";
 import {
+  BashJobManager,
   executeBuiltinFileTool,
   getEnabledTools,
-  isWriteTool,
   ToolExecutionError,
-  type GrepResult,
-  type ToolNoUpdateSummary,
-  type ToolWriteSummary
 } from "@novel-extractor/tools";
 import type { TemplateDto } from "../shared/ipcTypes";
 import { createBatchOutcomeTracker, type BatchOutcome, type BatchOutcomeTracker } from "./batchOutcomeTracker";
@@ -90,7 +87,7 @@ const NO_TOOL_FEE: FeeAmount = {
   amount: 0,
   currency: "CNY"
 };
-const REPLACEMENT_TEXT_NOT_FOUND_MESSAGE = "Replacement text was not found";
+const REPLACEMENT_TEXT_NOT_FOUND_MESSAGE = "old_string not found";
 
 const DEFAULT_CONFIG = getDefaultConfig();
 const TOOL_LOOP_DEFAULTS = DEFAULT_CONFIG.toolLoopDefaults;
@@ -113,8 +110,8 @@ const TOOL_SCHEMA_STRING_ARGUMENT_ERROR_MESSAGES = new Set([
   "path must be a string",
   "content must be a string",
   "pattern must be a string",
-  "oldText must be a string",
-  "newText must be a string",
+  "old_string must be a string",
+  "new_string must be a string",
   "reason must be a string"
 ]);
 const FILE_LARGER_THAN_MAX_READ_BYTES_MESSAGE = "File is larger than maxReadBytes";
@@ -129,12 +126,12 @@ const WRITE_FILE_EXISTING_REPORT_MESSAGE =
 const WRITE_FILE_LOSSY_REWRITE_MESSAGE =
   "不能覆盖丢失既有内容，需要使用 edit_file/multi_edit 或包含完整旧内容。";
 const REPLACEMENT_TEXT_NOT_FOUND_HINT =
-  "oldText 必须精确匹配文件中的原文；可先用 grep/read_file 找到准确片段；若已 read_file 且需要整体更新，可用 write_file 提交完整保留旧内容的新版报告。";
+  "old_string 必须精确匹配文件中的原文；可先用 grep/read_file 找到准确片段；若已 read_file 且需要整体更新，可用 write_file 提交完整保留旧内容的新版报告。";
 const EDIT_TARGET_NOT_FOUND_HINT =
   "目标报告不存在；如果需要创建报告，请改用 write_file 写入完整且合规的报告正文。";
-const READ_TOOL_SCOPE_DENIED_MESSAGE = "read_file/grep 路径不在当前窗口允许范围内。";
+const READ_TOOL_SCOPE_DENIED_MESSAGE = "读工具路径不在当前窗口允许范围内。";
 const READ_TOOL_SCOPE_DENIED_HINT =
-  "只能读取/搜索当前窗口文本、当前书籍 reports 目录或本批选中输出报告；请改用窗口文件路径、reports 或选中报告文件名。";
+  "只能读取、搜索、列出或匹配当前窗口文本、当前书籍 reports 目录或本批选中输出报告；请改用窗口文件路径、reports 或选中报告文件名。";
 const REPORT_CONTENT_INTERNAL_METADATA_MESSAGE = "报告正文不得包含内部运行路径或流程性元数据。";
 const REPORT_CONTENT_INTERNAL_METADATA_HINT =
   "请把资料来源、参考范围等公开元数据改写为窗口编号/章节范围、章节名或原文范围；不要写 runs/job、assets/books、本机绝对路径、AppData 项目路径或后续窗口等流程性措辞。";
@@ -361,10 +358,10 @@ function redactWritableToolArguments(name: string, args: unknown, secrets: reado
     };
   }
 
-  if (name === "edit_file" && typeof args.newText === "string") {
+  if (name === "edit_file" && typeof args.new_string === "string") {
     return {
       ...args,
-      newText: redactSecrets(args.newText, secrets)
+      new_string: redactSecrets(args.new_string, secrets)
     };
   }
 
@@ -372,13 +369,13 @@ function redactWritableToolArguments(name: string, args: unknown, secrets: reado
     return {
       ...args,
       edits: args.edits.map((edit) => {
-        if (!isPlainRecord(edit) || typeof edit.newText !== "string") {
+        if (!isPlainRecord(edit) || typeof edit.new_string !== "string") {
           return edit;
         }
 
         return {
           ...edit,
-          newText: redactSecrets(edit.newText, secrets)
+          new_string: redactSecrets(edit.new_string, secrets)
         };
       })
     };
@@ -431,35 +428,11 @@ function normalizeToolCalls(toolCalls: ToolCall[], roundIndex: number): ChatComp
   }));
 }
 
-function isToolWriteSummary(result: unknown): result is ToolWriteSummary {
-  return (
-    isPlainRecord(result) &&
-    typeof result.path === "string" &&
-    typeof result.changedBytes === "number" &&
-    (result.operation === "write_file" ||
-      result.operation === "edit_file" ||
-      result.operation === "multi_edit")
-  );
-}
-
-function isToolNoUpdateSummary(result: unknown): result is ToolNoUpdateSummary {
-  return (
-    isPlainRecord(result) &&
-    typeof result.path === "string" &&
-    result.operation === MARK_NO_UPDATE_TOOL_NAME &&
-    typeof result.reason === "string"
-  );
-}
-
-function isGrepResult(result: unknown): result is GrepResult {
-  return (
-    isPlainRecord(result) &&
-    Array.isArray(result.matches) &&
-    result.matches.every((match) => isPlainRecord(match) && typeof match.path === "string")
-  );
-}
-
 function stringifyToolResult(result: unknown, secrets: readonly string[]): string {
+  if (typeof result === "string") {
+    return redactSecrets(result, secrets);
+  }
+
   return redactSecrets(JSON.stringify(result) ?? "null", secrets);
 }
 
@@ -479,6 +452,10 @@ function getWriteFileContentArgument(args: unknown): string | undefined {
   return args.content;
 }
 
+function isReportWriteTool(name: string): boolean {
+  return name === "write_file" || name === "edit_file" || name === "multi_edit";
+}
+
 function getWritableReportContentFragments(toolCall: ChatCompletionRequestToolCall): string[] {
   if (!isPlainRecord(toolCall.arguments)) {
     return [];
@@ -489,7 +466,7 @@ function getWritableReportContentFragments(toolCall: ChatCompletionRequestToolCa
   }
 
   if (toolCall.name === "edit_file") {
-    return typeof toolCall.arguments.newText === "string" ? [toolCall.arguments.newText] : [];
+    return typeof toolCall.arguments.new_string === "string" ? [toolCall.arguments.new_string] : [];
   }
 
   if (toolCall.name !== "multi_edit" || !Array.isArray(toolCall.arguments.edits)) {
@@ -497,7 +474,7 @@ function getWritableReportContentFragments(toolCall: ChatCompletionRequestToolCa
   }
 
   return toolCall.arguments.edits.flatMap((edit) =>
-    isPlainRecord(edit) && typeof edit.newText === "string" ? [edit.newText] : []
+    isPlainRecord(edit) && typeof edit.new_string === "string" ? [edit.new_string] : []
   );
 }
 
@@ -586,7 +563,7 @@ function normalizeWriteToolExecutionArguments(input: {
   artifacts: WindowRunArtifacts;
   toolCall: ChatCompletionRequestToolCall;
 }): unknown {
-  if (!isWriteTool(input.toolCall.name) && input.toolCall.name !== MARK_NO_UPDATE_TOOL_NAME) {
+  if (!isReportWriteTool(input.toolCall.name) && input.toolCall.name !== MARK_NO_UPDATE_TOOL_NAME) {
     return input.toolCall.arguments;
   }
 
@@ -610,11 +587,26 @@ function normalizeReadToolExecutionArguments(input: {
   manifestWindow: RuntimeWindowManifestWindow;
   toolCall: ChatCompletionRequestToolCall;
 }): unknown {
-  if (input.toolCall.name !== "read_file" && input.toolCall.name !== "grep") {
+  if (!isDesktopReadScopeTool(input.toolCall.name)) {
     return input.toolCall.arguments;
   }
 
-  if (!isPlainRecord(input.toolCall.arguments) || typeof input.toolCall.arguments.path !== "string") {
+  if (!isPlainRecord(input.toolCall.arguments)) {
+    return input.toolCall.arguments;
+  }
+
+  if (input.toolCall.name === "glob") {
+    return normalizeGlobToolExecutionArguments(input);
+  }
+
+  if (input.toolCall.name === "ls" && input.toolCall.arguments.path === undefined) {
+    return {
+      ...input.toolCall.arguments,
+      path: toProjectRelativeReportsRootPath(input.artifacts)
+    };
+  }
+
+  if (typeof input.toolCall.arguments.path !== "string") {
     return input.toolCall.arguments;
   }
 
@@ -626,7 +618,7 @@ function normalizeReadToolExecutionArguments(input: {
     };
   }
 
-  if (comparablePath === "reports" || (input.toolCall.name === "grep" && comparablePath === ".")) {
+  if (comparablePath === "reports" || ((input.toolCall.name === "grep" || input.toolCall.name === "ls") && comparablePath === ".")) {
     return {
       ...input.toolCall.arguments,
       path: toProjectRelativeReportsRootPath(input.artifacts)
@@ -653,6 +645,55 @@ function normalizeReadToolExecutionArguments(input: {
   return input.toolCall.arguments;
 }
 
+function normalizeGlobToolExecutionArguments(input: {
+  allowedOutputFileNames: ReadonlySet<string>;
+  artifacts: WindowRunArtifacts;
+  manifestWindow: RuntimeWindowManifestWindow;
+  toolCall: ChatCompletionRequestToolCall;
+}): unknown {
+  if (!isPlainRecord(input.toolCall.arguments) || typeof input.toolCall.arguments.pattern !== "string") {
+    return input.toolCall.arguments;
+  }
+
+  const pattern = normalizeComparableToolPath(input.toolCall.arguments.pattern);
+  if (pattern === "." || pattern === "reports") {
+    return {
+      ...input.toolCall.arguments,
+      pattern: `${toProjectRelativeReportsRootPath(input.artifacts)}/*`
+    };
+  }
+
+  const reportsAliasPrefix = "reports/";
+  if (pattern.startsWith(reportsAliasPrefix)) {
+    return {
+      ...input.toolCall.arguments,
+      pattern: `${toProjectRelativeReportsRootPath(input.artifacts)}/${pattern.slice(reportsAliasPrefix.length)}`
+    };
+  }
+
+  for (const outputFileName of input.allowedOutputFileNames) {
+    if (pattern === normalizeComparableToolPath(outputFileName)) {
+      return {
+        ...input.toolCall.arguments,
+        pattern: toProjectRelativeReportPath(input.artifacts, outputFileName)
+      };
+    }
+  }
+
+  if (!pattern.includes("/")) {
+    return {
+      ...input.toolCall.arguments,
+      pattern: `${toProjectRelativeReportsRootPath(input.artifacts)}/${pattern}`
+    };
+  }
+
+  return input.toolCall.arguments;
+}
+
+function isDesktopReadScopeTool(name: string): boolean {
+  return name === "read_file" || name === "grep" || name === "glob" || name === "ls";
+}
+
 function assertReadToolExecutionScope(input: {
   allowedOutputFileNames: ReadonlySet<string>;
   artifacts: WindowRunArtifacts;
@@ -660,16 +701,16 @@ function assertReadToolExecutionScope(input: {
   manifestWindow: RuntimeWindowManifestWindow;
   toolName: string;
 }): void {
-  if (input.toolName !== "read_file" && input.toolName !== "grep") {
+  if (!isDesktopReadScopeTool(input.toolName)) {
     return;
   }
 
-  const pathArgument = getToolPathArgument(input.executionArguments);
-  if (pathArgument === undefined) {
+  const scopePathArgument = getReadScopePathArgument(input.toolName, input.executionArguments);
+  if (scopePathArgument === undefined) {
     return;
   }
 
-  const comparablePath = normalizeComparableToolPath(pathArgument);
+  const comparablePath = normalizeComparableToolPath(scopePathArgument);
   const reportsRootPath = normalizeComparableToolPath(toProjectRelativeReportsRootPath(input.artifacts));
   const allowedFilePaths = new Set<string>([normalizeComparableToolPath(input.manifestWindow.textPath)]);
 
@@ -677,11 +718,31 @@ function assertReadToolExecutionScope(input: {
     allowedFilePaths.add(normalizeComparableToolPath(toProjectRelativeReportPath(input.artifacts, outputFileName)));
   }
 
+  if (input.toolName === "glob" && comparablePath.startsWith(`${reportsRootPath}/`)) {
+    return;
+  }
+
   if (allowedFilePaths.has(comparablePath) || comparablePath === reportsRootPath) {
     return;
   }
 
   throw new ToolExecutionError(READ_TOOL_SCOPE_DENIED_MESSAGE, "UNSAFE_PATH");
+}
+
+function getReadScopePathArgument(toolName: string, executionArguments: unknown): string | undefined {
+  if (!isPlainRecord(executionArguments)) {
+    return undefined;
+  }
+
+  if (toolName === "glob") {
+    return typeof executionArguments.pattern === "string" ? executionArguments.pattern : undefined;
+  }
+
+  if (toolName === "ls" && executionArguments.path === undefined) {
+    return ".";
+  }
+
+  return getToolPathArgument(executionArguments);
 }
 
 function containsKnownSecret(value: string, secrets: readonly string[]): boolean {
@@ -769,7 +830,7 @@ async function validateToolCallBeforeExecution(input: {
     return;
   }
 
-  if (!isWriteTool(toolCall.name)) {
+  if (!isReportWriteTool(toolCall.name)) {
     return;
   }
 
@@ -825,25 +886,39 @@ function recordReportQuery(input: {
     input.queriedReportFileNames.add(reportFileName);
   }
 
-  if (input.toolCall.name !== "grep" || !isGrepResult(input.toolResult)) {
+  if (input.toolCall.name !== "grep" || typeof input.toolResult !== "string") {
     return;
   }
 
-  for (const match of input.toolResult.matches) {
-    const matchReportFileName = toQueriedReportFileName(match.path, input.artifacts);
+  for (const matchPath of extractGrepResultPaths(input.toolResult)) {
+    const matchReportFileName = toQueriedReportFileName(matchPath, input.artifacts);
     if (matchReportFileName && input.allowedOutputFileNames.has(matchReportFileName)) {
       input.queriedReportFileNames.add(matchReportFileName);
     }
   }
 }
 
+function extractGrepResultPaths(toolResult: string): string[] {
+  return toolResult
+    .split(/\r?\n/u)
+    .flatMap((line) => {
+      const match = /^(.+?):\d+:/u.exec(line);
+      return match ? [match[1]] : [];
+    });
+}
+
 function recordSuccessfulReportWrite(input: {
   artifacts: WindowRunArtifacts;
   allowedOutputFileNames: ReadonlySet<string>;
   writtenReportFileNames: Set<string>;
-  toolResult: ToolWriteSummary;
+  toolCall: ChatCompletionRequestToolCall;
 }): void {
-  const reportFileName = toQueriedReportFileName(input.toolResult.path, input.artifacts);
+  const pathArgument = getToolPathArgument(input.toolCall.arguments);
+  if (pathArgument === undefined) {
+    return;
+  }
+
+  const reportFileName = toQueriedReportFileName(pathArgument, input.artifacts);
   if (reportFileName && input.allowedOutputFileNames.has(reportFileName)) {
     input.writtenReportFileNames.add(reportFileName);
   }
@@ -855,7 +930,7 @@ function shouldReturnRecoverableToolError(name: string, error: unknown): error i
   }
 
   if (
-    (name === "read_file" || name === "grep") &&
+    isDesktopReadScopeTool(name) &&
     (error.code === "NOT_FOUND" || error.code === "UNSAFE_PATH")
   ) {
     return true;
@@ -871,7 +946,7 @@ function shouldReturnRecoverableToolError(name: string, error: unknown): error i
 
   return (
     (name === "edit_file" || name === "multi_edit") &&
-    (error.message === REPLACEMENT_TEXT_NOT_FOUND_MESSAGE || error.code === "NOT_FOUND")
+    (isReplacementTextNotFoundMessage(error.message) || error.code === "NOT_FOUND")
   );
 }
 
@@ -881,10 +956,18 @@ function isRecoverableToolSchemaInvalidArguments(error: ToolExecutionError): boo
   }
 
   return (
+    error.message.startsWith("invalid args:") ||
+    error.message === "path is required" ||
+    error.message === "old_string is required" ||
+    error.message === "edits must not be empty" ||
     error.message === TOOL_ARGUMENTS_MUST_BE_OBJECT_MESSAGE ||
     TOOL_SCHEMA_STRING_ARGUMENT_ERROR_MESSAGES.has(error.message) ||
     error.message.startsWith(UNEXPECTED_TOOL_ARGUMENT_MESSAGE_PREFIX)
   );
+}
+
+function isReplacementTextNotFoundMessage(message: string): boolean {
+  return message.includes(REPLACEMENT_TEXT_NOT_FOUND_MESSAGE) || /^edit \d+: old_string not found/u.test(message);
 }
 
 function isRecoverableReadToolInvalidArguments(name: string, error: ToolExecutionError): boolean {
@@ -906,7 +989,7 @@ function toRecoverableToolErrorResult(input: {
 }): Record<string, unknown> {
   const pathArgument = getToolPathArgument(input.executionArguments);
   const hint =
-    input.error.message === REPLACEMENT_TEXT_NOT_FOUND_MESSAGE
+    isReplacementTextNotFoundMessage(input.error.message)
       ? REPLACEMENT_TEXT_NOT_FOUND_HINT
       : input.error.code === "NOT_FOUND"
         ? EDIT_TARGET_NOT_FOUND_HINT
@@ -977,7 +1060,7 @@ function createInternalReportContentMetadataRecoverableResult(input: {
   secrets: readonly string[];
   toolCall: ChatCompletionRequestToolCall;
 }): Record<string, unknown> | undefined {
-  if (!isWriteTool(input.toolCall.name)) {
+  if (!isReportWriteTool(input.toolCall.name)) {
     return undefined;
   }
 
@@ -1006,7 +1089,7 @@ function createWindowFileIdentifierRecoverableResult(input: {
   secrets: readonly string[];
   toolCall: ChatCompletionRequestToolCall;
 }): Record<string, unknown> | undefined {
-  if (!isWriteTool(input.toolCall.name)) {
+  if (!isReportWriteTool(input.toolCall.name)) {
     return undefined;
   }
 
@@ -1035,7 +1118,7 @@ function createDraftOrTemplateStatusRecoverableResult(input: {
   secrets: readonly string[];
   toolCall: ChatCompletionRequestToolCall;
 }): Record<string, unknown> | undefined {
-  if (!isWriteTool(input.toolCall.name)) {
+  if (!isReportWriteTool(input.toolCall.name)) {
     return undefined;
   }
 
@@ -1179,6 +1262,8 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
     const templatePromptProfiles = buildTemplatePromptProfiles(input.artifacts.templates);
     const queriedReportFileNames = new Set<string>();
     const writtenReportFileNames = new Set<string>();
+    const bashJobManager = new BashJobManager();
+    const bashSessionId = `${input.job.id}:${input.manifestWindow.windowId}:batch-${input.batchIndex + 1}`;
     const messages: ChatCompletionMessage[] = [
       {
         role: "system",
@@ -1230,6 +1315,14 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
 
       for (let roundIndex = 0; ; roundIndex += 1) {
         currentRoundIndex = roundIndex + 1;
+        const backgroundJobNote = bashJobManager.drainCompletedNoteForSession(bashSessionId);
+        if (backgroundJobNote !== "") {
+          messages.push({
+            role: "user",
+            content: backgroundJobNote
+          });
+        }
+
         await options.taskLogger?.append(["大模型请求", "Prompt"], {
           供应商: input.providerId,
           模型: input.modelId,
@@ -1306,7 +1399,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
               arguments: toToolCallArguments(normalizedReadExecutionArguments)
             }
           });
-          const normalizesOutputPath = isWriteTool(toolCall.name) || toolCall.name === MARK_NO_UPDATE_TOOL_NAME;
+          const normalizesOutputPath = isReportWriteTool(toolCall.name) || toolCall.name === MARK_NO_UPDATE_TOOL_NAME;
           const executionArguments = redactWritableToolArguments(toolCall.name, executionSourceArguments, secrets);
           const replaySourceArguments = redactWritableToolArguments(
             toolCall.name,
@@ -1386,7 +1479,19 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
               });
               toolResult = await executeBuiltinFileTool(toolCall.name, toolCall.executionArguments, {
                 projectRoot: input.artifacts.project.rootPath,
-                reportsRoot
+                reportsRoot,
+                readAliasRoots: [
+                  {
+                    token: input.manifestWindow.textPath,
+                    root: path.join(input.artifacts.project.rootPath, input.manifestWindow.textPath)
+                  },
+                  {
+                    token: input.manifestWindow.fileName,
+                    root: path.join(input.artifacts.project.rootPath, input.manifestWindow.textPath)
+                  }
+                ],
+                jobManager: bashJobManager,
+                sessionId: bashSessionId
               });
             } catch (error) {
               if (!shouldReturnRecoverableToolError(toolCall.name, error)) {
@@ -1418,30 +1523,36 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             });
           }
 
-          if (isWriteTool(toolCall.name) && !returnedRecoverableToolError) {
-            if (!isToolWriteSummary(toolResult)) {
-              throw new Error(`写工具 ${toolCall.name} 未返回写入摘要`);
+          if (isReportWriteTool(toolCall.name) && !returnedRecoverableToolError) {
+            const reportFileName = getToolPathArgument(toolCall.arguments);
+            if (reportFileName === undefined) {
+              throw new Error(`写工具 ${toolCall.name} 未提供报告 path`);
             }
 
             await registerTemplateOutputReport({
               artifacts: input.artifacts,
-              reportFileName: toolResult.path
+              reportFileName
             });
             recordSuccessfulReportWrite({
               allowedOutputFileNames,
               artifacts: input.artifacts,
               writtenReportFileNames,
-              toolResult
+              toolCall
             });
-            outcomeTracker.recordWritten(toolResult.path);
+            outcomeTracker.recordWritten(reportFileName);
           }
 
           if (toolCall.name === MARK_NO_UPDATE_TOOL_NAME && !returnedRecoverableToolError) {
-            if (!isToolNoUpdateSummary(toolResult)) {
-              throw new Error(`工具 ${toolCall.name} 未返回无更新摘要`);
+            const noUpdatePath = getToolPathArgument(toolCall.arguments);
+            const noUpdateReason =
+              isPlainRecord(toolCall.arguments) && typeof toolCall.arguments.reason === "string"
+                ? toolCall.arguments.reason
+                : undefined;
+            if (noUpdatePath === undefined || noUpdateReason === undefined) {
+              throw new Error(`工具 ${toolCall.name} 未提供无更新 path/reason`);
             }
 
-            outcomeTracker.recordNoUpdate(toolResult.path, toolResult.reason);
+            outcomeTracker.recordNoUpdate(noUpdatePath, noUpdateReason);
           }
 
           messages.push({
@@ -1450,18 +1561,6 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             name: toolCall.name,
             content: stringifyToolResult(toolResult, secrets)
           });
-        }
-
-        if (outcomeTracker.isComplete()) {
-          await options.taskLogger?.append(["上下文", "批次结果"], {
-            批次: `${input.batchIndex + 1}/${input.batchTotal}`,
-            处理结果: outcomeTracker.outcomes()
-          });
-          return {
-            content: "本批次处理完成",
-            outcomes: outcomeTracker.outcomes(),
-            usage
-          };
         }
 
         if (
@@ -1480,6 +1579,8 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         Token使用: usage
       });
       throw error;
+    } finally {
+      await bashJobManager.closeWithGrace(1000);
     }
   }
 

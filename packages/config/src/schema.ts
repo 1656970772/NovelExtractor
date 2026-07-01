@@ -76,9 +76,15 @@ export interface RawWindowReportDefaults {
 export type ToolLoopToolName =
   | "read_file"
   | "grep"
+  | "glob"
+  | "ls"
   | "write_file"
   | "edit_file"
   | "multi_edit"
+  | "bash"
+  | "bash_output"
+  | "wait"
+  | "kill_shell"
   | "mark_no_update";
 
 export interface ToolLoopDefaults {

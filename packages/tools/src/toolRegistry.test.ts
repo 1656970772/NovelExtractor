@@ -2,35 +2,72 @@ import { describe, expect, it } from "vitest";
 import { getEnabledTools } from "./toolRegistry";
 
 describe("P0 tool registry", () => {
-  it("exposes the configured file tools in deterministic order", () => {
+  it("exposes the configured Reasonix tools in deterministic order", () => {
     expect(
-      getEnabledTools(["ls", "read_file", "grep", "write_file", "edit_file", "multi_edit", "mark_no_update"]).map(
-        (tool) => tool.name
-      )
-    ).toEqual(["ls", "read_file", "grep", "write_file", "edit_file", "multi_edit", "mark_no_update"]);
+      getEnabledTools([
+        "read_file",
+        "write_file",
+        "edit_file",
+        "multi_edit",
+        "grep",
+        "glob",
+        "ls",
+        "bash",
+        "bash_output",
+        "wait",
+        "kill_shell",
+        "mark_no_update"
+      ]).map((tool) => tool.name)
+    ).toEqual([
+      "read_file",
+      "write_file",
+      "edit_file",
+      "multi_edit",
+      "grep",
+      "glob",
+      "ls",
+      "bash",
+      "bash_output",
+      "wait",
+      "kill_shell",
+      "mark_no_update"
+    ]);
   });
 
-  it("filters enabled tools while preserving registry order", () => {
-    expect(getEnabledTools(["multi_edit", "grep", "ls"]).map((tool) => tool.name)).toEqual(["ls", "grep", "multi_edit"]);
+  it("filters enabled tools while preserving configured order", () => {
+    expect(getEnabledTools(["multi_edit", "grep", "ls"]).map((tool) => tool.name)).toEqual(["multi_edit", "grep", "ls"]);
   });
 
-  it("exposes JSON Schema parameter definitions for tool calling", () => {
-    const tools = getEnabledTools(["read_file", "write_file", "mark_no_update"]);
+  it("exposes Reasonix JSON Schema parameter definitions for tool calling", () => {
+    const tools = getEnabledTools(["read_file", "edit_file", "multi_edit", "bash_output", "wait", "mark_no_update"]);
 
     expect(tools[0].parameters).toMatchObject({
       type: "object",
       properties: {
-        path: { type: "string" }
+        path: { type: "string" },
+        offset: { type: "integer" },
+        limit: { type: "integer" }
       },
-      required: ["path"],
-      additionalProperties: false
+      required: ["path"]
     });
     expect(tools[1].parameters).toMatchObject({
       type: "object",
-      required: ["path", "content"],
-      additionalProperties: false
+      properties: {
+        old_string: { type: "string" },
+        new_string: { type: "string" }
+      },
+      required: ["path", "old_string", "new_string"]
     });
-    expect(tools[2].parameters).toMatchObject({
+    expect(JSON.stringify(tools[2].parameters)).toContain("replace_all");
+    expect(tools[3].parameters).toMatchObject({
+      type: "object",
+      properties: {
+        job_id: { type: "string" }
+      },
+      required: ["job_id"]
+    });
+    expect(JSON.stringify(tools[4].parameters)).toContain("timeout_seconds");
+    expect(tools[5].parameters).toMatchObject({
       type: "object",
       properties: {
         path: { type: "string" },
@@ -48,11 +85,10 @@ describe("P0 tool registry", () => {
     expect(markNoUpdateTool.description).not.toContain("Create");
   });
 
-  it("describes write_file as creating new reports instead of overwriting existing reports", () => {
+  it("describes write_file with the Reasonix overwrite semantics", () => {
     const [writeFileTool] = getEnabledTools(["write_file"]);
 
-    expect(writeFileTool.description).toContain("Create a new Markdown report file");
-    expect(writeFileTool.description).not.toContain("overwrite");
+    expect(writeFileTool.description).toContain("overwriting existing content");
   });
 
   it("fails clearly for unknown tool names", () => {

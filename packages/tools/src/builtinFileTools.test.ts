@@ -5,8 +5,6 @@ import { describe, expect, it } from "vitest";
 import {
   executeBuiltinFileTool,
   ToolExecutionError,
-  type ToolNoUpdateSummary,
-  type ToolWriteSummary
 } from "./builtinFileTools";
 
 function makeContext() {
@@ -51,118 +49,79 @@ describe("builtin file tools", () => {
   it("lists, reads, and greps files under the project root", async () => {
     const context = makeContext();
 
-    await expect(executeBuiltinFileTool("ls", { path: "chapters" }, context)).resolves.toMatchObject({
-      path: "chapters",
-      entries: [{ name: "第一章.txt", type: "file" }]
-    });
-    await expect(executeBuiltinFileTool("read_file", { path: "chapters/第一章.txt" }, context)).resolves.toMatchObject({
-      path: "chapters/第一章.txt",
-      content: "第一章\n凝气丹出现\n"
-    });
-    await expect(executeBuiltinFileTool("grep", { path: ".", pattern: "凝气丹" }, context)).resolves.toMatchObject({
-      matches: [{ path: "chapters/第一章.txt", line: 2, text: "凝气丹出现" }]
-    });
+    await expect(executeBuiltinFileTool("ls", { path: "chapters" }, context)).resolves.toContain("第一章.txt");
+    await expect(executeBuiltinFileTool("read_file", { path: "chapters/第一章.txt" }, context)).resolves.toContain("1→第一章");
+    await expect(executeBuiltinFileTool("grep", { path: ".", pattern: "凝气丹" }, context)).resolves.toContain("凝气丹出现");
   });
 
-  it("returns capturable errors for bad raw JSON arguments and missing files", async () => {
+  it("returns capturable Reasonix-style errors for bad arguments and missing files", async () => {
     const context = makeContext();
 
-    await expect(executeBuiltinFileTool("read_file", { file: "chapters/第一章.txt" }, context)).rejects.toMatchObject({
+    await expect(executeBuiltinFileTool("read_file", false, context)).rejects.toMatchObject({
       name: "ToolExecutionError",
       code: "INVALID_ARGUMENTS"
     });
     await expect(executeBuiltinFileTool("read_file", { path: "missing.txt" }, context)).rejects.toBeInstanceOf(ToolExecutionError);
   });
 
-  it.each(["ls", "read_file", "grep", "write_file", "edit_file"] as const)("rejects edits on %s when schema does not allow it", async (toolName) => {
+  it.each(["ls", "read_file", "grep", "write_file", "edit_file"] as const)("ignores unknown fields on %s like Go JSON unmarshalling", async (toolName) => {
     const context = makeContext();
     const baseArgs = {
       ls: { path: "chapters" },
       read_file: { path: "chapters/第一章.txt" },
       grep: { path: ".", pattern: "凝气丹" },
       write_file: { path: "参数.md", content: "x" },
-      edit_file: { path: "丹药分析.md", oldText: "旧内容", newText: "新内容" }
+      edit_file: { path: "丹药分析.md", old_string: "旧内容", new_string: "新内容" }
     }[toolName];
 
-    await expect(executeBuiltinFileTool(toolName, { ...baseArgs, edits: [] }, context)).rejects.toMatchObject({
-      name: "ToolExecutionError",
-      code: "INVALID_ARGUMENTS"
-    });
+    await expect(executeBuiltinFileTool(toolName, { ...baseArgs, ignored_by_reasonix: true }, context)).resolves.toEqual(
+      expect.any(String)
+    );
   });
 
-  it("allows edits only on multi_edit and rejects other extra fields", async () => {
+  it("allows write_file, edit_file, and multi_edit only inside reports root with Reasonix text results", async () => {
     const context = makeContext();
 
-    await expect(
-      executeBuiltinFileTool(
-        "multi_edit",
-        { path: "丹药分析.md", edits: [{ oldText: "旧内容", newText: "新内容" }], extra: "x" },
-        context
-      )
-    ).rejects.toMatchObject({
-      name: "ToolExecutionError",
-      code: "INVALID_ARGUMENTS"
-    });
-  });
-
-  it("allows write_file, edit_file, and multi_edit only inside reports root with audit summaries", async () => {
-    const context = makeContext();
-
-    const writeSummary = (await executeBuiltinFileTool(
+    const writeResult = await executeBuiltinFileTool(
       "write_file",
       { path: "人物.md", content: "# 人物\n\n韩立\n" },
       context
-    )) as ToolWriteSummary;
-    expect(writeSummary).toMatchObject({
-      path: "人物.md",
-      operation: "write_file",
-      changedBytes: Buffer.byteLength("# 人物\n\n韩立\n", "utf8"),
-      preview: "# 人物\n\n韩立\n"
-    });
+    );
+    expect(writeResult).toContain("wrote ");
+    expect(writeResult).toContain("人物.md");
     expect(fs.readFileSync(path.join(context.reportsRoot, "人物.md"), "utf8")).toBe("# 人物\n\n韩立\n");
 
-    const editSummary = (await executeBuiltinFileTool(
+    const editResult = await executeBuiltinFileTool(
       "edit_file",
-      { path: "人物.md", oldText: "韩立", newText: "韩立：主角" },
+      { path: "人物.md", old_string: "韩立", new_string: "韩立：主角" },
       context
-    )) as ToolWriteSummary;
-    expect(editSummary).toMatchObject({
-      path: "人物.md",
-      operation: "edit_file"
-    });
-    expect(editSummary.changedBytes).toBeGreaterThan(0);
+    );
+    expect(editResult).toContain("edited ");
 
-    const multiSummary = (await executeBuiltinFileTool(
+    const multiResult = await executeBuiltinFileTool(
       "multi_edit",
       {
         path: "人物.md",
         edits: [
-          { oldText: "# 人物", newText: "# 人物小传" },
-          { oldText: "韩立：主角", newText: "韩立：主角，谨慎" }
+          { old_string: "# 人物", new_string: "# 人物小传" },
+          { old_string: "韩立：主角", new_string: "韩立：主角，谨慎" }
         ]
       },
       context
-    )) as ToolWriteSummary;
-    expect(multiSummary).toMatchObject({
-      path: "人物.md",
-      operation: "multi_edit"
-    });
+    );
+    expect(multiResult).toContain("multi_edit ");
     expect(fs.readFileSync(path.join(context.reportsRoot, "人物.md"), "utf8")).toBe("# 人物小传\n\n韩立：主角，谨慎\n");
   });
 
   it("records mark_no_update outcomes without creating or editing report files", async () => {
     const context = makeContext();
-    const summary = (await executeBuiltinFileTool(
+    const result = await executeBuiltinFileTool(
       "mark_no_update",
       { path: "人物.md", reason: "当前窗口没有新增人物信息。" },
       context
-    )) as ToolNoUpdateSummary;
+    );
 
-    expect(summary).toEqual({
-      path: "人物.md",
-      operation: "mark_no_update",
-      reason: "当前窗口没有新增人物信息。"
-    });
+    expect(result).toBe("marked no update for 人物.md: 当前窗口没有新增人物信息。");
     expect(fs.existsSync(path.join(context.reportsRoot, "人物.md"))).toBe(false);
   });
 
@@ -183,50 +142,36 @@ describe("builtin file tools", () => {
     const context = makeContext();
     fs.writeFileSync(path.join(context.projectRoot, "chapters", "大文件.txt"), "0123456789", "utf8");
 
-    await expect(executeBuiltinFileTool("grep", { path: "chapters/大文件.txt", pattern: "9" }, { ...context, maxReadBytes: 5 })).rejects.toMatchObject({
+    await expect(executeBuiltinFileTool("read_file", { path: "chapters/大文件.txt", limit: 1 }, { ...context, maxReadBytes: 5 })).rejects.toMatchObject({
       name: "ToolExecutionError",
       code: "INVALID_ARGUMENTS"
     });
   });
 
-  it("truncates grep match text to the configured preview limit", async () => {
-    const context = makeContext();
-    fs.writeFileSync(path.join(context.projectRoot, "chapters", "长行.txt"), `prefix-${"x".repeat(100)}-suffix\n`, "utf8");
-
-    await expect(
-      executeBuiltinFileTool("grep", { path: "chapters/长行.txt", pattern: "prefix" }, { ...context, maxPreviewChars: 12 })
-    ).resolves.toMatchObject({
-      matches: [{ path: "chapters/长行.txt", line: 1, text: "prefix-xxxxx" }]
-    });
-  });
-
-  it("rejects recursive grep when the file count budget is exceeded", async () => {
+  it("keeps grep on Reasonix search semantics instead of legacy file count budgets", async () => {
     const context = makeContext();
     fs.writeFileSync(path.join(context.projectRoot, "chapters", "第二章.txt"), "凝气丹\n", "utf8");
 
-    await expect(executeBuiltinFileTool("grep", { path: "chapters", pattern: "凝气丹" }, { ...context, maxGrepFiles: 1 })).rejects.toMatchObject({
-      name: "ToolExecutionError",
-      code: "INVALID_ARGUMENTS"
-    });
+    await expect(executeBuiltinFileTool("grep", { path: "chapters", pattern: "凝气丹" }, { ...context, maxGrepFiles: 1 })).resolves.toContain(
+      "凝气丹"
+    );
   });
 
-  it("rejects recursive grep when the total byte budget is exceeded", async () => {
+  it("keeps grep on Reasonix search semantics instead of legacy total byte budgets", async () => {
     const context = makeContext();
 
-    await expect(executeBuiltinFileTool("grep", { path: "chapters", pattern: "凝气丹" }, { ...context, maxGrepTotalBytes: 4 })).rejects.toMatchObject({
-      name: "ToolExecutionError",
-      code: "INVALID_ARGUMENTS"
-    });
+    await expect(executeBuiltinFileTool("grep", { path: "chapters", pattern: "凝气丹" }, { ...context, maxGrepTotalBytes: 4 })).resolves.toContain(
+      "凝气丹"
+    );
   });
 
-  it("rejects grep when the match budget is exceeded", async () => {
+  it("keeps grep on Reasonix result cap semantics instead of legacy match budgets", async () => {
     const context = makeContext();
     fs.writeFileSync(path.join(context.projectRoot, "chapters", "重复.txt"), "凝气丹\n凝气丹\n", "utf8");
 
-    await expect(executeBuiltinFileTool("grep", { path: "chapters/重复.txt", pattern: "凝气丹" }, { ...context, maxGrepMatches: 1 })).rejects.toMatchObject({
-      name: "ToolExecutionError",
-      code: "INVALID_ARGUMENTS"
-    });
+    await expect(executeBuiltinFileTool("grep", { path: "chapters/重复.txt", pattern: "凝气丹" }, { ...context, maxGrepMatches: 1 })).resolves.toContain(
+      "重复.txt"
+    );
   });
 
   it.each(["../outside.md", "nested/report.md", path.resolve("outside.md")])("rejects unsafe report path %s", async (candidate) => {
@@ -252,7 +197,7 @@ describe("builtin file tools", () => {
   it("maps edit_file replacement misses from ReportWriterError to ToolExecutionError", async () => {
     const context = makeContext();
 
-    await expect(executeBuiltinFileTool("edit_file", { path: "丹药分析.md", oldText: "missing", newText: "x" }, context)).rejects.toSatisfy(
+    await expect(executeBuiltinFileTool("edit_file", { path: "丹药分析.md", old_string: "missing", new_string: "x" }, context)).rejects.toSatisfy(
       (error: unknown) => {
         expectToolExecutionErrorCode(error, "INVALID_ARGUMENTS");
         return true;
@@ -268,7 +213,7 @@ describe("builtin file tools", () => {
     fs.symlinkSync(outsideFile, linkPath, "file");
 
     await expect(
-      executeBuiltinFileTool("edit_file", { path: "linked.md", oldText: "EXTERNAL_SECRET_BETA", newText: "x" }, context)
+      executeBuiltinFileTool("edit_file", { path: "linked.md", old_string: "EXTERNAL_SECRET_BETA", new_string: "x" }, context)
     ).rejects.toSatisfy(
       (error: unknown) => {
         expectToolExecutionErrorCode(error, "UNSAFE_PATH");
@@ -281,7 +226,7 @@ describe("builtin file tools", () => {
     const context = makeContext();
 
     await expect(
-      executeBuiltinFileTool("multi_edit", { path: "丹药分析.md", edits: [{ oldText: "missing", newText: "x" }] }, context)
+      executeBuiltinFileTool("multi_edit", { path: "丹药分析.md", edits: [{ old_string: "missing", new_string: "x" }] }, context)
     ).rejects.toSatisfy((error: unknown) => {
       expectToolExecutionErrorCode(error, "INVALID_ARGUMENTS");
       return true;

@@ -1,12 +1,17 @@
 export type ToolEffect = "read" | "write" | "state";
 
 const TOOL_EFFECTS = {
-  ls: "read",
   read_file: "read",
   grep: "read",
+  glob: "read",
+  ls: "read",
+  bash_output: "read",
+  wait: "read",
   write_file: "write",
   edit_file: "write",
   multi_edit: "write",
+  bash: "write",
+  kill_shell: "write",
   mark_no_update: "state"
 } as const;
 

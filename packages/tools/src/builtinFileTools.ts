@@ -1,7 +1,23 @@
 import fs from "node:fs";
 import path from "node:path";
-import { createReportWriter, ReportWriterError } from "@novel-extractor/markdown/reportWriter";
-import { classifyToolEffects, type BuiltinToolName } from "./toolPolicy";
+import { classifyToolEffects, isWriteTool, type BuiltinToolName } from "./toolPolicy";
+import { BashJobManager } from "./reasonix/bashJobs";
+import { PathResolver, resolveReadablePath } from "./reasonix/pathResolver";
+import type { ReasonixShellConfig } from "./reasonix/workspace";
+import { Workspace } from "./reasonix/workspace";
+import { createReadFileTool } from "./reasonix/tools/readFileTool";
+import { createWriteFileTool } from "./reasonix/tools/writeFileTool";
+import { createEditFileTool } from "./reasonix/tools/editFileTool";
+import { createMultiEditTool } from "./reasonix/tools/multiEditTool";
+import { createGrepTool } from "./reasonix/tools/grepTool";
+import { createGlobTool } from "./reasonix/tools/globTool";
+import { createLsTool } from "./reasonix/tools/lsTool";
+import {
+  createBashOutputTool,
+  createBashTool,
+  createKillShellTool,
+  createWaitTool
+} from "./reasonix/tools/bashTool";
 
 export interface ToolExecutionContext {
   projectRoot: string;
@@ -12,35 +28,12 @@ export interface ToolExecutionContext {
   maxGrepTotalBytes?: number;
   maxGrepMatches?: number;
   ignoredDirectoryNames?: readonly string[];
-}
-
-export interface ToolWriteSummary {
-  path: string;
-  operation: "write_file" | "edit_file" | "multi_edit";
-  changedBytes: number;
-  preview: string;
-}
-
-export interface ToolNoUpdateSummary {
-  path: string;
-  operation: "mark_no_update";
-  reason: string;
-}
-
-export interface LsResult {
-  path: string;
-  entries: Array<{ name: string; type: "file" | "directory" }>;
-}
-
-export interface ReadFileResult {
-  path: string;
-  content: string;
-}
-
-export interface GrepResult {
-  path: string;
-  pattern: string;
-  matches: Array<{ path: string; line: number; text: string }>;
+  readAliasRoots?: ReadonlyArray<{ token: string; root: string }>;
+  jobManager?: BashJobManager;
+  sessionId?: string;
+  signal?: AbortSignal;
+  bashTimeoutSeconds?: number;
+  shell?: ReasonixShellConfig;
 }
 
 export class ToolExecutionError extends Error {
@@ -53,15 +46,10 @@ export class ToolExecutionError extends Error {
   }
 }
 
-type ToolResult = LsResult | ReadFileResult | GrepResult | ToolWriteSummary | ToolNoUpdateSummary;
-
+const MARK_NO_UPDATE_TOOL_NAME = "mark_no_update";
 const DEFAULT_MAX_READ_BYTES = 1024 * 1024;
-const DEFAULT_MAX_GREP_FILES = 5000;
-const DEFAULT_MAX_GREP_TOTAL_BYTES = 10 * 1024 * 1024;
-const DEFAULT_MAX_GREP_MATCHES = 1000;
-const DEFAULT_IGNORED_DIRECTORY_NAMES = [".git", "node_modules", "dist", "build", "coverage", ".next", ".turbo", "out"] as const;
 
-export async function executeBuiltinFileTool(name: string, rawArguments: unknown, context: ToolExecutionContext): Promise<ToolResult> {
+export async function executeBuiltinFileTool(name: string, rawArguments: unknown, context: ToolExecutionContext): Promise<string> {
   try {
     classifyToolEffects(name);
   } catch (error) {
@@ -69,286 +57,189 @@ export async function executeBuiltinFileTool(name: string, rawArguments: unknown
   }
 
   try {
-    switch (name as BuiltinToolName) {
-      case "ls":
-        return executeLs(rawArguments, context);
-      case "read_file":
-        return executeReadFile(rawArguments, context);
-      case "grep":
-        return executeGrep(rawArguments, context);
-      case "write_file":
-        return executeWriteFile(rawArguments, context);
-      case "edit_file":
-        return executeEditFile(rawArguments, context);
-      case "multi_edit":
-        return executeMultiEdit(rawArguments, context);
-      case "mark_no_update":
-        return executeMarkNoUpdate(rawArguments, context);
+    if (name === MARK_NO_UPDATE_TOOL_NAME) {
+      return executeMarkNoUpdate(rawArguments, context);
     }
+
+    const workspace = createReasonixWorkspace(context);
+    const tool = createReasonixTool(name as BuiltinToolName, workspace);
+    const executionArguments = normalizeReasonixArguments(name, rawArguments, context);
+    validateReadBudget(name, executionArguments, context, workspace);
+
+    return await tool.execute(executionArguments, {
+      jobManager: context.jobManager,
+      sessionId: context.sessionId,
+      signal: context.signal
+    });
   } catch (error) {
     throw toToolError(error, "IO_ERROR");
   }
 }
 
-function executeLs(rawArguments: unknown, context: ToolExecutionContext): LsResult {
-  const args = parseArgs(rawArguments, ["path"]);
-  const targetPath = resolveProjectPath(context.projectRoot, args.path);
-  const stat = statExisting(targetPath);
-  if (!stat.isDirectory()) {
-    throw new ToolExecutionError("ls path must be a directory", "INVALID_ARGUMENTS");
+function createReasonixWorkspace(context: ToolExecutionContext): Workspace {
+  const readPaths = new PathResolver();
+  const reportsRootToken = toProjectRelativeReportsRootPath(context);
+  readPaths.registerReadRoot(reportsRootToken, context.reportsRoot);
+  readPaths.registerReadRoot("reports", context.reportsRoot);
+
+  for (const alias of context.readAliasRoots ?? []) {
+    readPaths.registerReadRoot(alias.token, alias.root);
   }
 
-  const entries = fs
-    .readdirSync(targetPath, { withFileTypes: true })
-    .filter((entry) => entry.isFile() || entry.isDirectory())
-    .map((entry) => ({ name: entry.name, type: entry.isDirectory() ? ("directory" as const) : ("file" as const) }))
-    .sort((left, right) => left.name.localeCompare(right.name, "zh-Hans-CN"));
-
-  return { path: normalizeRelativeForOutput(args.path), entries };
-}
-
-function executeReadFile(rawArguments: unknown, context: ToolExecutionContext): ReadFileResult {
-  const args = parseArgs(rawArguments, ["path"]);
-  const targetPath = resolveProjectPath(context.projectRoot, args.path);
-  const stat = statExisting(targetPath);
-  if (!stat.isFile()) {
-    throw new ToolExecutionError("read_file path must be a file", "INVALID_ARGUMENTS");
-  }
-
-  const maxReadBytes = context.maxReadBytes ?? DEFAULT_MAX_READ_BYTES;
-  if (stat.size > maxReadBytes) {
-    throw new ToolExecutionError("File is larger than maxReadBytes", "INVALID_ARGUMENTS");
-  }
-
-  return { path: normalizeRelativeForOutput(args.path), content: fs.readFileSync(targetPath, "utf8") };
-}
-
-function executeGrep(rawArguments: unknown, context: ToolExecutionContext): GrepResult {
-  const args = parseArgs(rawArguments, ["path", "pattern"]);
-  if (args.pattern === "") {
-    throw new ToolExecutionError("pattern must not be empty", "INVALID_ARGUMENTS");
-  }
-
-  const targetPath = resolveProjectPath(context.projectRoot, args.path);
-  const stat = statExisting(targetPath);
-  const maxReadBytes = getPositiveIntegerBudget(context.maxReadBytes, DEFAULT_MAX_READ_BYTES, "maxReadBytes");
-  const maxGrepFiles = getPositiveIntegerBudget(context.maxGrepFiles, DEFAULT_MAX_GREP_FILES, "maxGrepFiles");
-  const maxGrepTotalBytes = getPositiveIntegerBudget(context.maxGrepTotalBytes, DEFAULT_MAX_GREP_TOTAL_BYTES, "maxGrepTotalBytes");
-  const maxGrepMatches = getPositiveIntegerBudget(context.maxGrepMatches, DEFAULT_MAX_GREP_MATCHES, "maxGrepMatches");
-  const ignoredDirectoryNames = new Set(context.ignoredDirectoryNames ?? DEFAULT_IGNORED_DIRECTORY_NAMES);
-  const files = stat.isDirectory()
-    ? collectFiles(targetPath, { maxFiles: maxGrepFiles, maxTotalBytes: maxGrepTotalBytes, ignoredDirectoryNames })
-    : [{ path: targetPath, size: stat.size }];
-  const projectRoot = fs.realpathSync.native(context.projectRoot);
-  const maxPreviewChars = context.maxPreviewChars ?? 240;
-  const matches: GrepResult["matches"] = [];
-
-  for (const file of files) {
-    if (file.size > maxReadBytes) {
-      throw new ToolExecutionError("File is larger than maxReadBytes", "INVALID_ARGUMENTS");
-    }
-    if (file.size > maxGrepTotalBytes) {
-      throw new ToolExecutionError("grep total byte budget exceeded", "INVALID_ARGUMENTS");
-    }
-
-    const content = fs.readFileSync(file.path, "utf8");
-    const lines = content.split(/\r?\n/u);
-    lines.forEach((line, index) => {
-      if (line.includes(args.pattern)) {
-        if (matches.length >= maxGrepMatches) {
-          throw new ToolExecutionError("grep match budget exceeded", "INVALID_ARGUMENTS");
-        }
-        matches.push({
-          path: path.relative(projectRoot, file.path).replace(/\\/g, "/"),
-          line: index + 1,
-          text: line.slice(0, maxPreviewChars)
-        });
-      }
-    });
-  }
-
-  return { path: normalizeRelativeForOutput(args.path), pattern: args.pattern, matches };
-}
-
-function executeWriteFile(rawArguments: unknown, context: ToolExecutionContext): ToolWriteSummary {
-  const args = parseArgs(rawArguments, ["path", "content"]);
-  assertReportsRootInsideProject(context);
-  const writer = createReportWriter({ reportsRoot: context.reportsRoot, previewLimit: context.maxPreviewChars });
-  const result = writer.writeReport({ path: args.path, content: args.content });
-  return toSummary(result.relativePath, "write_file", result.changedBytes, result.preview);
-}
-
-function executeEditFile(rawArguments: unknown, context: ToolExecutionContext): ToolWriteSummary {
-  const args = parseArgs(rawArguments, ["path", "oldText", "newText"]);
-  assertReportsRootInsideProject(context);
-  const writer = createReportWriter({ reportsRoot: context.reportsRoot, previewLimit: context.maxPreviewChars });
-  const result = writer.replaceText({ path: args.path, oldText: args.oldText, newText: args.newText });
-  return toSummary(result.relativePath, "edit_file", result.changedBytes, result.preview);
-}
-
-function executeMultiEdit(rawArguments: unknown, context: ToolExecutionContext): ToolWriteSummary {
-  const args = parseArgs(rawArguments, ["path"], ["edits"]);
-  const edits = getRawProperty(rawArguments, "edits");
-  if (!Array.isArray(edits) || edits.length === 0) {
-    throw new ToolExecutionError("edits must be a non-empty array", "INVALID_ARGUMENTS");
-  }
-
-  const parsedEdits = edits.map((edit) => parseArgs(edit, ["oldText", "newText"]));
-  assertReportsRootInsideProject(context);
-  const writer = createReportWriter({ reportsRoot: context.reportsRoot, previewLimit: context.maxPreviewChars });
-  const result = writer.applyMultiEdit({
-    path: args.path,
-    edits: parsedEdits.map((edit) => ({ path: args.path, oldText: edit.oldText, newText: edit.newText }))
+  return new Workspace({
+    dir: context.projectRoot,
+    writeRoots: [context.reportsRoot],
+    readPaths,
+    bashTimeoutSeconds: context.bashTimeoutSeconds,
+    shell: context.shell
   });
-
-  return toSummary(result.relativePath, "multi_edit", result.changedBytes, result.preview);
 }
 
-function executeMarkNoUpdate(rawArguments: unknown, context: ToolExecutionContext): ToolNoUpdateSummary {
-  const args = parseArgs(rawArguments, ["path", "reason"]);
-  assertReportsRootInsideProject(context);
-  const writer = createReportWriter({ reportsRoot: context.reportsRoot, previewLimit: context.maxPreviewChars });
-  writer.resolveReportPath(args.path);
+function createReasonixTool(name: BuiltinToolName, workspace: Workspace) {
+  switch (name) {
+    case "read_file":
+      return createReadFileTool(workspace);
+    case "write_file":
+      return createWriteFileTool(workspace);
+    case "edit_file":
+      return createEditFileTool(workspace);
+    case "multi_edit":
+      return createMultiEditTool(workspace);
+    case "grep":
+      return createGrepTool(workspace);
+    case "glob":
+      return createGlobTool(workspace);
+    case "ls":
+      return createLsTool(workspace);
+    case "bash":
+      return createBashTool(workspace);
+    case "bash_output":
+      return createBashOutputTool(workspace);
+    case "wait":
+      return createWaitTool(workspace);
+    case "kill_shell":
+      return createKillShellTool(workspace);
+    default:
+      throw new ToolExecutionError(`Unknown tool: ${name}`, "UNKNOWN_TOOL");
+  }
+}
+
+function normalizeReasonixArguments(name: string, rawArguments: unknown, context: ToolExecutionContext): unknown {
+  if (!isWriteTool(name)) {
+    return rawArguments;
+  }
+
+  const args = parseObjectArgument(rawArguments);
+  if (args === undefined || typeof args.path !== "string") {
+    return rawArguments;
+  }
+
   return {
-    path: args.path,
-    operation: "mark_no_update",
-    reason: args.reason
+    ...args,
+    path: toProjectRelativeReportPath(context, args.path)
   };
 }
 
-function toSummary(pathName: string, operation: ToolWriteSummary["operation"], changedBytes: number, preview: string): ToolWriteSummary {
-  return {
-    path: pathName,
-    operation,
-    changedBytes,
-    preview
-  };
-}
-
-function parseArgs(rawArguments: unknown, requiredKeys: string[], allowedExtraKeys: string[] = []): Record<string, string> {
-  if (typeof rawArguments !== "object" || rawArguments === null || Array.isArray(rawArguments)) {
+function executeMarkNoUpdate(rawArguments: unknown, context: ToolExecutionContext): string {
+  const args = parseObjectArgument(rawArguments);
+  if (args === undefined) {
     throw new ToolExecutionError("Tool arguments must be an object", "INVALID_ARGUMENTS");
   }
 
-  const record = rawArguments as Record<string, unknown>;
-  const allowedKeys = new Set([...requiredKeys, ...allowedExtraKeys]);
-  for (const key of Object.keys(record)) {
-    if (!allowedKeys.has(key)) {
-      throw new ToolExecutionError(`Unexpected argument: ${key}`, "INVALID_ARGUMENTS");
+  if (typeof args.path !== "string") {
+    throw new ToolExecutionError("path must be a string", "INVALID_ARGUMENTS");
+  }
+  if (typeof args.reason !== "string") {
+    throw new ToolExecutionError("reason must be a string", "INVALID_ARGUMENTS");
+  }
+
+  const reportFileName = toReportFileName(context, args.path);
+  return `marked no update for ${reportFileName}: ${args.reason}`;
+}
+
+function parseObjectArgument(rawArguments: unknown): Record<string, unknown> | undefined {
+  if (typeof rawArguments === "string") {
+    try {
+      const parsed = JSON.parse(rawArguments) as unknown;
+      return isPlainRecord(parsed) ? parsed : undefined;
+    } catch {
+      return undefined;
     }
   }
 
-  const parsed: Record<string, string> = {};
-  for (const key of requiredKeys) {
-    const value = record[key];
-    if (typeof value !== "string") {
-      throw new ToolExecutionError(`${key} must be a string`, "INVALID_ARGUMENTS");
-    }
-    parsed[key] = value;
+  return isPlainRecord(rawArguments) ? rawArguments : undefined;
+}
+
+function validateReadBudget(name: string, rawArguments: unknown, context: ToolExecutionContext, workspace: Workspace): void {
+  if (name !== "read_file") {
+    return;
   }
 
-  return parsed;
+  const args = parseObjectArgument(rawArguments);
+  if (args === undefined || typeof args.path !== "string") {
+    return;
+  }
+
+  const maxReadBytes = context.maxReadBytes ?? DEFAULT_MAX_READ_BYTES;
+  const resolved = resolveReadablePath(workspace.dir, args.path, workspace.readPaths);
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(resolved.path);
+  } catch {
+    return;
+  }
+
+  if (stat.isFile() && stat.size > maxReadBytes) {
+    throw new ToolExecutionError("File is larger than maxReadBytes", "INVALID_ARGUMENTS");
+  }
+}
+
+function toProjectRelativeReportsRootPath(context: ToolExecutionContext): string {
+  assertReportsRootInsideProject(context);
+  return path.relative(fs.realpathSync.native(context.projectRoot), fs.realpathSync.native(context.reportsRoot)).replace(/\\/g, "/");
+}
+
+function toProjectRelativeReportPath(context: ToolExecutionContext, inputPath: string): string {
+  const reportFileName = toReportFileName(context, inputPath);
+  return `${toProjectRelativeReportsRootPath(context)}/${reportFileName}`;
+}
+
+function toReportFileName(context: ToolExecutionContext, inputPath: string): string {
+  const comparablePath = inputPath.replace(/\\/g, "/").replace(/^(?:\.\/)+/u, "");
+  const reportsRootPath = toProjectRelativeReportsRootPath(context);
+  const reportsRootPrefix = `${reportsRootPath}/`;
+  const reportFileName =
+    comparablePath.startsWith(reportsRootPrefix)
+      ? comparablePath.slice(reportsRootPrefix.length)
+      : comparablePath.startsWith("reports/")
+        ? comparablePath.slice("reports/".length)
+        : comparablePath;
+
+  return validateFlatReportFileName(reportFileName);
+}
+
+function validateFlatReportFileName(reportFileName: string): string {
+  const normalized = reportFileName.normalize("NFC");
+  if (
+    normalized === "" ||
+    normalized === "." ||
+    normalized === ".." ||
+    normalized.includes("\0") ||
+    /[\\/]/u.test(normalized) ||
+    /^[A-Za-z]:/u.test(normalized) ||
+    path.win32.isAbsolute(normalized) ||
+    path.posix.isAbsolute(normalized)
+  ) {
+    throw new ToolExecutionError("Path is outside allowed root", "UNSAFE_PATH");
+  }
+
+  return normalized;
 }
 
 function assertReportsRootInsideProject(context: ToolExecutionContext): void {
   const projectRootRealPath = fs.realpathSync.native(context.projectRoot);
   const reportsRootRealPath = fs.realpathSync.native(context.reportsRoot);
   assertInsideRoot(projectRootRealPath, reportsRootRealPath);
-}
-
-function getRawProperty(rawArguments: unknown, key: string): unknown {
-  if (typeof rawArguments !== "object" || rawArguments === null || Array.isArray(rawArguments)) {
-    throw new ToolExecutionError("Tool arguments must be an object", "INVALID_ARGUMENTS");
-  }
-
-  return (rawArguments as Record<string, unknown>)[key];
-}
-
-function resolveProjectPath(root: string, relativePath: string): string {
-  const rootRealPath = fs.realpathSync.native(root);
-  const safeRelativePath = validateProjectRelativePath(relativePath);
-  const candidatePath = path.resolve(rootRealPath, safeRelativePath);
-  assertInsideRoot(rootRealPath, candidatePath);
-  if (!fs.existsSync(candidatePath)) {
-    return candidatePath;
-  }
-
-  const realPath = fs.realpathSync.native(candidatePath);
-  assertInsideRoot(rootRealPath, realPath);
-  return realPath;
-}
-
-function validateProjectRelativePath(candidate: string): string {
-  if (candidate === ".") {
-    return ".";
-  }
-
-  if (candidate === "" || candidate.includes("\0")) {
-    throw new ToolExecutionError("path must not be empty", "UNSAFE_PATH");
-  }
-
-  if (/^[A-Za-z]:/u.test(candidate) || path.win32.isAbsolute(candidate) || path.posix.isAbsolute(candidate)) {
-    throw new ToolExecutionError("Absolute paths are not allowed", "UNSAFE_PATH");
-  }
-
-  const parts = candidate.replace(/\\/g, "/").split("/");
-  if (parts.some((part) => part === "" || part === "." || part === "..")) {
-    throw new ToolExecutionError("Path must be relative and stay inside project root", "UNSAFE_PATH");
-  }
-
-  return parts.join(path.sep);
-}
-
-function statExisting(targetPath: string): fs.Stats {
-  try {
-    return fs.statSync(targetPath);
-  } catch (error) {
-    const code = error instanceof Error && "code" in error ? String((error as NodeJS.ErrnoException).code) : "";
-    if (code === "ENOENT") {
-      throw new ToolExecutionError("Path does not exist", "NOT_FOUND");
-    }
-    throw toToolError(error, "IO_ERROR");
-  }
-}
-
-interface GrepCollectionBudget {
-  maxFiles: number;
-  maxTotalBytes: number;
-  ignoredDirectoryNames: ReadonlySet<string>;
-}
-
-function collectFiles(root: string, budget: GrepCollectionBudget): Array<{ path: string; size: number }> {
-  const files: Array<{ path: string; size: number }> = [];
-  const pendingDirectories = [root];
-  let totalBytes = 0;
-
-  while (pendingDirectories.length > 0) {
-    const currentDirectory = pendingDirectories.pop() ?? root;
-    for (const entry of fs.readdirSync(currentDirectory, { withFileTypes: true })) {
-      const entryPath = path.join(currentDirectory, entry.name);
-      if (entry.isDirectory()) {
-        if (!budget.ignoredDirectoryNames.has(entry.name)) {
-          pendingDirectories.push(entryPath);
-        }
-        continue;
-      }
-      if (!entry.isFile()) {
-        continue;
-      }
-
-      const fileStat = statExisting(entryPath);
-      if (files.length >= budget.maxFiles) {
-        throw new ToolExecutionError("grep file budget exceeded", "INVALID_ARGUMENTS");
-      }
-      totalBytes += fileStat.size;
-      if (totalBytes > budget.maxTotalBytes) {
-        throw new ToolExecutionError("grep total byte budget exceeded", "INVALID_ARGUMENTS");
-      }
-      files.push({ path: entryPath, size: fileStat.size });
-    }
-  }
-
-  return files;
 }
 
 function assertInsideRoot(rootRealPath: string, targetPath: string): void {
@@ -359,41 +250,49 @@ function assertInsideRoot(rootRealPath: string, targetPath: string): void {
   }
 }
 
-function normalizeRelativeForOutput(relativePath: string): string {
-  return relativePath.replace(/\\/g, "/");
-}
-
-function getPositiveIntegerBudget(value: number | undefined, fallback: number, label: string): number {
-  if (value === undefined) {
-    return fallback;
-  }
-  if (!Number.isSafeInteger(value) || value < 1) {
-    throw new ToolExecutionError(`${label} must be a positive integer`, "INVALID_ARGUMENTS");
-  }
-  return value;
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function toToolError(error: unknown, fallbackCode: ToolExecutionError["code"]): ToolExecutionError {
   if (error instanceof ToolExecutionError) {
     return error;
   }
-  if (error instanceof ReportWriterError) {
-    if (isFileNotFoundError(error)) {
-      return new ToolExecutionError("Path does not exist", "NOT_FOUND");
-    }
-    return new ToolExecutionError(error.message, error.code === "UNSAFE_PATH" ? "UNSAFE_PATH" : "INVALID_ARGUMENTS");
+
+  const message = error instanceof Error ? error.message : String(error);
+  if (/^Unknown tool: /u.test(message)) {
+    return new ToolExecutionError(message, "UNKNOWN_TOOL");
   }
-  if (isFileNotFoundError(error)) {
+  if (isUnsafePathMessage(message)) {
+    return new ToolExecutionError(message, "UNSAFE_PATH");
+  }
+  if (isNotFoundMessage(message)) {
     return new ToolExecutionError("Path does not exist", "NOT_FOUND");
   }
-  return new ToolExecutionError(error instanceof Error ? error.message : "Tool execution failed", fallbackCode);
-}
-
-function isFileNotFoundError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
+  if (isInvalidArgumentMessage(message)) {
+    return new ToolExecutionError(message, "INVALID_ARGUMENTS");
   }
 
-  const code = (error as NodeJS.ErrnoException).code;
-  return code === "ENOENT" || /\bENOENT\b|no such file or directory/iu.test(error.message);
+  return new ToolExecutionError(message, fallbackCode);
+}
+
+function isUnsafePathMessage(message: string): boolean {
+  return /outside (?:the )?(?:writable roots|allowed root)|outside writable roots|path is outside/iu.test(message);
+}
+
+function isNotFoundMessage(message: string): boolean {
+  return /\bENOENT\b|no such file or directory|file does not exist/iu.test(message);
+}
+
+function isInvalidArgumentMessage(message: string): boolean {
+  return (
+    message.startsWith("invalid args:") ||
+    message === "path is required" ||
+    message === "old_string is required" ||
+    message === "edits must not be empty" ||
+    message.includes(" is a directory, not a file") ||
+    /^old_string (?:not found|is not unique)\b/u.test(message) ||
+    /^edit \d+: old_string (?:not found|is not unique|required)\b/u.test(message) ||
+    /^invalid pattern:/u.test(message)
+  );
 }

@@ -668,12 +668,35 @@ describe("P0 desktop IPC handlers", () => {
 
       const firstRequestJson = JSON.stringify(firstRequestBody);
       const firstWindowTextPath = `runs/${jobWithTwoTemplates.id}/windows/window-0001.txt`;
+      const firstRequestTools = (firstRequestBody.tools ?? []) as Array<{
+        function?: { name?: string; parameters?: { properties?: Record<string, unknown> } };
+      }>;
+      const firstRequestToolNames = firstRequestTools.map((tool) => tool.function?.name);
+      const editFileSchema = firstRequestTools.find((tool) => tool.function?.name === "edit_file")?.function?.parameters;
+      const multiEditSchema = firstRequestTools.find((tool) => tool.function?.name === "multi_edit")?.function?.parameters;
+      const bashOutputSchema = firstRequestTools.find((tool) => tool.function?.name === "bash_output")?.function?.parameters;
 
-      expect(firstRequestJson).toContain("write_file");
-      expect(firstRequestJson).toContain("edit_file");
-      expect(firstRequestJson).toContain("multi_edit");
-      expect(firstRequestJson).toContain("read_file");
-      expect(firstRequestJson).toContain("grep");
+      expect(firstRequestToolNames).toEqual([
+        "read_file",
+        "write_file",
+        "edit_file",
+        "multi_edit",
+        "grep",
+        "glob",
+        "ls",
+        "bash",
+        "bash_output",
+        "wait",
+        "kill_shell",
+        "mark_no_update"
+      ]);
+      expect(editFileSchema?.properties).toHaveProperty("old_string");
+      expect(editFileSchema?.properties).toHaveProperty("new_string");
+      expect(editFileSchema?.properties).not.toHaveProperty("oldText");
+      expect(editFileSchema?.properties).not.toHaveProperty("newText");
+      expect(JSON.stringify(multiEditSchema)).toContain("old_string");
+      expect(JSON.stringify(multiEditSchema)).toContain("new_string");
+      expect(JSON.stringify(bashOutputSchema)).toContain("job_id");
       expect(firstRequestJson).toContain(`窗口文件：${firstWindowTextPath}`);
       expect(firstRequestJson).toContain(
         `read_file/grep 如需读取当前窗口文件，必须使用项目相对路径 ${firstWindowTextPath}，不要使用裸文件名 window-0001.txt`
@@ -689,6 +712,8 @@ describe("P0 desktop IPC handlers", () => {
       expect(secondToolMessages).toHaveLength(2);
       expect(JSON.stringify(secondToolMessages)).toContain("丹药分析.md");
       expect(JSON.stringify(secondToolMessages)).toContain("材料分析.md");
+      expect(JSON.stringify(secondToolMessages)).toContain("wrote ");
+      expect(JSON.stringify(secondToolMessages)).not.toContain("changedBytes");
       expect(JSON.stringify(mockServer.requests[0].body)).toContain("上下文章节范围：1-2");
       expect(JSON.stringify(mockServer.requests[0].body)).toContain("提交章节范围：1-2");
       expect(JSON.stringify(mockServer.requests[0].body)).toContain("当前运行日期：2026-06-27");
@@ -898,8 +923,8 @@ describe("P0 desktop IPC handlers", () => {
               toolCalls: [
                 createToolCall("call-window-2-edit", "edit_file", {
                   path: "丹药分析.md",
-                  oldText: "窗口一写入：凝气丹。",
-                  newText: "窗口一写入：凝气丹。\n窗口二已更新：紫霜丹。"
+                  old_string: "窗口一写入：凝气丹。",
+                  new_string: "窗口一写入：凝气丹。\n窗口二已更新：紫霜丹。"
                 })
               ]
             })
@@ -990,8 +1015,8 @@ describe("P0 desktop IPC handlers", () => {
               toolCalls: [
                 createToolCall("call-clean-template-marker", "edit_file", {
                   path: "丹药分析.md",
-                  oldText: "待清理标记：模板占位\n\n",
-                  newText: ""
+                  old_string: "待清理标记：模板占位\n\n",
+                  new_string: ""
                 })
               ]
             })
@@ -1059,7 +1084,7 @@ describe("P0 desktop IPC handlers", () => {
         fileName: "丹药分析.md",
         reportKind: "template-output"
       });
-      expect(reportMarkdown).toBe("# 丹药分析\n\n正式内容：凝气丹。\n");
+      expect(reportMarkdown).toBe("# 丹药分析\n\n正式内容：凝气丹。");
     } finally {
       await mockServer.close();
     }
@@ -1070,8 +1095,8 @@ describe("P0 desktop IPC handlers", () => {
       toolName: "edit_file",
       toolArgs: (reportPath: string) => ({
         path: reportPath,
-        oldText: "窗口一记录：韩立谨慎，代表事件为墨府求生。",
-        newText: "窗口一记录：韩立谨慎，代表事件为墨府求生。\n窗口二补充：韩立遇事先观察，再决定是否出手。"
+        old_string: "窗口一记录：韩立谨慎，代表事件为墨府求生。",
+        new_string: "窗口一记录：韩立谨慎，代表事件为墨府求生。\n窗口二补充：韩立遇事先观察，再决定是否出手。"
       })
     },
     {
@@ -1080,8 +1105,8 @@ describe("P0 desktop IPC handlers", () => {
         path: reportPath,
         edits: [
           {
-            oldText: "窗口一记录：韩立谨慎，代表事件为墨府求生。",
-            newText:
+            old_string: "窗口一记录：韩立谨慎，代表事件为墨府求生。",
+            new_string:
               "窗口一记录：韩立谨慎，代表事件为墨府求生。\n窗口二补充：韩立遇事先观察，再决定是否出手。"
           }
         ]
@@ -1326,8 +1351,8 @@ describe("P0 desktop IPC handlers", () => {
 
       expect(mockServer.requests).toHaveLength(5);
       expect(rewriteReplayBody).not.toContain("已有报告不能用 write_file 覆盖");
-      expect(rewriteReplayBody).toContain("operation");
-      expect(rewriteReplayBody).toContain("write_file");
+      expect(rewriteReplayBody).toContain("wrote ");
+      expect(rewriteReplayBody).toContain("NPC性格与代表事件.md");
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
@@ -1340,7 +1365,7 @@ describe("P0 desktop IPC handlers", () => {
         displayName: "NPC性格与代表事件",
         reportKind: "template-output"
       });
-      expect(reportMarkdown).toBe(`${rewrittenReportBody}\n`);
+      expect(reportMarkdown).toBe(rewrittenReportBody);
       expect(reportMarkdown).toContain("窗口一：韩立谨慎");
       expect(reportMarkdown).toContain("窗口二补充：韩立在黄枫谷入门前继续保持低调观察");
     } finally {
@@ -1411,8 +1436,8 @@ describe("P0 desktop IPC handlers", () => {
               toolCalls: [
                 createToolCall("call-window-2-edit", "edit_file", {
                   path: "势力设定.md",
-                  oldText: firstReportBody,
-                  newText: [firstReportBody, "", secondReportSection].join("\n")
+                  old_string: firstReportBody,
+                  new_string: [firstReportBody, "", secondReportSection].join("\n")
                 })
               ]
             })
@@ -1582,8 +1607,8 @@ describe("P0 desktop IPC handlers", () => {
               toolCalls: [
                 createToolCall("call-window-2-edit-report-alias", "edit_file", {
                   path: `reports/${reportFileName}`,
-                  oldText: firstReportBody,
-                  newText: mergedReportBody
+                  old_string: firstReportBody,
+                  new_string: mergedReportBody
                 })
               ]
             })
@@ -1598,8 +1623,8 @@ describe("P0 desktop IPC handlers", () => {
                   path: `./reports/${reportFileName}`,
                   edits: [
                     {
-                      oldText: "野狼帮、贾天龙与金狼相关内容。",
-                      newText: "野狼帮、贾天龙、金狼相关内容。"
+                      old_string: "野狼帮、贾天龙与金狼相关内容。",
+                      new_string: "野狼帮、贾天龙、金狼相关内容。"
                     }
                   ]
                 })
@@ -1680,7 +1705,7 @@ describe("P0 desktop IPC handlers", () => {
         status: "completed",
         progressText: "进度：2/2"
       });
-      expect(reportMarkdown).toBe(`${finalReportBody}\n`);
+      expect(reportMarkdown).toBe(finalReportBody);
     } finally {
       await mockServer.close();
     }
@@ -1733,8 +1758,8 @@ describe("P0 desktop IPC handlers", () => {
               toolCalls: [
                 createToolCall("call-window-2-edit-report", "edit_file", {
                   path: `reports/${reportFileName}`,
-                  oldText: "七玄门早期内容。",
-                  newText: "七玄门补充内容。"
+                  old_string: "七玄门早期内容。",
+                  new_string: "七玄门补充内容。"
                 })
               ]
             })
@@ -1809,7 +1834,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(mockServer.requests).toHaveLength(5);
       expect(grepReplayBody).toContain(`assets/books/${uploadedBookId}/reports/${reportFileName}`);
       expect(grepReplayBody).toContain("七玄门早期内容。");
-      expect(reportMarkdown).toBe(`${updatedReportBody}\n`);
+      expect(reportMarkdown).toBe(updatedReportBody);
     } finally {
       await mockServer.close();
     }
@@ -1878,8 +1903,8 @@ describe("P0 desktop IPC handlers", () => {
               toolCalls: [
                 createToolCall("call-window-2-edit", "edit_file", {
                   path: "势力设定.md",
-                  oldText: firstReportBody,
-                  newText: [firstReportBody, "", "## 二、野狼帮", "", "野狼帮、贾天龙与金狼相关内容。"].join("\n")
+                  old_string: firstReportBody,
+                  new_string: [firstReportBody, "", "## 二、野狼帮", "", "野狼帮、贾天龙与金狼相关内容。"].join("\n")
                 })
               ]
             })
@@ -1965,15 +1990,15 @@ describe("P0 desktop IPC handlers", () => {
       toolName: "edit_file",
       toolArgs: {
         path: "丹药分析.md",
-        oldText: "不存在的旧内容。",
-        newText: "不会写入的新内容。"
+        old_string: "不存在的旧内容。",
+        new_string: "不会写入的新内容。"
       }
     },
     {
       toolName: "multi_edit",
       toolArgs: {
         path: "丹药分析.md",
-        edits: [{ oldText: "不存在的旧内容。", newText: "不会写入的新内容。" }]
+        edits: [{ old_string: "不存在的旧内容。", new_string: "不会写入的新内容。" }]
       }
     }
   ])(
@@ -2021,8 +2046,8 @@ describe("P0 desktop IPC handlers", () => {
                 toolCalls: [
                   createToolCall("call-window-2-rewrite", "edit_file", {
                     path: "丹药分析.md",
-                    oldText: "# 丹药分析\n\n窗口一初稿：凝气丹。",
-                    newText: "# 丹药分析\n\n窗口二修正后的完整报告。"
+                    old_string: "# 丹药分析\n\n窗口一初稿：凝气丹。",
+                    new_string: "# 丹药分析\n\n窗口二修正后的完整报告。"
                   })
                 ]
               })
@@ -2083,7 +2108,7 @@ describe("P0 desktop IPC handlers", () => {
         );
 
         expect(mockServer.requests).toHaveLength(6);
-        expect(JSON.stringify(mockServer.requests[4].body)).toContain("Replacement text was not found");
+        expect(JSON.stringify(mockServer.requests[4].body)).toContain("old_string not found");
         expect(completedJob).toMatchObject({
           id: job.id,
           status: "completed",
@@ -2096,7 +2121,7 @@ describe("P0 desktop IPC handlers", () => {
           displayName: "丹药分析",
           reportKind: "template-output"
         });
-        expect(reportMarkdown).toBe("# 丹药分析\n\n窗口二修正后的完整报告。\n");
+        expect(reportMarkdown).toBe("# 丹药分析\n\n窗口二修正后的完整报告。");
       } finally {
         await mockServer.close();
       }
@@ -2316,12 +2341,12 @@ describe("P0 desktop IPC handlers", () => {
     }
   });
 
-  it("returns a recoverable error when grep targets the run root without leaking run logs", async () => {
+  it("returns recoverable errors when read tools target the run root without leaking run logs", async () => {
     const leakPattern = "TRACE_LEAK_MARKER";
     const leakPayload = "SHOULD_NOT_REACH_MODEL";
-    const recoveredReport = "# 丹药分析\n\nrun 根目录 grep 被拒绝后改用选中报告。";
+    const recoveredReport = "# 丹药分析\n\nrun 根目录读工具被拒绝后改用选中报告。";
     let createdJobId = "";
-    let grepReplayBody = "";
+    let readToolReplayBody = "";
     const mockServer = await startMockOpenAiServer({
       respond: ({ body, requestIndex }) => {
         if (requestIndex === 0) {
@@ -2331,6 +2356,13 @@ describe("P0 desktop IPC handlers", () => {
                 createToolCall("call-grep-run-root", "grep", {
                   path: `runs/${createdJobId}`,
                   pattern: leakPattern
+                }),
+                createToolCall("call-ls-run-root", "ls", {
+                  path: `runs/${createdJobId}`,
+                  recursive: true
+                }),
+                createToolCall("call-glob-run-root", "glob", {
+                  pattern: `runs/${createdJobId}/**/*.txt`
                 })
               ]
             })
@@ -2338,7 +2370,7 @@ describe("P0 desktop IPC handlers", () => {
         }
 
         if (requestIndex === 1) {
-          grepReplayBody = JSON.stringify(body);
+          readToolReplayBody = JSON.stringify(body);
           return {
             body: createChatCompletionResponse({
               toolCalls: [
@@ -2404,16 +2436,22 @@ describe("P0 desktop IPC handlers", () => {
       const logText = await fs.readFile(path.join(projectRoot, completedJob.logFilePath ?? ""), "utf8");
 
       expect(mockServer.requests).toHaveLength(3);
-      expect(grepReplayBody).toContain("UNSAFE_PATH");
-      expect(grepReplayBody).toContain("当前窗口文本");
-      expect(grepReplayBody).toContain("reports");
-      expect(grepReplayBody).not.toContain(leakPayload);
-      expect(grepReplayBody).not.toContain("/logs/");
+      expect(readToolReplayBody).toContain("UNSAFE_PATH");
+      expect(readToolReplayBody).toContain("当前窗口文本");
+      expect(readToolReplayBody).toContain("reports");
+      expect(readToolReplayBody).not.toContain(leakPayload);
+      expect(readToolReplayBody).not.toContain("/logs/");
       expect(logText).toContain("[工具调用][grep]");
+      expect(logText).toContain("[工具调用][ls]");
+      expect(logText).toContain("[工具调用][glob]");
       expect(logText).toContain("call-grep-run-root");
+      expect(logText).toContain("call-ls-run-root");
+      expect(logText).toContain("call-glob-run-root");
       expect(logText).toContain("[工具返回][grep]");
+      expect(logText).toContain("[工具返回][ls]");
+      expect(logText).toContain("[工具返回][glob]");
       expect(logText).toContain("UNSAFE_PATH");
-      expect(logText).toContain("read_file/grep 路径不在当前窗口允许范围内。");
+      expect(logText).toContain("读工具路径不在当前窗口允许范围内。");
       expect(logText).not.toContain(leakPayload);
       expect(existsSync(path.join(projectRoot, "runs", job.id, "tool-loop-traces"))).toBe(false);
       expect(completedJob).toMatchObject({
@@ -2422,7 +2460,7 @@ describe("P0 desktop IPC handlers", () => {
         progressText: "进度：1/1"
       });
       expect(completedJob?.failureReason).toBeUndefined();
-      expect(reportMarkdown).toBe(`${recoveredReport}\n`);
+      expect(reportMarkdown).toBe(recoveredReport);
     } finally {
       await mockServer.close();
     }
@@ -2610,7 +2648,7 @@ describe("P0 desktop IPC handlers", () => {
         progressText: "进度：1/1"
       });
       expect(completedJob?.failureReason).toBeUndefined();
-      expect(reportMarkdown).toBe(`${recoveredReport}\n`);
+      expect(reportMarkdown).toBe(recoveredReport);
     } finally {
       await mockServer.close();
     }
@@ -2708,7 +2746,7 @@ describe("P0 desktop IPC handlers", () => {
         progressText: "进度：2/2"
       });
       expect(completedJob?.failureReason).toBeUndefined();
-      expect(reportMarkdown).toBe(`${recoveredReport}\n`);
+      expect(reportMarkdown).toBe(recoveredReport);
     } finally {
       await mockServer.close();
     }
@@ -2906,7 +2944,8 @@ describe("P0 desktop IPC handlers", () => {
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
 
       expect(mockServer.requests).toHaveLength(3);
-      expect(JSON.stringify(mockServer.requests[1].body)).toContain("read_file path must be a file");
+      expect(JSON.stringify(mockServer.requests[1].body)).toContain("is a directory, not a file");
+      expect(JSON.stringify(mockServer.requests[1].body)).toContain("use the ls tool");
       expect(JSON.stringify(mockServer.requests[1].body)).toContain("INVALID_ARGUMENTS");
       expect(completedJob).toMatchObject({
         id: job.id,
@@ -2921,7 +2960,7 @@ describe("P0 desktop IPC handlers", () => {
         reportKind: "template-output"
       });
       const reportMarkdown = await fs.readFile(path.join(reportsDir, "丹药分析.md"), "utf8");
-      expect(reportMarkdown).toBe(`${recoveredReport}\n`);
+      expect(reportMarkdown).toBe(recoveredReport);
     } finally {
       await mockServer.close();
     }
@@ -2982,7 +3021,7 @@ describe("P0 desktop IPC handlers", () => {
       const requestBodies = mockServer.requests.map((request) => JSON.stringify(request.body));
 
       expect(mockServer.requests).toHaveLength(2);
-      expect(requestBodies.join("\n")).not.toContain("Tool arguments must be an object");
+      expect(requestBodies.join("\n")).not.toContain("cannot unmarshal string into Go value");
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
@@ -3008,7 +3047,7 @@ describe("P0 desktop IPC handlers", () => {
         ),
         "utf8"
       );
-      expect(reportMarkdown).toBe(`${recoveredReport}\n`);
+      expect(reportMarkdown).toBe(recoveredReport);
     } finally {
       await mockServer.close();
     }
@@ -3083,7 +3122,8 @@ describe("P0 desktop IPC handlers", () => {
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
 
       expect(mockServer.requests).toHaveLength(3);
-      expect(JSON.stringify(mockServer.requests[1].body)).toContain("Tool arguments must be an object");
+      expect(JSON.stringify(mockServer.requests[1].body)).toContain("invalid args:");
+      expect(JSON.stringify(mockServer.requests[1].body)).toContain("invalid character '丹' looking for beginning of value");
       expect(JSON.stringify(mockServer.requests[1].body)).toContain("INVALID_ARGUMENTS");
       expect(completedJob).toMatchObject({
         id: job.id,
@@ -3110,7 +3150,7 @@ describe("P0 desktop IPC handlers", () => {
         ),
         "utf8"
       );
-      expect(reportMarkdown).toBe(`${recoveredReport}\n`);
+      expect(reportMarkdown).toBe(recoveredReport);
     } finally {
       await mockServer.close();
     }
@@ -3184,7 +3224,8 @@ describe("P0 desktop IPC handlers", () => {
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
 
       expect(mockServer.requests).toHaveLength(3);
-      expect(JSON.stringify(mockServer.requests[1].body)).toContain("path must be a string");
+      expect(JSON.stringify(mockServer.requests[1].body)).toContain("invalid args:");
+      expect(JSON.stringify(mockServer.requests[1].body)).toContain("cannot unmarshal array into Go struct field .path of type string");
       expect(JSON.stringify(mockServer.requests[1].body)).toContain("INVALID_ARGUMENTS");
       expect(completedJob).toMatchObject({
         id: job.id,
@@ -3211,7 +3252,7 @@ describe("P0 desktop IPC handlers", () => {
         ),
         "utf8"
       );
-      expect(reportMarkdown).toBe(`${recoveredReport}\n`);
+      expect(reportMarkdown).toBe(recoveredReport);
     } finally {
       await mockServer.close();
     }
@@ -3304,7 +3345,8 @@ describe("P0 desktop IPC handlers", () => {
       expect(logText).toContain("path:");
       expect(logText).toContain("- 丹药分析.md");
       expect(logText).toContain("[工具返回][write_file]");
-      expect(logText).toContain("path must be a string");
+      expect(logText).toContain("invalid args:");
+      expect(logText).toContain("cannot unmarshal array into Go struct field .path of type string");
       expect(logText).toContain("完整报告正文".repeat(20));
       expect(logText).not.toContain(apiKey);
       expect(existsSync(path.join(projectRoot, "runs", job.id, "tool-loop-traces"))).toBe(false);
@@ -3521,8 +3563,8 @@ describe("P0 desktop IPC handlers", () => {
               toolCalls: [
                 createToolCall("call-edit-missing-report", "edit_file", {
                   path: "丹药分析.md",
-                  oldText: "旧内容",
-                  newText: "新内容"
+                  old_string: "旧内容",
+                  new_string: "新内容"
                 })
               ]
             })
@@ -3762,18 +3804,121 @@ describe("P0 desktop IPC handlers", () => {
     }
   });
 
-  it("completes a window as soon as every selected template has a tool outcome", async () => {
+  it("runs Reasonix bash background jobs inside the desktop tool loop", async () => {
+    let waitPromptBody = "";
+    let outcomePromptBody = "";
     const mockServer = await startMockOpenAiServer({
-      respond: ({ requestIndex }) => ({
-        body: createChatCompletionResponse({
-          toolCalls: [
-            createToolCall(`call-rewrite-${requestIndex}`, "write_file", {
-              path: "丹药分析.md",
-              content: `# 丹药分析\n\n第 ${requestIndex + 1} 轮成功写入正式报告。`
+      respond: ({ body, requestIndex }) => {
+        if (requestIndex === 0) {
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-start-bash-job", "bash", {
+                  command: "echo desktop-bg",
+                  run_in_background: true
+                })
+              ]
             })
-          ]
+          };
+        }
+
+        if (requestIndex === 1) {
+          waitPromptBody = JSON.stringify(body);
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-wait-bash-job", "wait", {
+                  job_ids: ["bash-1"],
+                  timeout_seconds: 5
+                })
+              ]
+            })
+          };
+        }
+
+        if (requestIndex === 2) {
+          outcomePromptBody = JSON.stringify(body);
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-no-update-after-bash", "mark_no_update", {
+                  path: "丹药分析.md",
+                  reason: "bash 背景任务已验证，当前窗口没有丹药新增信息。"
+                })
+              ]
+            })
+          };
+        }
+
+        return {
+          body: createChatCompletionResponse({ content: "bash 背景任务验证完成。" })
+        };
+      }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: mockServer.baseUrl
         })
-      })
+      )
+    });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: utf8FixturePath,
+        displayName: "凡人修仙传.txt"
+      });
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 2,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      });
+
+      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+
+      expect(mockServer.requests).toHaveLength(4);
+      expect(waitPromptBody).toContain('Started background job \\"bash-1\\"');
+      expect(outcomePromptBody).toContain("[bash-1");
+      expect(outcomePromptBody).toContain("desktop-bg");
+      expect(completedJob).toMatchObject({
+        id: job.id,
+        status: "completed"
+      });
+    } finally {
+      await mockServer.close();
+    }
+  });
+
+  it("replays a complete tool outcome before completing a window", async () => {
+    const mockServer = await startMockOpenAiServer({
+      respond: ({ requestIndex }) => {
+        if (requestIndex !== 0) {
+          return {
+            body: createChatCompletionResponse({ content: "窗口完成。" })
+          };
+        }
+
+        return {
+          body: createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-rewrite-0", "write_file", {
+                path: "丹药分析.md",
+                content: "# 丹药分析\n\n第 1 轮成功写入正式报告。"
+              })
+            ]
+          })
+        };
+      }
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
@@ -3820,7 +3965,7 @@ describe("P0 desktop IPC handlers", () => {
         "utf8"
       );
 
-      expect(mockServer.requests).toHaveLength(1);
+      expect(mockServer.requests).toHaveLength(2);
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
@@ -3977,7 +4122,7 @@ describe("P0 desktop IPC handlers", () => {
               toolCalls: [
                 createToolCall("call-window-2-missing-multi-edit", "multi_edit", {
                   path: "丹药分析.md",
-                  edits: [{ oldText: "不存在的长文片段。", newText: "不会写入的新内容。" }]
+                  edits: [{ old_string: "不存在的长文片段。", new_string: "不会写入的新内容。" }]
                 })
               ]
             })
@@ -4068,8 +4213,8 @@ describe("P0 desktop IPC handlers", () => {
       );
 
       expect(mockServer.requests).toHaveLength(12);
-      expect(requestBodies[4]).toContain("Replacement text was not found");
-      expect(requestBodies[4]).toContain("oldText 必须精确匹配");
+      expect(requestBodies[4]).toContain("old_string not found");
+      expect(requestBodies[4]).toContain("old_string 必须精确匹配");
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
@@ -4077,7 +4222,7 @@ describe("P0 desktop IPC handlers", () => {
       });
       expect(requireJobDto(completedJob).failureReason).toBeUndefined();
       expect(reports).toHaveLength(1);
-      expect(reportMarkdown).toBe(`${recoveredReport}\n`);
+      expect(reportMarkdown).toBe(recoveredReport);
     } finally {
       await mockServer.close();
     }
@@ -4086,23 +4231,36 @@ describe("P0 desktop IPC handlers", () => {
   it("continues read-only retries beyond the former tool-loop round limit until an explicit no-update outcome", async () => {
     const formerRoundLimit = 12;
     const mockServer = await startMockOpenAiServer({
-      respond: ({ requestIndex }) => ({
-        body: createChatCompletionResponse({
-          toolCalls:
-            requestIndex < formerRoundLimit
-              ? [
-                  createToolCall(`call-read-missing-${requestIndex}`, "read_file", {
-                    path: "丹药分析.md"
-                  })
-                ]
-              : [
-                  createToolCall("call-no-update-after-read-retries", "mark_no_update", {
-                    path: "丹药分析.md",
-                    reason: "连续查询后确认当前窗口没有可写入新增信息。"
-                  })
-                ]
-        })
-      })
+      respond: ({ requestIndex }) => {
+        if (requestIndex < formerRoundLimit) {
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall(`call-read-missing-${requestIndex}`, "read_file", {
+                  path: "丹药分析.md"
+                })
+              ]
+            })
+          };
+        }
+
+        if (requestIndex === formerRoundLimit) {
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-no-update-after-read-retries", "mark_no_update", {
+                  path: "丹药分析.md",
+                  reason: "连续查询后确认当前窗口没有可写入新增信息。"
+                })
+              ]
+            })
+          };
+        }
+
+        return {
+          body: createChatCompletionResponse({ content: "连续查询后确认无新增。" })
+        };
+      }
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
@@ -4136,7 +4294,7 @@ describe("P0 desktop IPC handlers", () => {
       const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
 
-      expect(mockServer.requests).toHaveLength(formerRoundLimit + 1);
+      expect(mockServer.requests).toHaveLength(formerRoundLimit + 2);
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
@@ -4154,15 +4312,15 @@ describe("P0 desktop IPC handlers", () => {
       toolName: "edit_file",
       toolArgs: {
         path: "丹药分析.md",
-        oldText: "旧内容。",
-        newText: "新内容。"
+        old_string: "旧内容。",
+        new_string: "新内容。"
       }
     },
     {
       toolName: "multi_edit",
       toolArgs: {
         path: "丹药分析.md",
-        edits: [{ oldText: "旧内容。", newText: "新内容。" }]
+        edits: [{ old_string: "旧内容。", new_string: "新内容。" }]
       }
     }
   ])(
@@ -4471,8 +4629,8 @@ describe("P0 desktop IPC handlers", () => {
               toolCalls: [
                 createToolCall(`call-window-${windowNumber}-edit`, "edit_file", {
                   path: "丹药分析.md",
-                  oldText: previousReportContent,
-                  newText: expectedReportContent
+                  old_string: previousReportContent,
+                  new_string: expectedReportContent
                 })
               ]
             })
@@ -5262,7 +5420,7 @@ describe("P0 desktop IPC handlers", () => {
         displayName: "丹药分析",
         reportKind: "template-output"
       });
-      expect(reportMarkdown).toBe(`${recoveredReport}\n`);
+      expect(reportMarkdown).toBe(recoveredReport);
       expect(reportMarkdown).not.toContain("runs/job");
       expect(reportMarkdown).not.toContain("assets/books");
     } finally {
@@ -5368,7 +5526,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(replayAfterDirtyWrite).toContain("报告正文不得包含运行窗口文件名或内部窗口标识");
       expect(replayAfterDirtyWrite).toContain("窗口 1（第1-2章）");
       expect(completedJob?.status).toBe("completed");
-      expect(reportMarkdown).toBe(`${recoveredReport}\n`);
+      expect(reportMarkdown).toBe(recoveredReport);
       expect(reportMarkdown).not.toContain("window-0001");
     } finally {
       await mockServer.close();
@@ -5479,7 +5637,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(replayAfterDirtyWrite).toContain("INVALID_ARGUMENTS");
       expect(replayAfterDirtyWrite).toContain("报告正文不得包含模板或草案状态");
       expect(completedJob?.status).toBe("completed");
-      expect(reportMarkdown).toBe(`${recoveredReport}\n`);
+      expect(reportMarkdown).toBe(recoveredReport);
       expect(reportMarkdown).not.toContain("状态：草案");
       expect(reportMarkdown).not.toContain("状态：模板");
     } finally {

@@ -19,7 +19,20 @@ function withToolLoopDefaults(
 ): NovelExtractorConfig {
   const config = getDefaultConfig();
   (config as unknown as { toolLoopDefaults: ToolLoopDefaultsTestShape }).toolLoopDefaults = {
-    enabledToolNames: ["read_file", "grep", "write_file", "edit_file", "multi_edit", "mark_no_update"],
+    enabledToolNames: [
+      "read_file",
+      "write_file",
+      "edit_file",
+      "multi_edit",
+      "grep",
+      "glob",
+      "ls",
+      "bash",
+      "bash_output",
+      "wait",
+      "kill_shell",
+      "mark_no_update"
+    ],
     systemInstruction: "必须通过文件工具写入或返回 NO_UPDATE。",
     windowInstructionLines: ["写工具 path 必须使用模板 outputFileName。", "无更新时只返回 NO_UPDATE。"],
     ...overrides
@@ -311,7 +324,7 @@ describe("config invariants", () => {
       /tool loop enabled tool names/i
     );
     expectInvariantViolation(
-      withToolLoopDefaults({ enabledToolNames: ["read_file", "ls"] }),
+      withToolLoopDefaults({ enabledToolNames: ["read_file", "move_file"] }),
       /tool loop enabled tool name/i
     );
     expectInvariantViolation(

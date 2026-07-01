@@ -41,9 +41,15 @@ const ALLOWED_QUANTITY_EVIDENCE_SCOPES = new Set<QuantityPolicyDefaults["evidenc
 const ALLOWED_TOOL_LOOP_TOOL_NAMES = new Set<ToolLoopToolName>([
   "read_file",
   "grep",
+  "glob",
+  "ls",
   "write_file",
   "edit_file",
   "multi_edit",
+  "bash",
+  "bash_output",
+  "wait",
+  "kill_shell",
   "mark_no_update"
 ]);
 const WINDOWS_DRIVE_PATH_PREFIX = /^[A-Za-z]:/;
