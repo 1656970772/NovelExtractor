@@ -706,6 +706,191 @@ describe("window run Reasonix tool loop integration", () => {
     expect(registerReport).not.toHaveBeenCalled();
   }, 20000);
 
+  it("removes rejected selected unsafe report writes from the bash sandbox before later bash reads", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-selected-symlink-refresh-"));
+    const externalRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-external-"));
+    scratchDirs.push(projectRoot, externalRoot);
+    const reportsRoot = path.join(projectRoot, "assets", "books", "book-1", "reports");
+    const windowTextPath = path.join(projectRoot, "runs", "job-1", "windows", "window-0001.txt");
+    const externalSecretPath = path.join(externalRoot, "secret.txt");
+    const requestBodies: Record<string, unknown>[] = [];
+    let bashWriteResult = "";
+    let bashReadAfterRejectedSync = "";
+    const registerReport = vi.fn(async () => {});
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+    const providerConfig = createProviderConfig(apiKeyRef);
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requestBodies.push(body);
+
+      const responseBody = (() => {
+        if (requestBodies.length === 1) {
+          return createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-bash-write-selected-symlink-report", "bash", {
+                command: "node -e \"require('fs').writeFileSync('人物.md','NEW_REJECTED'); console.log('BASH_WROTE')\""
+              })
+            ]
+          });
+        }
+
+        if (requestBodies.length === 2) {
+          bashWriteResult = requireToolResult(body, "bash", "call-bash-write-selected-symlink-report");
+          return createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-bash-read-after-rejected-sync", "bash", {
+                command:
+                  "node -e \"const fs=require('fs'); try { console.log(fs.readFileSync('人物.md','utf8')); } catch (error) { console.log('READ_FAILED:' + (error.code || error.message)); }\""
+              })
+            ]
+          });
+        }
+
+        if (requestBodies.length === 3) {
+          bashReadAfterRejectedSync = requireToolResult(body, "bash", "call-bash-read-after-rejected-sync");
+          return createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-mark-no-update-after-rejected-read", "mark_no_update", {
+                path: "人物.md",
+                reason: "bash 拒绝同步后 sandbox 已恢复不可读，本窗口不更新人物。"
+              })
+            ]
+          });
+        }
+
+        return createChatCompletionResponse({ content: "窗口完成。" });
+      })();
+
+      return new Response(JSON.stringify(responseBody), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      });
+    });
+
+    await fs.mkdir(path.dirname(windowTextPath), { recursive: true });
+    await fs.mkdir(reportsRoot, { recursive: true });
+    await fs.writeFile(windowTextPath, "第一章\n\n主角整理旧资料。", "utf8");
+    await fs.writeFile(externalSecretPath, "SECRET_OUTSIDE_REPORTS", "utf8");
+    await fs.symlink(externalSecretPath, path.join(reportsRoot, "人物.md"), "file");
+
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      fetch,
+      findExistingReport: () => undefined,
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeState: async () => {},
+      providerStore: createProviderStore(providerConfig),
+      registerReport
+    });
+
+    await service.runJobWindows({
+      artifacts: createWindowArtifacts({
+        projectRoot,
+        templates: [createTemplate({ id: "template-1", name: "人物", fileName: "人物.md" })]
+      }),
+      job: createWindowRunJob({ templateIds: ["template-1"] })
+    });
+
+    expect(requestBodies).toHaveLength(4);
+    expect(bashWriteResult).toContain("BASH_WROTE");
+    expect(bashWriteResult).toContain("report_sync");
+    expect(bashWriteResult).toContain("拒绝覆盖 reports 中的非普通文件");
+    expect(bashReadAfterRejectedSync).toContain("READ_FAILED");
+    expect(bashReadAfterRejectedSync).not.toContain("NEW_REJECTED");
+    expect(bashReadAfterRejectedSync).not.toContain("report_sync");
+    await expect(fs.readFile(externalSecretPath, "utf8")).resolves.toBe("SECRET_OUTSIDE_REPORTS");
+    expect(registerReport).not.toHaveBeenCalled();
+  }, 20000);
+
+  it("returns a recoverable tool result when non-bash write targets a selected unsafe real report", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-nonbash-symlink-"));
+    const externalRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-external-"));
+    scratchDirs.push(projectRoot, externalRoot);
+    const reportsRoot = path.join(projectRoot, "assets", "books", "book-1", "reports");
+    const windowTextPath = path.join(projectRoot, "runs", "job-1", "windows", "window-0001.txt");
+    const externalSecretPath = path.join(externalRoot, "secret.txt");
+    const requestBodies: Record<string, unknown>[] = [];
+    let writeResult = "";
+    const registerReport = vi.fn(async () => {});
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+    const providerConfig = createProviderConfig(apiKeyRef);
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requestBodies.push(body);
+
+      const responseBody = (() => {
+        if (requestBodies.length === 1) {
+          return createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-write-selected-symlink-report", "write_file", {
+                path: "人物.md",
+                content: "# 人物\n\nNEW"
+              })
+            ]
+          });
+        }
+
+        if (requestBodies.length === 2) {
+          writeResult = requireToolResult(body, "write_file", "call-write-selected-symlink-report");
+          return createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-mark-no-update-after-unsafe-write", "mark_no_update", {
+                path: "人物.md",
+                reason: "非 bash 写入 unsafe 真实报告被拒绝，本窗口不更新人物。"
+              })
+            ]
+          });
+        }
+
+        return createChatCompletionResponse({ content: "窗口完成。" });
+      })();
+
+      return new Response(JSON.stringify(responseBody), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      });
+    });
+
+    await fs.mkdir(path.dirname(windowTextPath), { recursive: true });
+    await fs.mkdir(reportsRoot, { recursive: true });
+    await fs.writeFile(windowTextPath, "第一章\n\n主角整理旧资料。", "utf8");
+    await fs.writeFile(externalSecretPath, "SECRET_OUTSIDE_REPORTS", "utf8");
+    await fs.symlink(externalSecretPath, path.join(reportsRoot, "人物.md"), "file");
+
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      fetch,
+      findExistingReport: () => undefined,
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeState: async () => {},
+      providerStore: createProviderStore(providerConfig),
+      registerReport
+    });
+
+    await service.runJobWindows({
+      artifacts: createWindowArtifacts({
+        projectRoot,
+        templates: [createTemplate({ id: "template-1", name: "人物", fileName: "人物.md" })]
+      }),
+      job: createWindowRunJob({ templateIds: ["template-1"] })
+    });
+
+    expect(requestBodies).toHaveLength(3);
+    expect(writeResult).toContain("UNSAFE_PATH");
+    await expect(fs.readFile(externalSecretPath, "utf8")).resolves.toBe("SECRET_OUTSIDE_REPORTS");
+    expect(registerReport).not.toHaveBeenCalled();
+  }, 20000);
+
   it("preserves pending background bash report edits when a non-bash write updates another report", async () => {
     const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-bg-preserve-"));
     scratchDirs.push(projectRoot);

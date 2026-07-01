@@ -563,12 +563,14 @@ async function syncRealReportToBashSandbox(
   const stat = await fs.lstat(sourcePath);
   if (stat.isSymbolicLink()) {
     if (unsafeEntryBehavior === "skip") {
+      await fs.rm(targetPath, { force: true, recursive: true });
       return;
     }
     throw new Error(`拒绝同步 bash sandbox 中的符号链接: ${reportFileName}`);
   }
   if (!stat.isFile()) {
     if (unsafeEntryBehavior === "skip") {
+      await fs.rm(targetPath, { force: true, recursive: true });
       return;
     }
     throw new Error(`拒绝同步 bash sandbox 中的非普通文件: ${reportFileName}`);
@@ -1381,6 +1383,10 @@ function shouldReturnRecoverableToolError(name: string, error: unknown): error i
   }
 
   if (name === "bash" && error.code === "UNSAFE_PATH") {
+    return true;
+  }
+
+  if (isReportWriteTool(name) && error.code === "UNSAFE_PATH") {
     return true;
   }
 
