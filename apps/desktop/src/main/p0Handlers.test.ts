@@ -4107,6 +4107,95 @@ describe("P0 desktop IPC handlers", () => {
     }
   });
 
+  it("rejects POSIX absolute paths in bash before command execution", async () => {
+    const recoveredReport = "# 丹药分析\n\nbash POSIX 绝对路径被拒绝后改用选中报告。";
+    let bashToolReplayContent = "";
+    const mockServer = await startMockOpenAiServer({
+      respond: ({ body, requestIndex }) => {
+        if (requestIndex === 0) {
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-bash-posix-absolute-path", "bash", {
+                  command: "echo desktop-posix-probe /__novel_extractor_scope_probe__/outside.txt"
+                })
+              ]
+            })
+          };
+        }
+
+        if (requestIndex === 1) {
+          const toolMessage = ((body.messages ?? []) as Array<Record<string, unknown>>).find(
+            (message) => message.role === "tool" && message.name === "bash"
+          );
+          bashToolReplayContent = String(toolMessage?.content ?? "");
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-write-after-posix-bash-boundary", "write_file", {
+                  path: "丹药分析.md",
+                  content: recoveredReport
+                })
+              ]
+            })
+          };
+        }
+
+        return {
+          body: createChatCompletionResponse({ content: "窗口完成。" })
+        };
+      }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: mockServer.baseUrl
+        })
+      )
+    });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: utf8FixturePath,
+        displayName: "凡人修仙传.txt"
+      });
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 2,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      });
+
+      const projectRoot = path.join(tempRoot, "projects", "project-a");
+      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const reportMarkdown = await fs.readFile(
+        path.join(projectRoot, "assets", "books", book.bookId, "reports", "丹药分析.md"),
+        "utf8"
+      );
+
+      expect(mockServer.requests).toHaveLength(3);
+      expect(bashToolReplayContent).toContain("UNSAFE_PATH");
+      expect(bashToolReplayContent).toContain("bash 命令路径不在当前窗口允许范围内。");
+      expect(bashToolReplayContent).not.toContain("desktop-posix-probe");
+      expect(completedJob).toMatchObject({
+        id: job.id,
+        status: "completed"
+      });
+      expect(reportMarkdown).toBe(recoveredReport);
+    } finally {
+      await mockServer.close();
+    }
+  });
+
   it("replays a complete tool outcome before completing a window", async () => {
     const mockServer = await startMockOpenAiServer({
       respond: ({ requestIndex }) => {

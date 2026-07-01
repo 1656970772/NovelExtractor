@@ -787,11 +787,18 @@ function assertBashToolExecutionScope(input: {
   const command = normalizeComparableToolPath(args.command);
   const hasPathTraversal = /(?:^|[\/\s"'`])\.\.(?:[\/\s"'`]|$)/u.test(command);
   const hasWindowsAbsolutePath = /[A-Za-z]:\//u.test(command);
+  const hasPosixAbsolutePath = bashCommandReferencesPosixAbsolutePath(command);
   const hasProjectRelativeRoot = bashCommandReferencesProjectRelativeRoot(command);
 
-  if (hasPathTraversal || hasWindowsAbsolutePath || hasProjectRelativeRoot) {
+  if (hasPathTraversal || hasWindowsAbsolutePath || hasPosixAbsolutePath || hasProjectRelativeRoot) {
     throw new ToolExecutionError(BASH_TOOL_SCOPE_DENIED_MESSAGE, "UNSAFE_PATH");
   }
+}
+
+function bashCommandReferencesPosixAbsolutePath(command: string): boolean {
+  return command
+    .split(/[\s"'`|;&<>()[\]{}]+/u)
+    .some((token) => token.startsWith("/") && token.length > 1);
 }
 
 function bashCommandReferencesProjectRelativeRoot(command: string): boolean {
