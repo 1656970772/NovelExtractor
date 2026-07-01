@@ -132,6 +132,9 @@ const EDIT_TARGET_NOT_FOUND_HINT =
 const READ_TOOL_SCOPE_DENIED_MESSAGE = "读工具路径不在当前窗口允许范围内。";
 const READ_TOOL_SCOPE_DENIED_HINT =
   "只能读取、搜索、列出或匹配当前窗口文本、当前书籍 reports 目录或本批选中输出报告；请改用窗口文件路径、reports 或选中报告文件名。";
+const BASH_TOOL_SCOPE_DENIED_MESSAGE = "bash 命令路径不在当前窗口允许范围内。";
+const BASH_TOOL_SCOPE_DENIED_HINT =
+  "桌面端 bash 只能在当前书籍 reports 目录内执行；不要读取 source、runs、rules、项目根路径、绝对路径或通过 .. 跳出 reports。";
 const REPORT_CONTENT_INTERNAL_METADATA_MESSAGE = "报告正文不得包含内部运行路径或流程性元数据。";
 const REPORT_CONTENT_INTERNAL_METADATA_HINT =
   "请把资料来源、参考范围等公开元数据改写为窗口编号/章节范围、章节名或原文范围；不要写 runs/job、assets/books、本机绝对路径、AppData 项目路径或后续窗口等流程性措辞。";
@@ -444,6 +447,18 @@ function getToolPathArgument(args: unknown): string | undefined {
   return args.path;
 }
 
+function toPlainToolArgumentRecord(args: unknown): Record<string, unknown> | undefined {
+  if (isPlainRecord(args)) {
+    return args;
+  }
+
+  if (typeof args === "string") {
+    return parseJsonObjectString(args);
+  }
+
+  return undefined;
+}
+
 function getWriteFileContentArgument(args: unknown): string | undefined {
   if (!isPlainRecord(args) || typeof args.content !== "string") {
     return undefined;
@@ -495,6 +510,12 @@ function includesReportContentPattern(contentFragments: readonly string[], patte
 
 function normalizeComparableToolPath(inputPath: string): string {
   return inputPath.replace(/\\/g, "/").replace(/^(?:\.\/)+/u, "");
+}
+
+function normalizeScopeComparableToolPath(inputPath: string): string {
+  const comparablePath = normalizeComparableToolPath(inputPath);
+  const normalizedPath = path.posix.normalize(comparablePath);
+  return normalizedPath === "." ? "." : normalizedPath.replace(/^(?:\/)+/u, "");
 }
 
 function toProjectRelativeReportsRootPath(artifacts: WindowRunArtifacts): string {
@@ -710,12 +731,12 @@ function assertReadToolExecutionScope(input: {
     return;
   }
 
-  const comparablePath = normalizeComparableToolPath(scopePathArgument);
-  const reportsRootPath = normalizeComparableToolPath(toProjectRelativeReportsRootPath(input.artifacts));
-  const allowedFilePaths = new Set<string>([normalizeComparableToolPath(input.manifestWindow.textPath)]);
+  const comparablePath = normalizeScopeComparableToolPath(scopePathArgument);
+  const reportsRootPath = normalizeScopeComparableToolPath(toProjectRelativeReportsRootPath(input.artifacts));
+  const allowedFilePaths = new Set<string>([normalizeScopeComparableToolPath(input.manifestWindow.textPath)]);
 
   for (const outputFileName of input.allowedOutputFileNames) {
-    allowedFilePaths.add(normalizeComparableToolPath(toProjectRelativeReportPath(input.artifacts, outputFileName)));
+    allowedFilePaths.add(normalizeScopeComparableToolPath(toProjectRelativeReportPath(input.artifacts, outputFileName)));
   }
 
   if (input.toolName === "glob" && comparablePath.startsWith(`${reportsRootPath}/`)) {
@@ -730,19 +751,58 @@ function assertReadToolExecutionScope(input: {
 }
 
 function getReadScopePathArgument(toolName: string, executionArguments: unknown): string | undefined {
-  if (!isPlainRecord(executionArguments)) {
+  const args = toPlainToolArgumentRecord(executionArguments);
+  if (args === undefined) {
     return undefined;
   }
 
   if (toolName === "glob") {
-    return typeof executionArguments.pattern === "string" ? executionArguments.pattern : undefined;
+    return typeof args.pattern === "string" ? args.pattern : undefined;
   }
 
-  if (toolName === "ls" && executionArguments.path === undefined) {
+  if (toolName === "grep" && args.path === undefined) {
     return ".";
   }
 
-  return getToolPathArgument(executionArguments);
+  if (toolName === "ls" && args.path === undefined) {
+    return ".";
+  }
+
+  return getToolPathArgument(args);
+}
+
+function assertBashToolExecutionScope(input: {
+  executionArguments: unknown;
+  toolName: string;
+}): void {
+  if (input.toolName !== "bash") {
+    return;
+  }
+
+  const args = toPlainToolArgumentRecord(input.executionArguments);
+  if (args === undefined || typeof args.command !== "string") {
+    return;
+  }
+
+  const command = normalizeComparableToolPath(args.command);
+  const hasPathTraversal = /(?:^|[\/\s"'`])\.\.(?:[\/\s"'`]|$)/u.test(command);
+  const hasWindowsAbsolutePath = /[A-Za-z]:\//u.test(command);
+  const hasProjectRelativeRoot = bashCommandReferencesProjectRelativeRoot(command);
+
+  if (hasPathTraversal || hasWindowsAbsolutePath || hasProjectRelativeRoot) {
+    throw new ToolExecutionError(BASH_TOOL_SCOPE_DENIED_MESSAGE, "UNSAFE_PATH");
+  }
+}
+
+function bashCommandReferencesProjectRelativeRoot(command: string): boolean {
+  const forbiddenRoots = new Set(["apps", "assets", "config", "docs", "e2e", "packages", "rules", "runs"]);
+  return command
+    .split(/[\s"'`|;&<>()[\]{}]+/u)
+    .map((token) => token.replace(/^(?:\.\/)+/u, ""))
+    .some((token) => {
+      const [root] = token.split("/", 1);
+      return forbiddenRoots.has(root.toLowerCase());
+    });
 }
 
 function containsKnownSecret(value: string, secrets: readonly string[]): boolean {
@@ -936,6 +996,10 @@ function shouldReturnRecoverableToolError(name: string, error: unknown): error i
     return true;
   }
 
+  if (name === "bash" && error.code === "UNSAFE_PATH") {
+    return true;
+  }
+
   if (isRecoverableToolSchemaInvalidArguments(error)) {
     return true;
   }
@@ -995,6 +1059,8 @@ function toRecoverableToolErrorResult(input: {
         ? EDIT_TARGET_NOT_FOUND_HINT
       : input.error.message === READ_TOOL_SCOPE_DENIED_MESSAGE
         ? READ_TOOL_SCOPE_DENIED_HINT
+      : input.error.message === BASH_TOOL_SCOPE_DENIED_MESSAGE
+        ? BASH_TOOL_SCOPE_DENIED_HINT
         : undefined;
 
   return {
@@ -1477,8 +1543,12 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
                 manifestWindow: input.manifestWindow,
                 toolName: toolCall.name
               });
+              assertBashToolExecutionScope({
+                executionArguments: toolCall.executionArguments,
+                toolName: toolCall.name
+              });
               toolResult = await executeBuiltinFileTool(toolCall.name, toolCall.executionArguments, {
-                projectRoot: input.artifacts.project.rootPath,
+                projectRoot: toolCall.name === "bash" ? reportsRoot : input.artifacts.project.rootPath,
                 reportsRoot,
                 readAliasRoots: [
                   {

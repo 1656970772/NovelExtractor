@@ -179,6 +179,18 @@ function closeServer(server: Server): Promise<void> {
   });
 }
 
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
 function readRequestBody(request: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -3554,6 +3566,106 @@ describe("P0 desktop IPC handlers", () => {
     }
   });
 
+  it("returns recoverable errors when grep omits path or glob escapes the reports alias", async () => {
+    const recoveredReport = "# 丹药分析\n\n读工具边界被拒绝后改用选中报告。";
+    let readToolReplayBody = "";
+    const mockServer = await startMockOpenAiServer({
+      respond: ({ body, requestIndex }) => {
+        if (requestIndex === 0) {
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-grep-without-path", "grep", {
+                  pattern: "第三章"
+                }),
+                createToolCall("call-glob-report-alias-escape", "glob", {
+                  pattern: "reports/../source/*.txt"
+                })
+              ]
+            })
+          };
+        }
+
+        if (requestIndex === 1) {
+          readToolReplayBody = JSON.stringify(body);
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-write-after-read-boundary-rejected", "write_file", {
+                  path: "丹药分析.md",
+                  content: recoveredReport
+                })
+              ]
+            })
+          };
+        }
+
+        return {
+          body: createChatCompletionResponse({ content: "窗口完成。" })
+        };
+      }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: mockServer.baseUrl
+        })
+      )
+    });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: utf8FixturePath,
+        displayName: "凡人修仙传.txt"
+      });
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 2,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      });
+
+      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const reportMarkdown = await fs.readFile(
+        path.join(
+          tempRoot,
+          "projects",
+          "project-a",
+          "assets",
+          "books",
+          book.bookId,
+          "reports",
+          "丹药分析.md"
+        ),
+        "utf8"
+      );
+
+      expect(mockServer.requests).toHaveLength(3);
+      expect(readToolReplayBody).toContain("UNSAFE_PATH");
+      expect(readToolReplayBody).toContain("读工具路径不在当前窗口允许范围内。");
+      expect(readToolReplayBody).not.toContain("第三章 试炼归来");
+      expect(readToolReplayBody).not.toContain("source/original.txt");
+      expect(readToolReplayBody).not.toContain("/logs/");
+      expect(completedJob).toMatchObject({
+        id: job.id,
+        status: "completed",
+        progressText: "进度：1/1"
+      });
+      expect(reportMarkdown).toBe(recoveredReport);
+    } finally {
+      await mockServer.close();
+    }
+  });
+
   it("lets the model recover from editing a missing report by creating it with write_file", async () => {
     const mockServer = await startMockOpenAiServer({
       respond: ({ requestIndex }) => {
@@ -3894,6 +4006,102 @@ describe("P0 desktop IPC handlers", () => {
         id: job.id,
         status: "completed"
       });
+    } finally {
+      await mockServer.close();
+    }
+  });
+
+  it("keeps bash inside the desktop report boundary without removing the bash tool family", async () => {
+    const recoveredReport = "# 丹药分析\n\nbash 边界被拒绝后改用选中报告。";
+    let uploadedBookId = "";
+    let bashReplayBody = "";
+    const mockServer = await startMockOpenAiServer({
+      respond: ({ body, requestIndex }) => {
+        if (requestIndex === 0) {
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-bash-read-source", "bash", {
+                  command: `Get-Content assets/books/${uploadedBookId}/source/original.txt`
+                }),
+                createToolCall("call-bash-write-project-root", "bash", {
+                  command: "echo x > ../escape.md"
+                })
+              ]
+            })
+          };
+        }
+
+        if (requestIndex === 1) {
+          bashReplayBody = JSON.stringify(body);
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-write-after-bash-boundary", "write_file", {
+                  path: "丹药分析.md",
+                  content: recoveredReport
+                })
+              ]
+            })
+          };
+        }
+
+        return {
+          body: createChatCompletionResponse({ content: "窗口完成。" })
+        };
+      }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: mockServer.baseUrl
+        })
+      )
+    });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: utf8FixturePath,
+        displayName: "凡人修仙传.txt"
+      });
+      uploadedBookId = book.bookId;
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 2,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      });
+      const projectRoot = path.join(tempRoot, "projects", "project-a");
+
+      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const reportMarkdown = await fs.readFile(
+        path.join(projectRoot, "assets", "books", book.bookId, "reports", "丹药分析.md"),
+        "utf8"
+      );
+      const firstRequestTools = (mockServer.requests[0].body as { tools?: Array<{ function?: { name?: string } }> }).tools ?? [];
+      const firstRequestToolNames = firstRequestTools.map((tool) => tool.function?.name);
+
+      expect(firstRequestToolNames).toEqual(
+        expect.arrayContaining(["bash", "bash_output", "wait", "kill_shell"])
+      );
+      expect(mockServer.requests).toHaveLength(3);
+      expect(bashReplayBody).toContain("UNSAFE_PATH");
+      expect(bashReplayBody).not.toContain("第三章 试炼归来");
+      expect(await pathExists(path.join(projectRoot, "escape.md"))).toBe(false);
+      expect(completedJob).toMatchObject({
+        id: job.id,
+        status: "completed"
+      });
+      expect(reportMarkdown).toBe(recoveredReport);
     } finally {
       await mockServer.close();
     }
