@@ -335,7 +335,7 @@ function relSlash(base: string, target: string): string {
   return path.relative(base, target).replace(/\\/gu, "/");
 }
 
-function compareUtf8Lexical(left: string, right: string): number {
+export function compareUtf8Lexical(left: string, right: string): number {
   const leftBytes = Buffer.from(left, "utf8");
   const rightBytes = Buffer.from(right, "utf8");
   const minLength = Math.min(leftBytes.length, rightBytes.length);

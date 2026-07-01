@@ -7,8 +7,12 @@ export interface ReasonixToolDefinition {
   readOnly(): boolean;
 }
 
+export interface ReasonixToolExecutionContext {
+  signal?: AbortSignal;
+}
+
 export interface ReasonixTool extends ReasonixToolDefinition {
-  execute(args: unknown): Promise<string> | string;
+  execute(args: unknown, context?: ReasonixToolExecutionContext): Promise<string> | string;
 }
 
 export interface ReasonixToolPreviewer {
