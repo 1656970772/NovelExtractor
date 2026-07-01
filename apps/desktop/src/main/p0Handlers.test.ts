@@ -7,6 +7,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getDefaultConfig } from "@novel-extractor/config";
 import type { ApiKeyRef, ProviderConfig } from "@novel-extractor/domain";
+import { reasonixToolOrder } from "@novel-extractor/tools";
 import type { CreateJobDto, JobDto } from "../shared/ipcTypes";
 import { createMemoryCredentialStore, type MemoryCredentialStore } from "./credentials";
 import { createIpcContract, createNotImplementedIpcHandlers } from "./ipc";
@@ -693,20 +694,7 @@ describe("P0 desktop IPC handlers", () => {
       const multiEditSchema = firstRequestTools.find((tool) => tool.function?.name === "multi_edit")?.function?.parameters;
       const bashOutputSchema = firstRequestTools.find((tool) => tool.function?.name === "bash_output")?.function?.parameters;
 
-      expect(firstRequestToolNames).toEqual([
-        "read_file",
-        "write_file",
-        "edit_file",
-        "multi_edit",
-        "grep",
-        "glob",
-        "ls",
-        "bash",
-        "bash_output",
-        "wait",
-        "kill_shell",
-        "mark_no_update"
-      ]);
+      expect(firstRequestToolNames).toEqual([...reasonixToolOrder, "mark_no_update"]);
       expect(editFileSchema?.properties).toHaveProperty("old_string");
       expect(editFileSchema?.properties).toHaveProperty("new_string");
       expect(editFileSchema?.properties).not.toHaveProperty("oldText");

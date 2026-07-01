@@ -157,17 +157,17 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
   },
   toolLoopDefaults: {
     enabledToolNames: [
-      "read_file",
-      "write_file",
-      "edit_file",
-      "multi_edit",
-      "grep",
-      "glob",
-      "ls",
       "bash",
       "bash_output",
-      "wait",
+      "edit_file",
+      "glob",
+      "grep",
       "kill_shell",
+      "ls",
+      "multi_edit",
+      "read_file",
+      "wait",
+      "write_file",
       "mark_no_update"
     ],
     systemInstruction:

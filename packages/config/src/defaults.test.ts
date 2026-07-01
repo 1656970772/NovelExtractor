@@ -115,17 +115,17 @@ describe("default config", () => {
   it("provides tool loop defaults for desktop window runs", () => {
     expect(getDefaultConfig().toolLoopDefaults).toEqual({
       enabledToolNames: [
-        "read_file",
-        "write_file",
-        "edit_file",
-        "multi_edit",
-        "grep",
-        "glob",
-        "ls",
         "bash",
         "bash_output",
-        "wait",
+        "edit_file",
+        "glob",
+        "grep",
         "kill_shell",
+        "ls",
+        "multi_edit",
+        "read_file",
+        "wait",
+        "write_file",
         "mark_no_update"
       ],
       systemInstruction: expect.stringContaining("文件工具"),
@@ -221,17 +221,17 @@ describe("default config", () => {
       getDefaultConfig().extractionRuleDefaults.templateBatching.nonMergeableTemplateTags
     ).not.toContain("solo");
     expect(getDefaultConfig().toolLoopDefaults.enabledToolNames).toEqual([
-      "read_file",
-      "write_file",
-      "edit_file",
-      "multi_edit",
-      "grep",
-      "glob",
-      "ls",
       "bash",
       "bash_output",
-      "wait",
+      "edit_file",
+      "glob",
+      "grep",
       "kill_shell",
+      "ls",
+      "multi_edit",
+      "read_file",
+      "wait",
+      "write_file",
       "mark_no_update"
     ]);
     expect(getDefaultConfig().templatePromptProfileDefaults.exampleSectionPatterns).not.toContain(

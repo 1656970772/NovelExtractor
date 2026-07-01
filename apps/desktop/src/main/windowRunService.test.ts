@@ -2,8 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { getDefaultConfig } from "@novel-extractor/config";
-import { getEnabledTools } from "@novel-extractor/tools";
+import { reasonixToolOrder } from "@novel-extractor/tools";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMemoryCredentialStore } from "./credentials";
 import { cleanupBashSandboxAfterWindow, createWindowRunService } from "./windowRunService";
@@ -210,7 +209,7 @@ describe("window run Reasonix tool loop integration", () => {
     });
 
     expect(requestBodies).toHaveLength(2);
-    const expectedToolNames = getEnabledTools([...getDefaultConfig().toolLoopDefaults.enabledToolNames]).map((tool) => tool.name);
+    const expectedToolNames = [...reasonixToolOrder, "mark_no_update"];
     const firstTools = requestBodies[0].tools as Array<{ function: { name: string; parameters: Record<string, unknown> } }>;
     expect(firstTools.map((tool) => tool.function.name)).toEqual(expectedToolNames);
     const toolsByName = new Map(firstTools.map((tool) => [tool.function.name, tool.function]));

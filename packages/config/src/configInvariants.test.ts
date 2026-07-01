@@ -20,17 +20,17 @@ function withToolLoopDefaults(
   const config = getDefaultConfig();
   (config as unknown as { toolLoopDefaults: ToolLoopDefaultsTestShape }).toolLoopDefaults = {
     enabledToolNames: [
-      "read_file",
-      "write_file",
-      "edit_file",
-      "multi_edit",
-      "grep",
-      "glob",
-      "ls",
       "bash",
       "bash_output",
-      "wait",
+      "edit_file",
+      "glob",
+      "grep",
       "kill_shell",
+      "ls",
+      "multi_edit",
+      "read_file",
+      "wait",
+      "write_file",
       "mark_no_update"
     ],
     systemInstruction: "必须通过文件工具写入或返回 NO_UPDATE。",
