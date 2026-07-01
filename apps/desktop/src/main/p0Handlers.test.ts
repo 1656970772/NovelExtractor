@@ -130,6 +130,11 @@ function createRawToolCall(id: string, name: string, rawArguments: string): Reco
   };
 }
 
+function createPowerShellCommand(script: string): string {
+  const encodedScript = Buffer.from(script, "utf16le").toString("base64");
+  return `powershell -NoProfile -NonInteractive -EncodedCommand ${encodedScript}`;
+}
+
 function createChatCompletionResponse(input: {
   content?: string;
   toolCalls?: Array<Record<string, unknown>>;
@@ -4101,6 +4106,185 @@ describe("P0 desktop IPC handlers", () => {
         id: job.id,
         status: "completed"
       });
+      expect(reportMarkdown).toBe(recoveredReport);
+    } finally {
+      await mockServer.close();
+    }
+  });
+
+  it("keeps runtime-composed bash path traversal from reading outside reports", async () => {
+    const sentinelText = "DESKTOP_BASH_RUNTIME_SENTINEL";
+    const recoveredReport = "# 丹药分析\n\nbash 运行时拼接路径读取被隔离后改用选中报告。";
+    let bashReplayBody = "";
+    const mockServer = await startMockOpenAiServer({
+      respond: ({ body, requestIndex }) => {
+        if (requestIndex === 0) {
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-bash-runtime-read-escape", "bash", {
+                  command: createPowerShellCommand(
+                    "$p='.'+'.'; if (Test-Path \"$p/sentinel.txt\") { Get-Content \"$p/sentinel.txt\" } else { \"sandbox-miss\" }"
+                  )
+                })
+              ]
+            })
+          };
+        }
+
+        if (requestIndex === 1) {
+          bashReplayBody = JSON.stringify(body);
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-write-after-runtime-read-boundary", "write_file", {
+                  path: "丹药分析.md",
+                  content: recoveredReport
+                })
+              ]
+            })
+          };
+        }
+
+        return {
+          body: createChatCompletionResponse({ content: "窗口完成。" })
+        };
+      }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: mockServer.baseUrl
+        })
+      )
+    });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: utf8FixturePath,
+        displayName: "凡人修仙传.txt"
+      });
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 2,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      });
+      const projectRoot = path.join(tempRoot, "projects", "project-a");
+      const reportsParent = path.join(projectRoot, "assets", "books", book.bookId);
+      await fs.writeFile(path.join(reportsParent, "sentinel.txt"), sentinelText, "utf8");
+
+      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      expect(completedJob).toMatchObject({
+        id: job.id,
+        failureReason: undefined,
+        status: "completed"
+      });
+      const reportMarkdown = await fs.readFile(
+        path.join(projectRoot, "assets", "books", book.bookId, "reports", "丹药分析.md"),
+        "utf8"
+      );
+
+      expect(mockServer.requests).toHaveLength(3);
+      expect(bashReplayBody).not.toContain(sentinelText);
+      expect(reportMarkdown).toBe(recoveredReport);
+    } finally {
+      await mockServer.close();
+    }
+  });
+
+  it("keeps runtime-composed bash path traversal from writing outside reports", async () => {
+    const recoveredReport = "# 丹药分析\n\nbash 运行时拼接路径写出被隔离后改用选中报告。";
+    let bashReplayBody = "";
+    const mockServer = await startMockOpenAiServer({
+      respond: ({ body, requestIndex }) => {
+        if (requestIndex === 0) {
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-bash-runtime-write-escape", "bash", {
+                  command: createPowerShellCommand(
+                    "$p='.'+'.'; Set-Content -LiteralPath \"$p/escape.md\" -Value leaked; \"write-finished\""
+                  )
+                })
+              ]
+            })
+          };
+        }
+
+        if (requestIndex === 1) {
+          bashReplayBody = JSON.stringify(body);
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-write-after-runtime-write-boundary", "write_file", {
+                  path: "丹药分析.md",
+                  content: recoveredReport
+                })
+              ]
+            })
+          };
+        }
+
+        return {
+          body: createChatCompletionResponse({ content: "窗口完成。" })
+        };
+      }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: mockServer.baseUrl
+        })
+      )
+    });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: utf8FixturePath,
+        displayName: "凡人修仙传.txt"
+      });
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 2,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      });
+      const projectRoot = path.join(tempRoot, "projects", "project-a");
+      const escapedReportPath = path.join(projectRoot, "assets", "books", book.bookId, "escape.md");
+
+      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      expect(completedJob).toMatchObject({
+        id: job.id,
+        failureReason: undefined,
+        status: "completed"
+      });
+      const reportMarkdown = await fs.readFile(
+        path.join(projectRoot, "assets", "books", book.bookId, "reports", "丹药分析.md"),
+        "utf8"
+      );
+
+      expect(mockServer.requests).toHaveLength(3);
+      expect(bashReplayBody).toContain("write-finished");
+      expect(await pathExists(escapedReportPath)).toBe(false);
       expect(reportMarkdown).toBe(recoveredReport);
     } finally {
       await mockServer.close();

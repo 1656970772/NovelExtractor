@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { getDefaultConfig, getProviderPresets } from "@novel-extractor/config";
 import type { Book, Clock, IdGenerator, Project, ReportAsset } from "@novel-extractor/domain";
@@ -164,6 +165,12 @@ const GREP_BUDGET_ERROR_MESSAGES = new Set([
   "grep total byte budget exceeded",
   "grep match budget exceeded"
 ]);
+
+interface BashSandbox {
+  parentRoot: string;
+  reportsRoot: string;
+}
+
 function getWindowMetadata(window: JobWindowInput): RuntimeWindowManifestWindow {
   const manifestWindow = window.metadata?.manifestWindow;
   if (!manifestWindow || typeof manifestWindow !== "object") {
@@ -323,6 +330,20 @@ function toReportsRoot(artifacts: WindowRunArtifacts): string {
   return path.join(artifacts.project.rootPath, "assets", "books", artifacts.book.id, "reports");
 }
 
+async function createBashSandbox(reportsRoot: string): Promise<BashSandbox> {
+  const parentRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-bash-sandbox-"));
+  const sandboxReportsRoot = path.join(parentRoot, "reports");
+  await fs.cp(reportsRoot, sandboxReportsRoot, { recursive: true });
+  return {
+    parentRoot,
+    reportsRoot: sandboxReportsRoot
+  };
+}
+
+async function removeBashSandbox(sandbox: BashSandbox): Promise<void> {
+  await fs.rm(sandbox.parentRoot, { force: true, recursive: true });
+}
+
 function toSafeErrorMessage(error: unknown, secrets: readonly string[] = []): string {
   return redactSecrets(error instanceof Error ? error.message : "窗口执行失败", secrets);
 }
@@ -469,6 +490,10 @@ function getWriteFileContentArgument(args: unknown): string | undefined {
 
 function isReportWriteTool(name: string): boolean {
   return name === "write_file" || name === "edit_file" || name === "multi_edit";
+}
+
+function isBashToolFamily(name: string): boolean {
+  return name === "bash" || name === "bash_output" || name === "wait" || name === "kill_shell";
 }
 
 function getWritableReportContentFragments(toolCall: ChatCompletionRequestToolCall): string[] {
@@ -1337,6 +1362,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
     const writtenReportFileNames = new Set<string>();
     const bashJobManager = new BashJobManager();
     const bashSessionId = `${input.job.id}:${input.manifestWindow.windowId}:batch-${input.batchIndex + 1}`;
+    const bashSandbox = await createBashSandbox(reportsRoot);
     const messages: ChatCompletionMessage[] = [
       {
         role: "system",
@@ -1555,8 +1581,8 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
                 toolName: toolCall.name
               });
               toolResult = await executeBuiltinFileTool(toolCall.name, toolCall.executionArguments, {
-                projectRoot: toolCall.name === "bash" ? reportsRoot : input.artifacts.project.rootPath,
-                reportsRoot,
+                projectRoot: isBashToolFamily(toolCall.name) ? bashSandbox.reportsRoot : input.artifacts.project.rootPath,
+                reportsRoot: isBashToolFamily(toolCall.name) ? bashSandbox.reportsRoot : reportsRoot,
                 readAliasRoots: [
                   {
                     token: input.manifestWindow.textPath,
@@ -1658,6 +1684,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
       throw error;
     } finally {
       await bashJobManager.closeWithGrace(1000);
+      await removeBashSandbox(bashSandbox);
     }
   }
 
