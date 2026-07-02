@@ -210,7 +210,85 @@ p {
 .workbench-shell {
   display: grid;
   grid-template-columns: 64px minmax(0, 1fr);
-  grid-template-rows: 58px minmax(0, 1fr);
+  grid-template-rows: 40px 58px minmax(0, 1fr);
+}
+
+.window-title-bar {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  height: 40px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  min-width: 0;
+  border-bottom: 1px solid var(--app-color-border);
+  background: var(--app-color-surface-paper);
+  -webkit-app-region: drag;
+}
+
+.window-title-bar__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 12px;
+  color: var(--app-color-ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.window-title-bar__brand span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.window-title-bar__icon {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--app-radius-control);
+  background: var(--app-color-ink);
+  color: var(--app-color-surface-paper);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.window-title-bar__controls {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+  -webkit-app-region: no-drag;
+}
+
+.window-title-bar__button {
+  width: 46px;
+  height: 40px;
+  min-height: 40px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  -webkit-app-region: no-drag;
+}
+
+.window-title-bar__button:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--app-color-selected);
+}
+
+.window-title-bar__button--close:hover:not(:disabled) {
+  background: var(--app-color-danger);
+  color: var(--app-color-surface-paper);
+}
+
+.window-title-bar__button-icon {
+  width: 14px;
+  height: 14px;
 }
 
 .workbench-nav {
@@ -218,7 +296,7 @@ p {
 }
 
 .rail-nav {
-  grid-row: 1 / span 2;
+  grid-row: 2 / span 2;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -306,6 +384,7 @@ p {
 
 .top-nav {
   grid-column: 2;
+  grid-row: 2;
   display: grid;
   grid-template-columns: minmax(160px, 240px) minmax(0, 1fr) auto;
   align-items: center;
@@ -500,7 +579,7 @@ p {
 
 .workbench-main {
   grid-column: 2;
-  grid-row: 2;
+  grid-row: 3;
   min-width: 0;
   overflow: auto;
   padding: 18px;
@@ -1920,7 +1999,7 @@ p {
 
   .workbench-shell {
     grid-template-columns: 64px minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-rows: 40px auto minmax(0, 1fr);
   }
 
   .rail-nav {

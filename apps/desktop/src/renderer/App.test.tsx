@@ -56,6 +56,9 @@ function installDesktopApiMock() {
     deleteJob: vi.fn(),
     readJobLog: vi.fn(),
     openJobLog: vi.fn(),
+    minimizeWindow: vi.fn(),
+    toggleMaximizeWindow: vi.fn(),
+    closeWindow: vi.fn(),
     onJobUpdated: vi.fn()
   };
 
@@ -182,6 +185,20 @@ describe("desktop workbench shell", () => {
       })
     );
     expect(screen.getByRole("heading", { name: "关系图谱" })).toBeInTheDocument();
+  });
+
+  it("routes custom title bar buttons through desktop window controls", async () => {
+    const user = userEvent.setup();
+    const api = installDesktopApiMock();
+    render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
+
+    await user.click(screen.getByRole("button", { name: "最小化窗口" }));
+    await user.click(screen.getByRole("button", { name: "最大化或还原窗口" }));
+    await user.click(screen.getByRole("button", { name: "关闭窗口" }));
+
+    expect(api.minimizeWindow).toHaveBeenCalledTimes(1);
+    expect(api.toggleMaximizeWindow).toHaveBeenCalledTimes(1);
+    expect(api.closeWindow).toHaveBeenCalledTimes(1);
   });
 
   it("opens the same provider config dialog from user entry and empty extraction models", async () => {

@@ -27,6 +27,7 @@ import {
 } from "./features/extraction/extractionViewModel";
 import { GraphPlaceholderPage } from "./features/graph/GraphPlaceholderPage";
 import { WorkbenchNav, type WorkbenchPage } from "./features/navigation/WorkbenchNav";
+import { WindowTitleBar } from "./features/navigation/WindowTitleBar";
 import { ProviderConfigModal } from "./features/providers/ProviderConfigModal";
 import { UserMenu } from "./features/providers/UserMenu";
 import {
@@ -648,6 +649,7 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
 
   return (
     <div className="workbench-shell" data-testid="desktop-shell">
+      <WindowTitleBar />
       <WorkbenchNav
         activePage={activePage}
         projectName={project.displayName}
