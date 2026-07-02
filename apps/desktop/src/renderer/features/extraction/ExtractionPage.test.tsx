@@ -481,11 +481,12 @@ describe("ExtractionPage", () => {
     expect(onDeleteJob).toHaveBeenCalledWith("job-failed");
   });
 
-  it("expands a job log by reading the task log file", async () => {
+  it("expands a job progress log and opens the full log on demand", async () => {
     const user = userEvent.setup();
     const onReadJobLog = vi.fn().mockResolvedValue(
-      "[2026-06-30 15:30:12][任务信息] 任务 job-running\n[2026-06-30 15:30:13][大模型返回] 等待模型返回"
+      "15:30:12 开始任务：凡人修仙传.txt\n15:30:13 请求模型：窗口 1/3，第 1 轮"
     );
+    const onOpenJobLog = vi.fn().mockResolvedValue(undefined);
     render(
       <ExtractionPage
         models={[modelForTest]}
@@ -499,16 +500,91 @@ describe("ExtractionPage", () => {
           }
         ]}
         state="ready"
+        onOpenJobLog={onOpenJobLog}
         onReadJobLog={onReadJobLog}
       />
     );
 
-    expect(screen.queryByText(/任务 job-running/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/开始任务/)).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "展开日志" }));
+    await user.click(screen.getByRole("button", { name: "展开流程" }));
 
     expect(onReadJobLog).toHaveBeenCalledWith("job-running");
-    expect(await screen.findByText(/任务 job-running/)).toBeInTheDocument();
-    expect(screen.getByText(/等待模型返回/)).toBeInTheDocument();
+    expect(await screen.findByText(/开始任务/)).toBeInTheDocument();
+    expect(screen.getByText(/请求模型/)).toBeInTheDocument();
+    expect(screen.queryByText(/\[大模型请求\]\[Prompt\]/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "打开完整日志" }));
+    expect(onOpenJobLog).toHaveBeenCalledWith("job-running");
+  });
+
+  it("scrolls the progress log to the bottom every time it is expanded", async () => {
+    const user = userEvent.setup();
+    const scrollHeightDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight");
+    const clientHeightDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight");
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      configurable: true,
+      get() {
+        return this.tagName === "PRE" ? 900 : 0;
+      }
+    });
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+      configurable: true,
+      get() {
+        return this.tagName === "PRE" ? 120 : 0;
+      }
+    });
+
+    const onReadJobLog = vi.fn().mockResolvedValue(
+      Array.from({ length: 40 }, (_, index) => `15:30:${String(index).padStart(2, "0")} 流程 ${index}`).join("\n")
+    );
+
+    try {
+      render(
+        <ExtractionPage
+          models={[modelForTest]}
+          books={[uploadedBookForTest]}
+          jobs={[
+            {
+              id: "job-running",
+              status: "running",
+              progressText: "窗口 1/3",
+              logFilePath: "runs/job-running/logs/20260630-153012.txt"
+            }
+          ]}
+          state="ready"
+          onReadJobLog={onReadJobLog}
+        />
+      );
+
+      await user.click(screen.getByRole("button", { name: "展开流程" }));
+      const logText = await screen.findByText(/流程 39/);
+      const logElement = logText.closest("pre");
+      expect(logElement).not.toBeNull();
+      expect(logElement?.scrollTop).toBe(900);
+
+      if (!logElement) {
+        return;
+      }
+
+      logElement.scrollTop = 240;
+      fireEvent.scroll(logElement);
+      await user.click(screen.getByRole("button", { name: "收起流程" }));
+      await user.click(screen.getByRole("button", { name: "展开流程" }));
+
+      const reopenedLogElement = await screen.findByText(/流程 39/).then((node) => node.closest("pre"));
+      expect(reopenedLogElement?.scrollTop).toBe(900);
+    } finally {
+      if (scrollHeightDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, "scrollHeight", scrollHeightDescriptor);
+      } else {
+        Reflect.deleteProperty(HTMLElement.prototype, "scrollHeight");
+      }
+      if (clientHeightDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, "clientHeight", clientHeightDescriptor);
+      } else {
+        Reflect.deleteProperty(HTMLElement.prototype, "clientHeight");
+      }
+    }
   });
 });

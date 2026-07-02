@@ -10,6 +10,7 @@ import { applyThemeTokens } from "./theme";
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   document.documentElement.removeAttribute("style");
   Reflect.deleteProperty(window, "novelExtractor");
 });
@@ -54,6 +55,7 @@ function installDesktopApiMock() {
     restartJob: vi.fn(),
     deleteJob: vi.fn(),
     readJobLog: vi.fn(),
+    openJobLog: vi.fn(),
     onJobUpdated: vi.fn()
   };
 
@@ -269,7 +271,7 @@ describe("desktop workbench shell", () => {
     api.readJobLog.mockResolvedValue({
       jobId: "job-1",
       logFilePath: "runs/job-1/logs/20260630-153012.txt",
-      content: "[2026-06-30 15:30:12][任务信息] 任务 job-1\n[2026-06-30 15:30:13][大模型返回] 窗口完成。"
+      content: "15:30:12 开始任务：凡人修仙传.txt\n15:30:13 模型返回：无工具调用"
     });
     render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
 
@@ -320,9 +322,9 @@ describe("desktop workbench shell", () => {
     await user.click(screen.getByRole("button", { name: "开始" }));
 
     expect(api.startJob).toHaveBeenCalledWith({ jobId: "job-1" });
-    await user.click(await screen.findByRole("button", { name: "展开日志" }));
+    await user.click(await screen.findByRole("button", { name: "展开流程" }));
     expect(api.readJobLog).toHaveBeenCalledWith({ jobId: "job-1" });
-    expect(await screen.findByText(/任务 job-1/)).toBeInTheDocument();
+    expect(await screen.findByText(/开始任务：凡人修仙传/)).toBeInTheDocument();
   });
 
   it("shows running immediately after starting a long-running job", async () => {
@@ -555,7 +557,7 @@ describe("desktop workbench shell", () => {
     api.readJobLog.mockResolvedValue({
       jobId: "job-1",
       logFilePath: "runs/job-1/logs/live.txt",
-      content: "[2026-06-30 15:30:12][窗口] 已完成 1/3"
+      content: "15:30:12 窗口 1/3：处理第 1-3 章，模板 1 个"
     });
 
     render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
@@ -595,9 +597,61 @@ describe("desktop workbench shell", () => {
 
     expect(await screen.findByText("进度：1/3")).toBeInTheDocument();
     expect(screen.getByText("Token 99 / 缓存命中率 50.00%")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "展开日志" }));
+    await user.click(screen.getByRole("button", { name: "展开流程" }));
     expect(api.readJobLog).toHaveBeenCalledWith({ jobId: "job-1" });
-    expect(await screen.findByText(/已完成 1\/3/)).toBeInTheDocument();
+    expect(await screen.findByText(/窗口 1\/3/)).toBeInTheDocument();
+  });
+
+  it("shows a live simplified progress log and opens the full log on demand", async () => {
+    const user = userEvent.setup();
+    const api = installDesktopApiMock();
+    api.getProjectRuntime.mockResolvedValue({
+      books: [],
+      jobs: [
+        {
+          id: "job-1",
+          bookId: "book-1",
+          status: "running",
+          progressText: "1/4",
+          logFilePath: "runs/job-1/logs/20260702-043645.txt",
+          allowedActions: ["pause"],
+          createdAt: "2026-07-02T04:36:45.000Z",
+          updatedAt: "2026-07-02T04:36:45.000Z"
+        }
+      ]
+    });
+    api.readJobLog
+      .mockResolvedValueOnce({
+        jobId: "job-1",
+        logFilePath: "runs/job-1/logs/20260702-043645.txt",
+        content: "04:36:45 开始任务：凡人修仙传.txt\n"
+      })
+      .mockResolvedValueOnce({
+        jobId: "job-1",
+        logFilePath: "runs/job-1/logs/20260702-043645.txt",
+        content: "04:36:45 开始任务：凡人修仙传.txt\n04:36:49 读取文件：window-0001.txt\n"
+      });
+    api.openJobLog.mockResolvedValue(undefined);
+
+    render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
+
+    await user.click(screen.getByRole("button", { name: "功能" }));
+    await user.click(
+      within(screen.getByRole("navigation", { name: "功能入口" })).getByRole("button", {
+        name: "小说提取"
+      })
+    );
+
+    await user.click(await screen.findByRole("button", { name: "展开流程" }));
+    expect(await screen.findByText(/开始任务：凡人修仙传/)).toBeInTheDocument();
+
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 2100));
+    });
+    expect(await screen.findByText(/读取文件/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "打开完整日志" }));
+    expect(api.openJobLog).toHaveBeenCalledWith({ jobId: "job-1" });
   });
 
   it("loads project template selection, saves changes, and opens template management", async () => {

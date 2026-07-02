@@ -592,11 +592,25 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
   async function readJobLog(jobId: string): Promise<string> {
     const api = window.novelExtractor;
     if (!api?.readJobLog) {
-      return "日志读取入口尚未就绪。";
+      return "运行流程读取入口尚未就绪。";
     }
 
     const result = await api.readJobLog({ jobId });
-    return result.content || "日志文件暂无内容。";
+    return result.content || "运行流程暂无内容。";
+  }
+
+  async function openJobLog(jobId: string): Promise<void> {
+    const api = window.novelExtractor;
+    if (!api?.openJobLog) {
+      setExtractionError("完整日志打开入口尚未就绪。");
+      return;
+    }
+
+    try {
+      await api.openJobLog({ jobId });
+    } catch (error) {
+      setExtractionError(getErrorMessage(error, "完整日志打开失败"));
+    }
   }
 
   async function deleteJob(jobId: string): Promise<void> {
@@ -678,6 +692,7 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
             onCreateJob={createJob}
             onDeleteJob={deleteJob}
             onJobAction={runJobAction}
+            onOpenJobLog={openJobLog}
             onReadJobLog={readJobLog}
             onTemplateSelectionChange={(templateIds) => {
               void saveTemplateSelection(templateIds);

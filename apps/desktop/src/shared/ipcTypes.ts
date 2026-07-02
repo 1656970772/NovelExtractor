@@ -30,6 +30,7 @@ export const DESKTOP_IPC_CHANNELS = [
   "jobs:restart",
   "jobs:delete",
   "jobs:readLog",
+  "jobs:openLog",
   "reports:preview"
 ] as const;
 
@@ -188,6 +189,10 @@ export interface JobLogDto {
   content: string;
 }
 
+export interface OpenJobLogDto {
+  jobId: string;
+}
+
 export interface DeleteJobDto {
   jobId: string;
   confirm: true;
@@ -216,6 +221,7 @@ export interface DesktopIpcRequestMap {
   "jobs:restart": { jobId: string };
   "jobs:delete": DeleteJobDto;
   "jobs:readLog": { jobId: string };
+  "jobs:openLog": OpenJobLogDto;
   "reports:preview": { reportId: string };
 }
 
@@ -242,6 +248,7 @@ export interface DesktopIpcResponseMap {
   "jobs:restart": JobDto | void;
   "jobs:delete": void;
   "jobs:readLog": JobLogDto;
+  "jobs:openLog": void;
   "reports:preview": SafeMarkdownPreviewDto;
 }
 

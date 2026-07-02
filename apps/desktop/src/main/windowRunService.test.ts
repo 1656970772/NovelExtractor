@@ -76,6 +76,7 @@ describe("window run Reasonix tool loop integration", () => {
     const reportsRoot = path.join(projectRoot, "assets", "books", "book-1", "reports");
     const windowTextPath = path.join(projectRoot, "runs", "job-1", "windows", "window-0001.txt");
     const requestBodies: Record<string, unknown>[] = [];
+    const append = vi.fn(async () => {});
     let backgroundJobId = "";
     const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
     const apiKeyRef = credentialStore.saveApiKey({
@@ -163,7 +164,8 @@ describe("window run Reasonix tool loop integration", () => {
           return config;
         }
       },
-      registerReport: () => {}
+      registerReport: () => {},
+      taskLogger: { append, setSecrets: vi.fn() } as any
     });
 
     await service.runJobWindows({
@@ -291,6 +293,29 @@ describe("window run Reasonix tool loop integration", () => {
         name: "mark_no_update",
         tool_call_id: "call-mark-no-update",
         content: expect.stringContaining("marked no update for 人物.md")
+      })
+    );
+    expect(append).toHaveBeenCalledWith(
+      ["大模型请求", "Prompt"],
+      expect.objectContaining({
+        窗口: "1/1",
+        批次: "1/1",
+        轮次: 1,
+        模型: "mock-model"
+      })
+    );
+    expect(append).toHaveBeenCalledWith(
+      ["工具返回", "mark_no_update"],
+      expect.objectContaining({
+        实际执行输入: expect.objectContaining({ path: "人物.md" }),
+        是否可恢复错误: false
+      })
+    );
+    expect(append).toHaveBeenCalledWith(
+      ["上下文", "批次结果"],
+      expect.objectContaining({
+        窗口: "1/1",
+        处理结果: expect.any(Array)
       })
     );
   }, 20000);

@@ -600,7 +600,7 @@ p {
 
 .job-row {
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
+  align-items: start;
 }
 
 .job-row > div:first-child {
@@ -610,7 +610,9 @@ p {
 
 .job-row__actions {
   display: flex;
+  align-self: start;
   gap: 8px;
+  justify-content: end;
 }
 
 .state-banner {
@@ -685,8 +687,7 @@ p {
 
 .metadata-grid dt,
 .template-option p,
-.job-log-summary,
-.job-log-path {
+.job-log-summary {
   color: var(--app-color-ink-muted);
   font-size: 12px;
 }
@@ -964,21 +965,24 @@ p {
   max-width: 100%;
 }
 
-.job-log-content {
-  display: grid;
-  gap: 4px;
-  width: 100%;
-  max-width: 100%;
+.job-log-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
 }
 
-.job-log-path {
-  margin: 0;
-  word-break: break-all;
+.job-log-content {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  max-width: 100%;
+  margin-top: 2px;
 }
 
 .job-log-text {
   width: min(100%, 58rem);
-  max-height: 320px;
+  max-height: 280px;
   overflow: auto;
   margin: 0;
   padding: 8px 10px;
@@ -990,7 +994,7 @@ p {
   font-size: 12px;
   line-height: 1.55;
   white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .job-log-error {

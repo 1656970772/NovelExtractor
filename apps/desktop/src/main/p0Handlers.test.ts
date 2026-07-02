@@ -513,9 +513,8 @@ describe("P0 desktop IPC handlers", () => {
       const secondJobLog = await contract.invoke(handlers, "jobs:readLog", {
         jobId: secondJob.id
       });
-      expect(secondJobLog.content).toContain("覆盖索引");
-      expect(secondJobLog.content).toContain("丹药分析.md");
-      expect(secondJobLog.content).toContain("待处理模板");
+      expect(secondJobLog.content).toContain("检查覆盖索引");
+      expect(secondJobLog.content).toContain("待处理模板 0 个");
     } finally {
       await mockServer.close();
     }
@@ -996,8 +995,10 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture(apiKey);
+    const openPath = vi.fn().mockResolvedValue("");
     const handlers = createHandlers({
       credentialStore,
+      shell: { openPath },
       providerStore: createProviderStore(
         createProviderConfig({
           apiKeyRef,
@@ -1032,13 +1033,22 @@ describe("P0 desktop IPC handlers", () => {
       expect(existsSync(path.join(projectRoot, "runs", job.id, "tool-loop-traces"))).toBe(false);
 
       const logText = await fs.readFile(path.join(projectRoot, logFilePath ?? ""), "utf8");
+      const simpleLogText = await fs.readFile(
+        path.join(projectRoot, (logFilePath ?? "").replace(/\.txt$/u, ".simple.txt")),
+        "utf8"
+      );
       const readLog = await contract.invoke(handlers, "jobs:readLog", { jobId: job.id });
 
       expect(readLog).toEqual({
         jobId: job.id,
         logFilePath,
-        content: logText
+        content: simpleLogText
       });
+      expect(simpleLogText).toContain("开始任务：凡人修仙传.txt");
+      expect(simpleLogText).toContain("请求模型：窗口 1/1，第 1 轮");
+      expect(simpleLogText).toContain("搜索文件：window-0001.txt");
+      expect(simpleLogText).not.toContain("[大模型请求][Prompt]");
+      expect(simpleLogText).not.toContain("role: system");
       expect(logText.split("\n")[0]).toContain("[2026-06-27 00:00:00][任务信息] 任务");
       expect(logText).toContain("[大模型请求][Prompt]");
       expect(logText).toContain("role: system");
@@ -1055,6 +1065,9 @@ describe("P0 desktop IPC handlers", () => {
       expect(logText).toContain("章节范围");
       expect(logText).not.toContain(apiKey);
       expect(logText.trim()).not.toMatch(/^\{.*\}$/su);
+
+      await contract.invoke(handlers, "jobs:openLog", { jobId: job.id });
+      expect(openPath).toHaveBeenCalledWith(path.join(projectRoot, logFilePath ?? ""));
     } finally {
       await mockServer.close();
     }
@@ -5448,6 +5461,135 @@ describe("P0 desktop IPC handlers", () => {
       });
       expect(requireJobDto(completedJob).failureReason).toBeUndefined();
       expect(reports).toHaveLength(1);
+      expect(reportMarkdown).toBe(recoveredReport);
+    } finally {
+      await mockServer.close();
+    }
+  });
+
+  it("returns a recoverable tool error when edit_file old_string matches multiple report locations", async () => {
+    let uploadedBookId = "";
+    const initialReport = "# 丹药分析\n\n## 一\n\n重复锚点。\n\n## 二\n\n重复锚点。";
+    const recoveredReport = `${initialReport}\n\n窗口二使用完整报告保留旧内容后补充。`;
+    const mockServer = await startMockOpenAiServer({
+      respond: ({ body, requestIndex }) => {
+        if (requestIndex === 0) {
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-window-1-write", "write_file", {
+                  path: "丹药分析.md",
+                  content: initialReport
+                })
+              ]
+            })
+          };
+        }
+
+        if (requestIndex === 1) {
+          return {
+            body: createChatCompletionResponse({ content: "第一窗口写入完成。" })
+          };
+        }
+
+        if (requestIndex === 2) {
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-window-2-read-existing", "read_file", {
+                  path: `assets/books/${uploadedBookId}/reports/丹药分析.md`
+                })
+              ]
+            })
+          };
+        }
+
+        if (requestIndex === 3) {
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-window-2-ambiguous-edit", "edit_file", {
+                  path: "丹药分析.md",
+                  old_string: "重复锚点。",
+                  new_string: "重复锚点。\n\n窗口二不应通过模糊锚点直接写入。"
+                })
+              ]
+            })
+          };
+        }
+
+        if (requestIndex === 4) {
+          expect(JSON.stringify(body)).toContain("old_string is not unique");
+          expect(JSON.stringify(body)).toContain("add more surrounding context");
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-window-2-safe-rewrite-after-ambiguous-edit", "write_file", {
+                  path: "丹药分析.md",
+                  content: recoveredReport
+                })
+              ]
+            })
+          };
+        }
+
+        return {
+          body: createChatCompletionResponse({ content: "第二窗口写入完成。" })
+        };
+      }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: mockServer.baseUrl
+        })
+      )
+    });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: utf8FixturePath,
+        displayName: "凡人修仙传.txt"
+      });
+      uploadedBookId = book.bookId;
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 3,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      });
+
+      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const reportMarkdown = await fs.readFile(
+        path.join(
+          tempRoot,
+          "projects",
+          "project-a",
+          "assets",
+          "books",
+          book.bookId,
+          "reports",
+          "丹药分析.md"
+        ),
+        "utf8"
+      );
+
+      expect(mockServer.requests).toHaveLength(6);
+      expect(completedJob).toMatchObject({
+        id: job.id,
+        status: "completed",
+        progressText: "进度：2/2"
+      });
+      expect(requireJobDto(completedJob).failureReason).toBeUndefined();
       expect(reportMarkdown).toBe(recoveredReport);
     } finally {
       await mockServer.close();

@@ -49,8 +49,10 @@ describe("task text logger", () => {
     await logger.append(["大模型返回"], "模型返回 sk-task-log-secret 和完整正文");
 
     const content = await fs.readFile(path.join(tempRoot, logger.relativePath), "utf8");
+    const simpleContent = await fs.readFile(path.join(tempRoot, logger.simpleRelativePath), "utf8");
 
     expect(logger.relativePath).toBe("runs/job-1/logs/20260630-153012.txt");
+    expect(logger.simpleRelativePath).toBe("runs/job-1/logs/20260630-153012.simple.txt");
     expect(content.split("\n")[0]).toBe(
       "[2026-06-30 15:30:12][任务信息] 任务 job-1，书籍 book-1，模型 mock-model，模板 1 个，窗口 1 个"
     );
@@ -63,6 +65,13 @@ describe("task text logger", () => {
     expect(content).not.toContain("sk-task-log-secret");
     expect(content).not.toContain("raw-field-secret");
     expect(content.trim()).not.toMatch(/^\{.*\}$/su);
+    expect(simpleContent).toContain("15:30:12 开始任务：book-1，1 个模板，模型 mock-model");
+    expect(simpleContent).toContain("15:30:13 搜索文件：丹药分析.md");
+    expect(simpleContent).toContain("15:30:14 模型返回");
+    expect(simpleContent).not.toContain("输入参数");
+    expect(simpleContent).not.toContain("筑基丹");
+    expect(simpleContent).not.toContain("sk-task-log-secret");
+    expect(simpleContent).not.toContain("raw-field-secret");
   });
 
   it("allocates a unique timestamp file when the same task starts twice in one second", async () => {
@@ -81,5 +90,7 @@ describe("task text logger", () => {
 
     expect(first.relativePath).toBe("runs/job-1/logs/20260630-153012.txt");
     expect(second.relativePath).toBe("runs/job-1/logs/20260630-153012-001.txt");
+    expect(first.simpleRelativePath).toBe("runs/job-1/logs/20260630-153012.simple.txt");
+    expect(second.simpleRelativePath).toBe("runs/job-1/logs/20260630-153012-001.simple.txt");
   });
 });

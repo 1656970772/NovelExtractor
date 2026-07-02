@@ -107,6 +107,7 @@ function createHandlers(): DesktopIpcHandlers {
       logFilePath: "runs/job-1/logs/20260630-153012.txt",
       content: "[2026-06-30 15:30:12][任务信息] 任务 job-1"
     }),
+    "jobs:openLog": async () => undefined,
     "reports:preview": async (input) => ({
       reportId: input.reportId,
       html: "<h1>preview</h1>",
@@ -149,6 +150,7 @@ describe("desktop IPC contract", () => {
       "jobs:restart",
       "jobs:delete",
       "jobs:readLog",
+      "jobs:openLog",
       "reports:preview"
     ]);
   });

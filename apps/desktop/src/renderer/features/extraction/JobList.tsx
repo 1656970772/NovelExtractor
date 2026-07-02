@@ -8,13 +8,14 @@ export interface JobListProps {
   jobs: readonly ExtractionJob[];
   onJobAction?: (jobId: string, action: TaskAction) => Promise<void>;
   onDeleteJob?: (jobId: string) => Promise<void>;
+  onOpenJobLog?: (jobId: string) => Promise<void>;
   onReadJobLog?: (jobId: string) => Promise<string>;
 }
 
 const STATUS_CONFIG = getTaskStatusConfig();
 const TASK_ACTION_CONFIG = getTaskActionConfig();
 
-export function JobList({ jobs, onJobAction, onDeleteJob, onReadJobLog }: JobListProps) {
+export function JobList({ jobs, onDeleteJob, onJobAction, onOpenJobLog, onReadJobLog }: JobListProps) {
   const [deleteCandidate, setDeleteCandidate] = useState<ExtractionJob | null>(null);
 
   function runAction(job: ExtractionJob, action: TaskAction): void {
@@ -70,6 +71,7 @@ export function JobList({ jobs, onJobAction, onDeleteJob, onReadJobLog }: JobLis
                   <JobLogPanel
                     jobId={job.id}
                     logFilePath={job.logFilePath}
+                    onOpenLog={onOpenJobLog}
                     onReadLog={onReadJobLog}
                   />
                 </div>

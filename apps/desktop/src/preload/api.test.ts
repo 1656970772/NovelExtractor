@@ -76,6 +76,7 @@ describe("preload desktop API", () => {
     await api.restartJob({ jobId: "job-1" });
     await api.deleteJob({ jobId: "job-1", confirm: true });
     await api.readJobLog({ jobId: "job-1" });
+    await api.openJobLog({ jobId: "job-1" });
 
     expect(calls.map((call) => call.channel)).toEqual([
       "project:create",
@@ -100,9 +101,19 @@ describe("preload desktop API", () => {
       "jobs:resume",
       "jobs:restart",
       "jobs:delete",
-      "jobs:readLog"
+      "jobs:readLog",
+      "jobs:openLog"
     ]);
-    expect(invoke).toHaveBeenCalledTimes(23);
+    expect(invoke).toHaveBeenCalledTimes(24);
+  });
+
+  it("opens the full job log through typed IPC", async () => {
+    const invoke = vi.fn().mockResolvedValue(undefined);
+    const api = createNovelExtractorDesktopApi(invoke);
+
+    await api.openJobLog({ jobId: "job-1" });
+
+    expect(invoke).toHaveBeenCalledWith("jobs:openLog", { jobId: "job-1" });
   });
 
   it("does not expose raw invoke or the raw Electron renderer bridge", () => {
@@ -133,6 +144,7 @@ describe("preload desktop API", () => {
       "restartJob",
       "deleteJob",
       "readJobLog",
+      "openJobLog",
       "onJobUpdated"
     ]);
     expect(api).not.toHaveProperty("invoke");

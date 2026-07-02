@@ -90,6 +90,7 @@ const NO_TOOL_FEE: FeeAmount = {
   currency: "CNY"
 };
 const REPLACEMENT_TEXT_NOT_FOUND_MESSAGE = "old_string not found";
+const REPLACEMENT_TEXT_NOT_UNIQUE_MESSAGE = "old_string is not unique";
 
 const DEFAULT_CONFIG = getDefaultConfig();
 const TOOL_LOOP_DEFAULTS = DEFAULT_CONFIG.toolLoopDefaults;
@@ -129,6 +130,8 @@ const WRITE_FILE_LOSSY_REWRITE_MESSAGE =
   "不能覆盖丢失既有内容，需要使用 edit_file/multi_edit 或包含完整旧内容。";
 const REPLACEMENT_TEXT_NOT_FOUND_HINT =
   "old_string 必须精确匹配文件中的原文；可先用 grep/read_file 找到准确片段；若已 read_file 且需要整体更新，可用 write_file 提交完整保留旧内容的新版报告。";
+const REPLACEMENT_TEXT_NOT_UNIQUE_HINT =
+  "old_string 在文件中匹配到多处；请用 read_file/grep 找到目标段落并加入足够上下文，或用 write_file 提交完整保留旧内容的新版报告。";
 const EDIT_TARGET_NOT_FOUND_HINT =
   "目标报告不存在；如果需要创建报告，请改用 write_file 写入完整且合规的报告正文。";
 const READ_TOOL_SCOPE_DENIED_MESSAGE = "读工具路径不在当前窗口允许范围内。";
@@ -1408,7 +1411,7 @@ function shouldReturnRecoverableToolError(name: string, error: unknown): error i
 
   return (
     (name === "edit_file" || name === "multi_edit") &&
-    (isReplacementTextNotFoundMessage(error.message) || error.code === "NOT_FOUND")
+    (isReplacementTextNotFoundMessage(error.message) || isReplacementTextNotUniqueMessage(error.message) || error.code === "NOT_FOUND")
   );
 }
 
@@ -1432,6 +1435,10 @@ function isReplacementTextNotFoundMessage(message: string): boolean {
   return message.includes(REPLACEMENT_TEXT_NOT_FOUND_MESSAGE) || /^edit \d+: old_string not found/u.test(message);
 }
 
+function isReplacementTextNotUniqueMessage(message: string): boolean {
+  return message.includes(REPLACEMENT_TEXT_NOT_UNIQUE_MESSAGE) || /^edit \d+: old_string is not unique/u.test(message);
+}
+
 function isRecoverableReadToolInvalidArguments(name: string, error: ToolExecutionError): boolean {
   if (error.code !== "INVALID_ARGUMENTS") {
     return false;
@@ -1453,6 +1460,8 @@ function toRecoverableToolErrorResult(input: {
   const hint =
     isReplacementTextNotFoundMessage(input.error.message)
       ? REPLACEMENT_TEXT_NOT_FOUND_HINT
+      : isReplacementTextNotUniqueMessage(input.error.message)
+        ? REPLACEMENT_TEXT_NOT_UNIQUE_HINT
       : input.error.code === "NOT_FOUND"
         ? EDIT_TARGET_NOT_FOUND_HINT
       : input.error.message === READ_TOOL_SCOPE_DENIED_MESSAGE
@@ -1829,6 +1838,8 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         await options.taskLogger?.append(["大模型请求", "Prompt"], {
           供应商: input.providerId,
           模型: input.modelId,
+          窗口: `${input.manifestWindow.index + 1}/${input.totalWindowCount}`,
+          批次: `${input.batchIndex + 1}/${input.batchTotal}`,
           轮次: currentRoundIndex,
           messages,
           tools: TOOL_SCHEMAS
@@ -1877,6 +1888,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
           }
 
           await options.taskLogger?.append(["上下文", "批次结果"], {
+            窗口: `${input.manifestWindow.index + 1}/${input.totalWindowCount}`,
             批次: `${input.batchIndex + 1}/${input.batchTotal}`,
             处理结果: outcomeTracker.outcomes()
           });
@@ -2042,6 +2054,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
           await options.taskLogger?.append(["工具返回", toolCall.name], {
             轮次: currentRoundIndex,
             工具调用ID: toolCall.id,
+            实际执行输入: toolCall.executionArguments,
             是否可恢复错误: returnedRecoverableToolError,
             返回内容: toolResult
           });
@@ -2286,6 +2299,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             await coverageIndex.save();
             await options.taskLogger?.append(["上下文", "覆盖索引更新"], {
               索引路径: COVERAGE_INDEX_DEFAULTS.relativePath,
+              窗口: `${manifestWindow.index + 1}/${input.totalWindowCount}`,
               新增或更新记录数: coverageRecordCount
             });
           }

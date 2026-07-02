@@ -127,6 +127,7 @@ void app.whenReady().then(async () => {
       providerStore,
       workspaceRoot: appPaths.userDataDir,
       projectsRoot: () => projectStorageDirectory,
+      shell,
       onJobUpdated: notifyRendererJobUpdated
     }),
     ...createProviderIpcHandlers({ credentialStore, providerStore }),

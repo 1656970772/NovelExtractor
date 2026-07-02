@@ -58,6 +58,7 @@ export interface NovelExtractorDesktopApi {
   restartJob(input: { jobId: string }): Promise<JobDto | void>;
   deleteJob(input: DeleteJobDto): Promise<void>;
   readJobLog(input: { jobId: string }): Promise<JobLogDto>;
+  openJobLog(input: { jobId: string }): Promise<void>;
   onJobUpdated(handler: (job: JobDto) => void): () => void;
 }
 
@@ -97,6 +98,7 @@ export function createNovelExtractorDesktopApi(
     restartJob: (input) => invokeTyped(invoke, "jobs:restart", input),
     deleteJob: (input) => invokeTyped(invoke, "jobs:delete", input),
     readJobLog: (input) => invokeTyped(invoke, "jobs:readLog", input),
+    openJobLog: (input) => invokeTyped(invoke, "jobs:openLog", input),
     onJobUpdated: (handler) => subscribe?.("jobs:updated", handler) ?? (() => undefined)
   };
 

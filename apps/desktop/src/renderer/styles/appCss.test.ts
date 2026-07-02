@@ -83,6 +83,14 @@ describe("app css template modal layout", () => {
     expect(formErrorRule).toContain("white-space: pre-wrap");
   });
 
+  it("keeps job action buttons pinned to the top when progress logs expand", () => {
+    const actionsRule = getRuleBody(".job-row__actions");
+
+    expect(appCss).toMatch(/\.job-row\s*\{[^}]*align-items:\s*start/u);
+    expect(actionsRule).toContain("align-self: start");
+    expect(actionsRule).toContain("justify-content: end");
+  });
+
   it("keeps desktop settings modal aligned with the template modal shell", () => {
     const templateModalRule = getRuleBody(".template-modal");
     const settingsWorkspaceRule = getRuleBody(".settings-modal__workspace");

@@ -64,6 +64,7 @@ type P0Handlers = Pick<
   | "jobs:restart"
   | "jobs:delete"
   | "jobs:readLog"
+  | "jobs:openLog"
   | "reports:preview"
 >;
 
@@ -93,6 +94,9 @@ export interface P0IpcHandlersOptions {
   credentialStore?: MemoryCredentialStore;
   fetch?: FetchLike;
   onJobUpdated?: (job: JobDto) => void;
+  shell?: {
+    openPath(path: string): Promise<string>;
+  };
 }
 
 const TASK_STATUS_CONFIG = getTaskStatusConfig();
@@ -136,6 +140,10 @@ function toTemplateFileName(name: string): string {
 
 function sha256(value: string): string {
   return crypto.createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function deriveSimpleLogFilePath(logFilePath: string): string {
+  return logFilePath.replace(/\.txt$/u, ".simple.txt");
 }
 
 function stableJson(value: unknown): string {
@@ -244,6 +252,9 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
   const reportPathById = new Map<string, string>();
   const projectRuntimeStoresByRoot = new Map<string, ProjectRuntimeStore>();
   const providerStore = options.providerStore ?? createMemoryProviderStore();
+  const shellApi = options.shell ?? {
+    openPath: async () => "完整日志打开入口尚未初始化。"
+  };
   const credentialStore = options.credentialStore ?? createMemoryCredentialStore();
   const projectStore =
     options.projectStore ??
@@ -749,7 +760,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
   function buildTaskInfo(job: P0JobRecord, book: Book): string {
     return [
       `任务 ${job.id}`,
-      `书籍 ${book.id}`,
+      `书籍 ${book.displayName}`,
       `模型 ${job.input.modelId}`,
       `模板 ${job.input.templateIds.length} 个`,
       `单次章节 ${job.input.singleRunChapterCount}`,
@@ -771,20 +782,33 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
 
   async function readJobLog(job: P0JobRecord): Promise<string> {
     if (!job.logFilePath) {
-      return "任务尚未开始，日志文件还没有生成。";
+      return "任务尚未开始，运行流程还没有生成。";
     }
 
     const book = requireBook(job.bookId);
     const project = await ensureProject(book.projectId);
-    const logPath = path.join(project.rootPath, job.logFilePath);
+    const logPath = path.join(project.rootPath, deriveSimpleLogFilePath(job.logFilePath));
 
     try {
       return await fs.readFile(logPath, "utf8");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return "日志文件不存在，可能任务还没有真正开始或文件已被移动。";
+        return "运行流程文件不存在，可打开完整日志查看详情。";
       }
       throw error;
+    }
+  }
+
+  async function openJobLog(job: P0JobRecord): Promise<void> {
+    if (!job.logFilePath) {
+      throw new Error("任务尚未开始，完整日志文件还没有生成。");
+    }
+
+    const book = requireBook(job.bookId);
+    const project = await ensureProject(book.projectId);
+    const result = await shellApi.openPath(path.join(project.rootPath, job.logFilePath));
+    if (result) {
+      throw new Error(result);
     }
   }
 
@@ -1224,6 +1248,10 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
         logFilePath: job.logFilePath,
         content: await readJobLog(job)
       };
+    },
+    "jobs:openLog": async (input) => {
+      const job = requireJob(input.jobId);
+      await openJobLog(job);
     },
     "reports:preview": async (input) => {
       const report = reportsById.get(input.reportId);

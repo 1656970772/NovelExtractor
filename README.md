@@ -6,7 +6,7 @@
 
 ## 特性
 
-- 🎯 **配置驱动**：所有参数通过 YAML 配置
+- 🎯 **配置驱动**：桌面端参数由界面输入、项目状态和内置默认配置共同管理
 - 🪟 **重叠章节批次**：支持 1-5, 5-9, 9-13 顺序处理
 - 🔀 **智能路由**：关键词匹配自动选择相关模板
 - 💾 **中断续跑**：SQLite 状态管理，Hash 检测避免重复
@@ -39,39 +39,6 @@ export DEEPSEEK_MODEL="deepseek-v4-flash"
 
 桌面端为主入口，启动后在任务页完成配置与执行。
 
-## 配置示例
-
-```yaml
-novel:
-  id: "凡人修仙传"
-  source_path: "path/to/novel.txt"
-  chapter_title_pattern: "^第[一二三四五六七八九十百千万零〇两\\d]+章"
-
-window:
-  size: 5           # 章节批次大小
-  stride: 4         # 步长
-  max_windows: 60   # 默认处理 60 个章节批次；null 表示全书
-
-templates:
-  - id: "pills"
-    filename: "丹药分析模板.md"
-    output_filename: "丹药分析.md"
-    card: "丹药、药剂、药散、药汤"
-
-token_saving:
-  tool_surface:
-    profile: "economy"  # economy | full
-  tool_outputs:
-    max_tool_result_chars: 12000
-  prompt_budget:
-    context_window: 1000000
-    warn_ratio: 0.5
-    hard_ratio: 0.8
-    strategy: "split"  # split | skip | summarize
-  metrics:
-    run_token_budget: null
-```
-
 ## 架构
 
 ### 核心模块
@@ -82,7 +49,7 @@ token_saving:
 
 ```
 桌面端启动流程
-  -> load config
+  -> load desktop project state and defaults
   -> parse chapters
   -> build windows: 1-5, 5-9, 9-13
   -> route template groups

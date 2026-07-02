@@ -2,10 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { Clock } from "@novel-extractor/domain";
 import { redactSecrets } from "./credentials";
+import { summarizeTaskLogEntry } from "./taskProgressLog";
 
 export interface TaskTextLogger {
   readonly absolutePath: string;
   readonly relativePath: string;
+  readonly simpleAbsolutePath: string;
+  readonly simpleRelativePath: string;
   append(tags: readonly string[], value: unknown): Promise<void>;
   setSecrets(secrets: readonly string[]): void;
 }
@@ -42,6 +45,16 @@ function toFileTimestamp(timestamp: string): string {
 
 function toProjectRelativePath(...segments: string[]): string {
   return segments.join("/");
+}
+
+function deriveSimpleLogPath(allocated: {
+  absolutePath: string;
+  relativePath: string;
+}): { absolutePath: string; relativePath: string } {
+  return {
+    absolutePath: allocated.absolutePath.replace(/\.txt$/u, ".simple.txt"),
+    relativePath: allocated.relativePath.replace(/\.txt$/u, ".simple.txt")
+  };
 }
 
 async function allocateLogPath(input: {
@@ -161,6 +174,8 @@ export async function createTaskTextLogger(input: CreateTaskTextLoggerInput): Pr
     jobId: input.jobId,
     projectRoot: input.projectRoot
   });
+  const simpleAllocated = deriveSimpleLogPath(allocated);
+  await fs.writeFile(simpleAllocated.absolutePath, "", { encoding: "utf8", flag: "wx" });
   let secrets = [...(input.secrets ?? [])];
 
   function renderLine(tags: readonly string[], value: unknown, timestampValue = clock.now()): string {
@@ -176,17 +191,29 @@ export async function createTaskTextLogger(input: CreateTaskTextLoggerInput): Pr
     return `${linePrefix}\n${rendered}\n`;
   }
 
+  function renderSimpleLine(tags: readonly string[], value: unknown, timestampValue = clock.now()): string {
+    const summarized = summarizeTaskLogEntry({ tags, timestamp: timestampValue, value });
+    return `${redactTaskLogText(summarized, secrets)}\n`;
+  }
+
+  async function appendBoth(tags: readonly string[], value: unknown, timestampValue = clock.now()): Promise<void> {
+    await fs.appendFile(allocated.absolutePath, renderLine(tags, value, timestampValue), "utf8");
+    await fs.appendFile(simpleAllocated.absolutePath, renderSimpleLine(tags, value, timestampValue), "utf8");
+  }
+
   const logger: TaskTextLogger = {
     absolutePath: allocated.absolutePath,
     relativePath: allocated.relativePath,
+    simpleAbsolutePath: simpleAllocated.absolutePath,
+    simpleRelativePath: simpleAllocated.relativePath,
     async append(tags, value) {
-      await fs.appendFile(allocated.absolutePath, renderLine(tags, value), "utf8");
+      await appendBoth(tags, value);
     },
     setSecrets(nextSecrets) {
       secrets = [...nextSecrets];
     }
   };
 
-  await fs.appendFile(allocated.absolutePath, renderLine(["任务信息"], input.taskInfo, createdAt), "utf8");
+  await appendBoth(["任务信息"], input.taskInfo, createdAt);
   return logger;
 }
