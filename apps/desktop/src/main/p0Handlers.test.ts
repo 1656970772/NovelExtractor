@@ -3355,6 +3355,103 @@ describe("P0 desktop IPC handlers", () => {
     }
   });
 
+  it("resets stale full progress on the first running restart notification", async () => {
+    const mockServer = await startMockOpenAiServer({
+      expectedApiKey: "sk-restart-stale-progress",
+      respond: () => ({
+        body: createChatCompletionResponse({
+          content: "NO_UPDATE"
+        })
+      })
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-restart-stale-progress");
+    const providerStore = createProviderStore(
+      createProviderConfig({
+        apiKeyRef,
+        baseUrl: mockServer.baseUrl
+      })
+    );
+    const handlers = createHandlers({ credentialStore, providerStore });
+    const novelPath = await writeTempNovel(tempRoot, "重启满进度小说.txt", 9);
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: novelPath,
+        displayName: "重启满进度小说.txt"
+      });
+      const job = requireJobDto(
+        await contract.invoke(handlers, "jobs:create", {
+          bookId: book.bookId,
+          templateIds: ["pill-analysis"],
+          providerConfigId: "provider-1",
+          modelId: "mock-model",
+          singleRunChapterCount: 3,
+          extractionChapterCount: 9,
+          overlapChapterCount: 1,
+          skipAlreadyExtracted: true
+        })
+      );
+      const runtimePath = path.join(tempRoot, "projects", "project-a", "state", "project-runtime.json");
+      const rawRuntime = JSON.parse(await fs.readFile(runtimePath, "utf8")) as {
+        jobs: ProjectRuntimeJobRecord[];
+      };
+      rawRuntime.jobs = rawRuntime.jobs.map((storedJob) =>
+        storedJob.id === job.id
+          ? {
+              ...storedJob,
+              status: "failed",
+              progressText: "进度：4/4",
+              failureReason: "mock failure after completing all windows",
+              progress: {
+                completedWindowCount: 4,
+                totalWindowCount: 4
+              },
+              timing: {
+                startedAt: "2026-07-02T10:00:00.000Z",
+                completedAt: "2026-07-02T10:04:00.000Z",
+                estimatedRemainingMs: 420000
+              }
+            }
+          : storedJob
+      );
+      await fs.writeFile(runtimePath, `${JSON.stringify(rawRuntime, null, 2)}\n`, "utf8");
+
+      const pushedJobs: JobDto[] = [];
+      const restartedHandlers = createHandlers({
+        credentialStore,
+        onJobUpdated: (updatedJob: JobDto) => {
+          pushedJobs.push(updatedJob);
+        },
+        providerStore
+      });
+      await contract.invoke(restartedHandlers, "projectRuntime:get", { projectId: "project-a" });
+
+      await contract.invoke(restartedHandlers, "jobs:restart", { jobId: job.id });
+
+      const initialRunningJob = pushedJobs.find(
+        (pushedJob) => pushedJob.id === job.id && pushedJob.status === "running"
+      );
+      expect(initialRunningJob).toMatchObject({
+        progressText: "正在准备运行窗口",
+        progress: {
+          completedWindowCount: 0,
+          totalWindowCount: 4,
+          percent: 0
+        },
+        timing: {
+          startedAt: fixedNow,
+          elapsedMs: 0,
+          estimateState: "calculating"
+        }
+      });
+      expect(initialRunningJob?.timing?.estimatedRemainingMs).toBeUndefined();
+    } finally {
+      await mockServer.close();
+    }
+  });
+
   it("returns a recoverable error when read_file targets the rules snapshot", async () => {
     const recoveredReport = "# 丹药分析\n\n规则快照读取被拒绝后改用当前模板写入。";
     let createdJobId = "";

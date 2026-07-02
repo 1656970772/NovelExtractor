@@ -1184,6 +1184,8 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     runOptions?: RunModelBackedJobOptions
   ): Promise<JobDto> {
     const taskLogger = await createTaskLoggerForJob(job);
+    const initialRunJob = withRunOptions(job, runOptions);
+    const initialTotalWindowCount = estimateRuntimeWindowCount(requireBook(job.bookId), initialRunJob.input);
     const runningStartedAt =
       runOptions?.skipAlreadyExtracted === false
         ? clock.now()
@@ -1194,6 +1196,10 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       tokenText: formatTokenText(null),
       failureReason: undefined,
       logFilePath: taskLogger.relativePath,
+      progress: {
+        completedWindowCount: 0,
+        totalWindowCount: initialTotalWindowCount
+      },
       timing: {
         ...job.timing,
         startedAt: runningStartedAt,
