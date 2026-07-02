@@ -450,7 +450,10 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       return undefined;
     }
 
-    const estimatedRemainingMs = isAllWindowsCompleted(job.progress) ? 0 : timing.estimatedRemainingMs;
+    const estimatedRemainingMs =
+      (job.status === "running" || job.status === "completed") && isAllWindowsCompleted(job.progress)
+        ? 0
+        : timing.estimatedRemainingMs;
     const hasEstimatedRemaining = estimatedRemainingMs !== undefined;
     const estimateState: JobTimingDto["estimateState"] =
       job.status === "paused" && hasEstimatedRemaining

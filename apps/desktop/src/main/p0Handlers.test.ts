@@ -933,6 +933,67 @@ describe("P0 desktop IPC handlers", () => {
     expect(failedJob?.timing?.estimateState).not.toBe("available");
   });
 
+  it("preserves stale remaining estimates for persisted failed jobs that finished all windows", async () => {
+    const contract = createIpcContract();
+    const handlers = createHandlers();
+    const novelPath = await writeTempNovel(tempRoot, "满进度失败小说.txt", 9);
+
+    const book = await contract.invoke(handlers, "books:uploadTxt", {
+      projectId: "project-a",
+      filePath: novelPath,
+      displayName: "满进度失败小说.txt"
+    });
+    const job = requireJobDto(
+      await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 3,
+        extractionChapterCount: 9,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      })
+    );
+    const runtimePath = path.join(tempRoot, "projects", "project-a", "state", "project-runtime.json");
+    const rawRuntime = JSON.parse(await fs.readFile(runtimePath, "utf8")) as {
+      jobs: ProjectRuntimeJobRecord[];
+    };
+    rawRuntime.jobs = rawRuntime.jobs.map((storedJob) =>
+      storedJob.id === job.id
+        ? {
+            ...storedJob,
+            status: "failed",
+            progressText: "进度：4/4",
+            failureReason: "mock failure after all windows completed",
+            progress: {
+              completedWindowCount: 4,
+              totalWindowCount: 4
+            },
+            timing: {
+              startedAt: "2026-07-02T10:00:00.000Z",
+              completedAt: "2026-07-02T10:04:00.000Z",
+              estimatedRemainingMs: 420000
+            }
+          }
+        : storedJob
+    );
+    await fs.writeFile(runtimePath, `${JSON.stringify(rawRuntime, null, 2)}\n`, "utf8");
+
+    const restartedHandlers = createHandlers();
+    const runtime = await contract.invoke(restartedHandlers, "projectRuntime:get", {
+      projectId: "project-a"
+    });
+    const failedJob = runtime.jobs.find((runtimeJob) => runtimeJob.id === job.id);
+
+    expect(failedJob?.timing).toMatchObject({
+      startedAt: "2026-07-02T10:00:00.000Z",
+      completedAt: "2026-07-02T10:04:00.000Z",
+      estimatedRemainingMs: 420000,
+      estimateState: "unknown"
+    });
+  });
+
   it("resets stale remaining time estimates for persisted completed jobs that finished all windows", async () => {
     const contract = createIpcContract();
     const handlers = createHandlers();
