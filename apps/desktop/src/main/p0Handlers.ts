@@ -495,9 +495,19 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     };
   }
 
+  async function resolveJobTemplatesForInputSummary(job: P0JobRecord): Promise<TemplateDto[]> {
+    const book = requireBook(job.bookId);
+    const templatesById = new Map(
+      (await listTemplatesForProject(book.projectId)).map((template) => [template.id, template])
+    );
+    return job.input.templateIds
+      .map((templateId) => templatesById.get(templateId))
+      .filter((template): template is TemplateDto => Boolean(template));
+  }
+
   async function buildJobDto(job: P0JobRecord): Promise<JobDto> {
     const book = requireBook(job.bookId);
-    const templates = await resolveJobTemplates(job);
+    const templates = await resolveJobTemplatesForInputSummary(job);
 
     return {
       id: job.id,
@@ -1153,6 +1163,22 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     };
   }
 
+  function toTerminalFailurePatch(
+    job: P0JobRecord,
+    failureReason: string
+  ): Partial<P0JobRecord> {
+    return {
+      status: "failed",
+      failureReason,
+      timing: {
+        ...job.timing,
+        completedAt: job.timing?.completedAt ?? clock.now(),
+        estimatedRemainingMs: undefined,
+        estimateFrozenAt: undefined
+      }
+    };
+  }
+
   async function runModelBackedJob(
     job: P0JobRecord,
     runOptions?: RunModelBackedJobOptions
@@ -1226,13 +1252,10 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
 
       if (!result.ok) {
         const latestJob = requireJob(runningJob.id);
-        const failedJob =
-          latestJob.status === "failed"
-            ? latestJob
-            : await updateJob(latestJob, {
-                status: "failed",
-                failureReason: getRuntimeErrorReason(result.error)
-              });
+        const failedJob = await updateJob(
+          latestJob,
+          toTerminalFailurePatch(latestJob, getRuntimeErrorReason(result.error))
+        );
         return await buildJobDto(failedJob);
       }
 
@@ -1241,9 +1264,8 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       await taskLogger.append(["错误", "任务"], getFailureReason(error));
       return await buildJobDto(
         await updateJob(runningJob, {
-          status: "failed",
-          progressText: "任务失败",
-          failureReason: getFailureReason(error)
+          ...toTerminalFailurePatch(runningJob, getFailureReason(error)),
+          progressText: "任务失败"
         })
       );
     }

@@ -760,6 +760,53 @@ describe("P0 desktop IPC handlers", () => {
     ]);
   });
 
+  it("loads persisted jobs when their selected project template was deleted later", async () => {
+    const contract = createIpcContract();
+    const handlers = createHandlers();
+    const book = await contract.invoke(handlers, "books:uploadTxt", {
+      projectId: "project-a",
+      filePath: utf8FixturePath,
+      displayName: "凡人修仙传.txt"
+    });
+    const template = await contract.invoke(handlers, "templates:save", {
+      projectId: "project-a",
+      scope: "project",
+      name: "临时项目模板",
+      fileName: "temporary-project-template.md",
+      body: "# 临时项目模板\n只用于旧任务兼容性测试。"
+    });
+    const job = await contract.invoke(handlers, "jobs:create", {
+      bookId: book.bookId,
+      templateIds: [template.id],
+      providerConfigId: "provider-1",
+      modelId: "mock-model",
+      singleRunChapterCount: 2,
+      extractionChapterCount: 2,
+      overlapChapterCount: 1,
+      skipAlreadyExtracted: true
+    });
+
+    await contract.invoke(handlers, "templates:delete", {
+      templateId: template.id
+    });
+
+    const restartedHandlers = createHandlers();
+    const runtime = await contract.invoke(restartedHandlers, "projectRuntime:get", {
+      projectId: "project-a"
+    });
+
+    expect(runtime.jobs).toEqual([
+      expect.objectContaining({
+        id: job.id,
+        inputSummary: {
+          bookDisplayName: "凡人修仙传.txt",
+          modelId: "mock-model",
+          templateNames: []
+        }
+      })
+    ]);
+  });
+
   it("recovers running persisted jobs as paused and can resume them", async () => {
     const mockServer = await startMockOpenAiServer({
       expectedApiKey: "sk-resume-persisted",
@@ -8207,11 +8254,75 @@ describe("P0 desktop IPC handlers", () => {
     expect(failedJob).toMatchObject({
       id: job.id,
       status: "failed",
-      allowedActions: ["resume", "restart", "delete"]
+      allowedActions: ["resume", "restart", "delete"],
+      timing: {
+        startedAt: fixedNow,
+        completedAt: fixedNow
+      }
     });
     expect(failedJob.failureReason).toBeTruthy();
     expect(JSON.stringify(failedJob)).not.toContain("sk-p0-mock");
     await expect(contract.invoke(handlers, "books:listReports", { bookId: book.bookId })).resolves.toEqual([]);
+  });
+
+  it("freezes failed job timing when pre-run template validation fails", async () => {
+    const contract = createIpcContract();
+    let now = "2026-07-02T10:00:00.000Z";
+    const handlers = createHandlers({
+      clock: { now: () => now }
+    });
+
+    const book = await contract.invoke(handlers, "books:uploadTxt", {
+      projectId: "project-a",
+      filePath: utf8FixturePath,
+      displayName: "凡人修仙传.txt"
+    });
+    const template = await contract.invoke(handlers, "templates:save", {
+      projectId: "project-a",
+      scope: "project",
+      name: "运行前删除模板",
+      fileName: "deleted-before-run.md",
+      body: "# 运行前删除模板"
+    });
+    const job = await contract.invoke(handlers, "jobs:create", {
+      bookId: book.bookId,
+      templateIds: [template.id],
+      providerConfigId: "provider-1",
+      modelId: "mock-model",
+      singleRunChapterCount: 2,
+      extractionChapterCount: 3,
+      overlapChapterCount: 1,
+      skipAlreadyExtracted: true
+    });
+    await contract.invoke(handlers, "templates:delete", {
+      templateId: template.id
+    });
+
+    const failedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+    const failedElapsedMs = failedJob.timing?.elapsedMs;
+    now = "2026-07-02T10:05:00.000Z";
+    const restartedHandlers = createHandlers({
+      clock: { now: () => now }
+    });
+    const runtime = await contract.invoke(restartedHandlers, "projectRuntime:get", {
+      projectId: "project-a"
+    });
+    const reloadedJob = runtime.jobs.find((runtimeJob) => runtimeJob.id === job.id);
+
+    expect(failedJob).toMatchObject({
+      id: job.id,
+      status: "failed",
+      timing: {
+        startedAt: "2026-07-02T10:00:00.000Z",
+        completedAt: "2026-07-02T10:00:00.000Z"
+      }
+    });
+    expect(failedElapsedMs).toBe(0);
+    expect(reloadedJob?.timing).toMatchObject({
+      startedAt: "2026-07-02T10:00:00.000Z",
+      completedAt: "2026-07-02T10:00:00.000Z",
+      elapsedMs: failedElapsedMs
+    });
   });
 
   it("marks jobs failed when the mock provider rejects the requested model", async () => {
