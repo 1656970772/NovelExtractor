@@ -201,7 +201,7 @@ describe("uploadBook", () => {
   });
 
   it("accepts markdown sources as plain text and stores as original.txt", async () => {
-    const { project, sourcePath } = await createProjectWithSource("novel.md", "第一章 起始\n\n# 第一章\n\n正文内容");
+    const { project, sourcePath } = await createProjectWithSource("novel.md", "第一章 起始\n\n# Markdown 标记\n\n正文内容");
     const repository = createFakeUploadedBookRepository();
 
     const result = await uploadBook({
@@ -216,7 +216,7 @@ describe("uploadBook", () => {
     expect(result.sourceRelativePath).toBe("assets/books/book-md/source/original.txt");
 
     const savedPath = path.join(project.rootPath, result.sourceRelativePath);
-    await expect(fs.readFile(savedPath, "utf8")).resolves.toContain("# 第一章");
+    await expect(fs.readFile(savedPath, "utf8")).resolves.toContain("# Markdown 标记");
   });
 
   it("rejects asset layouts where source and chapter files resolve to the same destination", async () => {

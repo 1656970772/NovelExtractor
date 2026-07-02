@@ -89,7 +89,7 @@ async function runExtractionLoop(page: Page): Promise<void> {
   await expect(page.getByRole("heading", { name: "小说提取" })).toBeVisible();
   await expect(page.getByLabel("模型")).toHaveValue("provider-1:mock-model");
 
-  await page.getByLabel("选择 .txt 文件").setInputFiles(utf8FixturePath);
+  await page.getByLabel("选择小说文件").setInputFiles(utf8FixturePath);
   const uploadPanel = page.getByRole("region", { name: "上传小说" });
   await expect(uploadPanel.getByText("utf8-novel.txt").first()).toBeVisible();
   await expect(uploadPanel.getByText("章节数 3")).toBeVisible();
