@@ -1158,12 +1158,23 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     runOptions?: RunModelBackedJobOptions
   ): Promise<JobDto> {
     const taskLogger = await createTaskLoggerForJob(job);
+    const runningStartedAt =
+      runOptions?.skipAlreadyExtracted === false
+        ? clock.now()
+        : (job.timing?.startedAt ?? clock.now());
     let runningJob = await updateJob(job, {
       status: "running",
       progressText: "正在准备运行窗口",
       tokenText: formatTokenText(null),
       failureReason: undefined,
-      logFilePath: taskLogger.relativePath
+      logFilePath: taskLogger.relativePath,
+      timing: {
+        ...job.timing,
+        startedAt: runningStartedAt,
+        completedAt: undefined,
+        estimatedRemainingMs: undefined,
+        estimateFrozenAt: undefined
+      }
     });
 
     try {

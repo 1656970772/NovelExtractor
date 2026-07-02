@@ -3232,6 +3232,82 @@ describe("P0 desktop IPC handlers", () => {
     }
   });
 
+  it("notifies initial running jobs with calculating timing before estimates are available", async () => {
+    const mockServer = await startMockOpenAiServer({
+      expectedApiKey: "sk-initial-running-timing",
+      respond: () => ({
+        body: createChatCompletionResponse({
+          content: "NO_UPDATE",
+          usage: {
+            prompt_tokens: 80,
+            completion_tokens: 20,
+            total_tokens: 100,
+            prompt_cache_hit_tokens: 60,
+            prompt_cache_miss_tokens: 20
+          }
+        })
+      })
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-initial-running-timing");
+    const pushedJobs: JobDto[] = [];
+    const handlers = createHandlers({
+      credentialStore,
+      onJobUpdated: (job: JobDto) => {
+        pushedJobs.push(job);
+      },
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: mockServer.baseUrl
+        })
+      )
+    });
+    const novelPath = await writeTempNovel(tempRoot, "首条运行通知小说.txt", 9);
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: novelPath,
+        displayName: "首条运行通知小说.txt"
+      });
+      const job = requireJobDto(
+        await contract.invoke(handlers, "jobs:create", {
+          bookId: book.bookId,
+          templateIds: ["pill-analysis"],
+          providerConfigId: "provider-1",
+          modelId: "mock-model",
+          singleRunChapterCount: 3,
+          extractionChapterCount: 9,
+          overlapChapterCount: 1,
+          skipAlreadyExtracted: true
+        })
+      );
+
+      await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+
+      const initialRunningJob = pushedJobs.find(
+        (pushedJob) => pushedJob.id === job.id && pushedJob.status === "running"
+      );
+      expect(initialRunningJob).toMatchObject({
+        progressText: "正在准备运行窗口",
+        progress: {
+          completedWindowCount: 0,
+          totalWindowCount: 4,
+          percent: 0
+        },
+        timing: {
+          startedAt: fixedNow,
+          elapsedMs: 0,
+          estimateState: "calculating"
+        }
+      });
+      expect(initialRunningJob?.timing?.estimatedRemainingMs).toBeUndefined();
+    } finally {
+      await mockServer.close();
+    }
+  });
+
   it("returns a recoverable error when read_file targets the rules snapshot", async () => {
     const recoveredReport = "# 丹药分析\n\n规则快照读取被拒绝后改用当前模板写入。";
     let createdJobId = "";
