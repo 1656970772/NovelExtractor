@@ -807,7 +807,7 @@ describe("desktop workbench shell", () => {
     await user.upload(screen.getByLabelText("选择 .txt 文件"), file);
     expect(await screen.findByText("凡人修仙传.txt")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "资产" }));
+    await user.click(screen.getByRole("button", { name: "资源" }));
     await user.click(screen.getByRole("button", { name: /凡人修仙传/ }));
     expect(api.listReports).toHaveBeenCalledWith({ bookId: "book-1" });
 
@@ -854,7 +854,7 @@ describe("desktop workbench shell", () => {
     await user.upload(screen.getByLabelText("选择 .txt 文件"), file);
     await screen.findByText("凡人修仙传.txt");
 
-    await user.click(screen.getByRole("button", { name: "资产" }));
+    await user.click(screen.getByRole("button", { name: "资源" }));
     await user.click(screen.getByRole("button", { name: /凡人修仙传/ }));
     await user.click(await screen.findByRole("button", { name: /丹药分析/ }));
 

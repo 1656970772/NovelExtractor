@@ -33,10 +33,12 @@ describe("WorkbenchNav", () => {
     expect(featureImages[0]).toHaveAttribute("src", "function-extraction.svg");
     expect(featureImages[1]).toHaveAttribute("src", "function-graph.svg");
 
-    expect(screen.getByLabelText("资产入口")).toBeInTheDocument();
+    expect(screen.getByLabelText("资源入口")).toBeInTheDocument();
     expect(screen.getByLabelText("功能快捷入口")).toBeInTheDocument();
     expect(screen.getByLabelText("底部工具入口")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "设置" })).toHaveTextContent("⚙");
+    expect(
+      screen.getByRole("button", { name: "设置" }).querySelector(".rail-nav__icon")
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "语言" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "用户菜单" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "大模型配置" })).not.toBeInTheDocument();
@@ -95,6 +97,33 @@ describe("WorkbenchNav", () => {
     );
 
     expect(onPageChange).toHaveBeenNthCalledWith(1, "extraction");
+    expect(onPageChange).toHaveBeenNthCalledWith(2, "graph");
+  });
+
+  it("shows a label tooltip when a rail item is hovered or focused", async () => {
+    const user = userEvent.setup();
+    render(<WorkbenchNav activePage="extraction" projectName="demo" onPageChange={vi.fn()} />);
+
+    const resourceButton = screen.getByRole("button", { name: "资源" });
+
+    await user.hover(resourceButton);
+    expect(screen.getByRole("tooltip", { name: "资源" })).toBeInTheDocument();
+
+    await user.unhover(resourceButton);
+    resourceButton.focus();
+    expect(screen.getByRole("tooltip", { name: "资源" })).toBeInTheDocument();
+  });
+
+  it("requests page changes from rail items", async () => {
+    const user = userEvent.setup();
+    const onPageChange = vi.fn();
+
+    render(<WorkbenchNav activePage="extraction" projectName="demo" onPageChange={onPageChange} />);
+
+    await user.click(screen.getByRole("button", { name: "资源" }));
+    await user.click(screen.getByRole("button", { name: "关系图" }));
+
+    expect(onPageChange).toHaveBeenNthCalledWith(1, "assets");
     expect(onPageChange).toHaveBeenNthCalledWith(2, "graph");
   });
 
