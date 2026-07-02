@@ -1,15 +1,14 @@
-import { getWorkbenchNavigation, type MenuItemConfig, type MenuItemId } from "@novel-extractor/config";
+import { getWorkbenchNavigation, type MenuItemConfig } from "@novel-extractor/config";
 import type { FocusEvent, ReactNode } from "react";
 import { useId, useState } from "react";
-import { flushSync } from "react-dom";
 import {
-  WORKBENCH_NAV_ITEMS,
-  WORKBENCH_SETTINGS_ITEM,
-  type WorkbenchNavItem,
-  type WorkbenchUtilityNavItem
+  getWorkbenchRailRendererConfig,
+  type WorkbenchRailPageId,
+  type WorkbenchRailRendererConfig,
+  type WorkbenchRailUtilityId
 } from "./workbenchNavConfig";
 
-export type WorkbenchPage = Extract<MenuItemId, "assets" | "extraction" | "graph">;
+export type WorkbenchPage = WorkbenchRailPageId;
 
 export interface WorkbenchNavProps {
   activePage: WorkbenchPage;
@@ -23,10 +22,58 @@ interface WorkbenchNavigationItem extends MenuItemConfig {
   id: WorkbenchPage;
 }
 
-type RailItemId = WorkbenchPage | WorkbenchUtilityNavItem["id"];
+interface WorkbenchPageRailItem {
+  readonly id: WorkbenchPage;
+  readonly label: string;
+  readonly icon: WorkbenchRailRendererConfig["icon"];
+}
+
+interface WorkbenchUtilityRailItem {
+  readonly id: WorkbenchRailUtilityId;
+  readonly label: string;
+  readonly icon: WorkbenchRailRendererConfig["icon"];
+}
+
+type RailItemId = WorkbenchPage | WorkbenchRailUtilityId;
 
 function isWorkbenchNavigationItem(item: MenuItemConfig): item is WorkbenchNavigationItem {
   return item.id === "assets" || item.id === "extraction" || item.id === "graph";
+}
+
+function createPageRailItem(item: MenuItemConfig): WorkbenchPageRailItem | null {
+  if (!isWorkbenchNavigationItem(item)) {
+    return null;
+  }
+
+  const rendererConfig = getWorkbenchRailRendererConfig(item.id);
+
+  if (!rendererConfig) {
+    return null;
+  }
+
+  return {
+    id: item.id,
+    label: rendererConfig.label,
+    icon: rendererConfig.icon
+  };
+}
+
+function createUtilityRailItem(item: MenuItemConfig): WorkbenchUtilityRailItem | null {
+  if (item.id !== "desktop-settings") {
+    return null;
+  }
+
+  const rendererConfig = getWorkbenchRailRendererConfig(item.id);
+
+  if (!rendererConfig) {
+    return null;
+  }
+
+  return {
+    id: item.id,
+    label: rendererConfig.label,
+    icon: rendererConfig.icon
+  };
 }
 
 function getRailLabel(item: MenuItemConfig): string {
@@ -52,9 +99,18 @@ export function WorkbenchNav({
   const [focusedRailItemId, setFocusedRailItemId] = useState<RailItemId | null>(null);
   const workbenchNavigation = getWorkbenchNavigation();
   const topFunctionItems = workbenchNavigation.topFunctionItems.filter(isWorkbenchNavigationItem);
-  const railAssetItems = WORKBENCH_NAV_ITEMS.filter((item) => item.page === "assets");
-  const railFunctionItems = WORKBENCH_NAV_ITEMS.filter((item) => item.page !== "assets");
-  const visibleRailTooltipId = focusedRailItemId ?? hoveredRailItemId;
+  const railAssetItem = createPageRailItem(workbenchNavigation.railAssetItem);
+  const railFunctionItems = workbenchNavigation.railFunctionItems.flatMap((item) => {
+    const railItem = createPageRailItem(item);
+
+    return railItem ? [railItem] : [];
+  });
+  const railUtilityItems = workbenchNavigation.railUtilityItems.flatMap((item) => {
+    const railItem = createUtilityRailItem(item);
+
+    return railItem ? [railItem] : [];
+  });
+  const visibleRailTooltipId = hoveredRailItemId ?? focusedRailItemId;
   const isFunctionMenuOpen =
     isFunctionMenuHovered || isFunctionMenuFocused || isFunctionMenuPinnedOpen;
 
@@ -74,37 +130,37 @@ export function WorkbenchNav({
     }
   }
 
-  function handleUtilityItemClick(item: WorkbenchUtilityNavItem): void {
+  function handleUtilityItemClick(item: WorkbenchUtilityRailItem): void {
     if (item.id === "desktop-settings") {
       onOpenSettings?.();
     }
   }
 
   function focusRailItem(id: RailItemId): void {
-    flushSync(() => setFocusedRailItemId(id));
+    setFocusedRailItemId(id);
   }
 
-  function renderPageRailButton(item: WorkbenchNavItem): ReactNode {
+  function renderPageRailButton(item: WorkbenchPageRailItem): ReactNode {
     const Icon = item.icon;
-    const tooltipId = getRailTooltipId(item.page);
+    const tooltipId = getRailTooltipId(item.id);
 
     return (
-      <div className="rail-nav__button-wrap" key={item.page}>
+      <div className="rail-nav__button-wrap" key={item.id}>
         <button
-          aria-describedby={visibleRailTooltipId === item.page ? tooltipId : undefined}
+          aria-describedby={visibleRailTooltipId === item.id ? tooltipId : undefined}
           aria-label={item.label}
-          aria-pressed={activePage === item.page}
+          aria-pressed={activePage === item.id}
           className="rail-nav__button rail-nav__button--icon"
           onBlur={() => setFocusedRailItemId(null)}
-          onClick={() => changePage(item.page)}
-          onFocus={() => focusRailItem(item.page)}
-          onMouseEnter={() => setHoveredRailItemId(item.page)}
+          onClick={() => changePage(item.id)}
+          onFocus={() => focusRailItem(item.id)}
+          onMouseEnter={() => setHoveredRailItemId(item.id)}
           onMouseLeave={() => setHoveredRailItemId(null)}
           type="button"
         >
           <Icon aria-hidden="true" className="rail-nav__icon" />
         </button>
-        {visibleRailTooltipId === item.page ? (
+        {visibleRailTooltipId === item.id ? (
           <span className="rail-nav__tooltip" id={tooltipId} role="tooltip">
             {item.label}
           </span>
@@ -113,7 +169,7 @@ export function WorkbenchNav({
     );
   }
 
-  function renderUtilityRailButton(item: WorkbenchUtilityNavItem): ReactNode {
+  function renderUtilityRailButton(item: WorkbenchUtilityRailItem): ReactNode {
     const Icon = item.icon;
     const tooltipId = getRailTooltipId(item.id);
 
@@ -147,17 +203,21 @@ export function WorkbenchNav({
         <div className="rail-nav__brand" aria-hidden="true">
           NE
         </div>
-        {railAssetItems.length > 0 ? (
+        {railAssetItem ? (
           <div className="rail-nav__group" aria-label="资源入口">
-            {railAssetItems.map(renderPageRailButton)}
+            {renderPageRailButton(railAssetItem)}
           </div>
         ) : null}
-        <div className="rail-nav__group" aria-label="功能快捷入口">
-          {railFunctionItems.map(renderPageRailButton)}
-        </div>
-        <div className="rail-nav__group rail-nav__utility-group" aria-label="底部工具入口">
-          {renderUtilityRailButton(WORKBENCH_SETTINGS_ITEM)}
-        </div>
+        {railFunctionItems.length > 0 ? (
+          <div className="rail-nav__group" aria-label="功能快捷入口">
+            {railFunctionItems.map(renderPageRailButton)}
+          </div>
+        ) : null}
+        {railUtilityItems.length > 0 ? (
+          <div className="rail-nav__group rail-nav__utility-group" aria-label="底部工具入口">
+            {railUtilityItems.map(renderUtilityRailButton)}
+          </div>
+        ) : null}
       </aside>
       <div className="top-nav">
         <div className="top-nav__project">

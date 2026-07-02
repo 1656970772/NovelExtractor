@@ -269,8 +269,8 @@ p {
   border-radius: 6px;
   padding: 5px 8px;
   background: var(--app-color-surface);
-  box-shadow: var(--app-shadow-popover);
-  color: var(--app-color-text);
+  box-shadow: var(--app-shadow-panel);
+  color: var(--app-color-ink);
   font-size: 12px;
   font-weight: 600;
   line-height: 1;

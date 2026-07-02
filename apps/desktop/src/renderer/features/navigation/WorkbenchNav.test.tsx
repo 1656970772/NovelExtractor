@@ -110,8 +110,25 @@ describe("WorkbenchNav", () => {
     expect(screen.getByRole("tooltip", { name: "资源" })).toBeInTheDocument();
 
     await user.unhover(resourceButton);
-    resourceButton.focus();
+    await user.tab();
+    expect(resourceButton).toHaveFocus();
     expect(screen.getByRole("tooltip", { name: "资源" })).toBeInTheDocument();
+  });
+
+  it("shows the hovered rail tooltip over the focused rail tooltip", async () => {
+    const user = userEvent.setup();
+    render(<WorkbenchNav activePage="extraction" projectName="demo" onPageChange={vi.fn()} />);
+
+    const resourceButton = screen.getByRole("button", { name: "资源" });
+    const graphButton = screen.getByRole("button", { name: "关系图" });
+
+    await user.tab();
+    expect(resourceButton).toHaveFocus();
+    expect(screen.getByRole("tooltip", { name: "资源" })).toBeInTheDocument();
+
+    await user.hover(graphButton);
+
+    expect(screen.getByRole("tooltip", { name: "关系图" })).toBeInTheDocument();
   });
 
   it("requests page changes from rail items", async () => {
