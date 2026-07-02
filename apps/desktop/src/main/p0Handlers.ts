@@ -431,10 +431,11 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       return undefined;
     }
 
+    const hasEstimatedRemaining = timing.estimatedRemainingMs !== undefined;
     const estimateState: JobTimingDto["estimateState"] =
-      job.status === "paused" && timing.estimatedRemainingMs !== undefined
+      job.status === "paused" && hasEstimatedRemaining
         ? "frozen"
-        : timing.estimatedRemainingMs !== undefined
+        : hasEstimatedRemaining && (job.status === "running" || job.status === "completed")
           ? "available"
           : job.status === "running"
             ? "calculating"

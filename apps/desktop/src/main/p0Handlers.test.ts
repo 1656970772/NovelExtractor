@@ -698,6 +698,66 @@ describe("P0 desktop IPC handlers", () => {
     }
   });
 
+  it("reports unknown estimate state for failed jobs with stale remaining estimates", async () => {
+    const contract = createIpcContract();
+    const handlers = createHandlers();
+    const book = await contract.invoke(handlers, "books:uploadTxt", {
+      projectId: "project-a",
+      filePath: utf8FixturePath,
+      displayName: "凡人修仙传.txt"
+    });
+    const job = requireJobDto(
+      await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 3,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      })
+    );
+    const runtimePath = path.join(tempRoot, "projects", "project-a", "state", "project-runtime.json");
+    const rawRuntime = JSON.parse(await fs.readFile(runtimePath, "utf8")) as {
+      jobs: ProjectRuntimeJobRecord[];
+    };
+    rawRuntime.jobs = rawRuntime.jobs.map((storedJob) =>
+      storedJob.id === job.id
+        ? {
+            ...storedJob,
+            status: "failed",
+            progressText: "进度：1/2",
+            failureReason: "mock failure",
+            progress: {
+              completedWindowCount: 1,
+              totalWindowCount: 2
+            },
+            timing: {
+              startedAt: "2026-07-02T10:00:00.000Z",
+              completedAt: "2026-07-02T10:03:00.000Z",
+              estimatedRemainingMs: 420000
+            }
+          }
+        : storedJob
+    );
+    await fs.writeFile(runtimePath, `${JSON.stringify(rawRuntime, null, 2)}\n`, "utf8");
+
+    const restartedHandlers = createHandlers();
+    const runtime = await contract.invoke(restartedHandlers, "projectRuntime:get", {
+      projectId: "project-a"
+    });
+    const failedJob = runtime.jobs.find((runtimeJob) => runtimeJob.id === job.id);
+
+    expect(failedJob?.timing).toMatchObject({
+      startedAt: "2026-07-02T10:00:00.000Z",
+      completedAt: "2026-07-02T10:03:00.000Z",
+      estimatedRemainingMs: 420000,
+      estimateState: "unknown"
+    });
+    expect(failedJob?.timing?.estimateState).not.toBe("available");
+  });
+
   it("restarts paused jobs without skipping already extracted coverage", async () => {
     const mockServer = await startMockOpenAiServer({
       expectedApiKey: "sk-restart-persisted",
