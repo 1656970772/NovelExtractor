@@ -270,6 +270,13 @@ export function toJobPatchFromRuntimeState(
   }
 
   if (
+    (status === "running" || status === "completed") &&
+    state.totalWindowCount > 0 &&
+    state.completedWindowCount >= state.totalWindowCount
+  ) {
+    timing.estimatedRemainingMs = 0;
+    timing.estimateFrozenAt = undefined;
+  } else if (
     status === "running" &&
     timing.startedAt &&
     state.completedWindowCount > 0 &&

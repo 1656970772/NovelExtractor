@@ -397,6 +397,73 @@ describe("P0 desktop IPC handlers", () => {
     });
   });
 
+  it("resets the remaining time estimate when a runtime state completes all windows", () => {
+    const buildPatch = (p0HandlersModule as {
+      toJobPatchFromRuntimeState?: (
+        state: JobRuntimeState,
+        previousJob: ProjectRuntimeJobRecord,
+        clock: { now(): string }
+      ) => Partial<ProjectRuntimeJobRecord>;
+    }).toJobPatchFromRuntimeState;
+    if (!buildPatch) {
+      throw new Error("toJobPatchFromRuntimeState helper is not exported");
+    }
+    const previousJob = {
+      id: "job-1",
+      bookId: "book-1",
+      status: "running",
+      progressText: "进度：5/6",
+      tokenText: "Token 100 / 缓存命中率 75.00%",
+      createdAt: "2026-07-02T01:00:00.000Z",
+      updatedAt: "2026-07-02T01:06:00.000Z",
+      input: {
+        bookId: "book-1",
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 3,
+        extractionChapterCount: 18,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      },
+      timing: {
+        startedAt: "2026-07-02T01:00:00.000Z",
+        estimatedRemainingMs: 420000
+      }
+    } as ProjectRuntimeJobRecord;
+    const runtimeState: JobRuntimeState = {
+      jobId: "job-1",
+      status: "completed",
+      completedWindowCount: 6,
+      totalWindowCount: 6,
+      usage: {
+        inputTokens: 80,
+        outputTokens: 20,
+        totalTokens: 100,
+        cacheHitTokens: 60,
+        cacheMissTokens: 20
+      },
+      fee: null
+    };
+
+    const patch = buildPatch(runtimeState, previousJob, {
+      now: () => "2026-07-02T01:07:00.000Z"
+    });
+
+    expect(patch).toMatchObject({
+      status: "completed",
+      progress: {
+        completedWindowCount: 6,
+        totalWindowCount: 6
+      },
+      timing: {
+        startedAt: "2026-07-02T01:00:00.000Z",
+        completedAt: "2026-07-02T01:07:00.000Z",
+        estimatedRemainingMs: 0
+      }
+    });
+  });
+
   it("rejects jobs whose selected templates share the same output file name", async () => {
     const contract = createIpcContract();
     const handlers = createHandlers();
