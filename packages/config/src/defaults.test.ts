@@ -150,6 +150,8 @@ describe("default config", () => {
           "读取工具参数无效；请检查 path/pattern 是否为字符串，并缩小读取或搜索范围。",
         edit_target_not_found:
           "目标报告不存在；如果需要创建报告，请改用 write_file 写入完整且合规的报告正文。",
+        tool_not_enabled:
+          "只能调用当前请求 tools 清单中列出的工具；如果需要执行 shell 命令，请调用 bash 并把命令放在 command 字段中。",
         tool_invalid_arguments:
           "工具参数无效；请根据错误消息修正参数后重试，必要时先读取文件确认当前状态。"
       },

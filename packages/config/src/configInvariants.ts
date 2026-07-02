@@ -69,6 +69,7 @@ const REQUIRED_RECOVERABLE_TOOL_ERROR_HINT_KEYS = [
   "tool_schema_invalid_arguments",
   "read_tool_invalid_arguments",
   "edit_target_not_found",
+  "tool_not_enabled",
   "tool_invalid_arguments"
 ] as const;
 const WINDOWS_DRIVE_PATH_PREFIX = /^[A-Za-z]:/;

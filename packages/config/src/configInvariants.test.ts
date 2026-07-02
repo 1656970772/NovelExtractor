@@ -14,6 +14,7 @@ interface ToolRecoverableErrorHintsTestShape {
   tool_schema_invalid_arguments: string;
   read_tool_invalid_arguments: string;
   edit_target_not_found: string;
+  tool_not_enabled: string;
   tool_invalid_arguments: string;
 }
 
@@ -61,6 +62,7 @@ function withToolLoopDefaults(
       tool_schema_invalid_arguments: "工具参数结构不符合 schema。",
       read_tool_invalid_arguments: "读取工具参数无效。",
       edit_target_not_found: "目标报告不存在。",
+      tool_not_enabled: "只能调用工具清单中列出的工具。",
       tool_invalid_arguments: "工具参数无效。"
     },
     systemInstruction: "必须通过文件工具写入或返回 NO_UPDATE。",

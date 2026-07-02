@@ -2526,6 +2526,109 @@ describe("P0 desktop IPC handlers", () => {
     }
   });
 
+  it("returns unknown tool name errors to the model so it can retry with enabled tools", async () => {
+    const recoveredReport = "# 丹药分析\n\n未知工具名被回放后，模型改用已启用写工具完成。";
+    let unknownToolReplayBody = "";
+    const mockServer = await startMockOpenAiServer({
+      respond: ({ body, requestIndex }) => {
+        if (requestIndex === 0) {
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-pwd", "pwd", {
+                  command: "pwd"
+                })
+              ]
+            })
+          };
+        }
+
+        if (requestIndex === 1) {
+          unknownToolReplayBody = JSON.stringify(body);
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-write-after-unknown-tool", "write_file", {
+                  path: "丹药分析.md",
+                  content: recoveredReport
+                })
+              ]
+            })
+          };
+        }
+
+        return {
+          body: createChatCompletionResponse({ content: "窗口完成。" })
+        };
+      }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: mockServer.baseUrl
+        })
+      )
+    });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: utf8FixturePath,
+        displayName: "凡人修仙传.txt"
+      });
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 2,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      });
+
+      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
+
+      expect(mockServer.requests).toHaveLength(3);
+      expect(unknownToolReplayBody).toContain("UNKNOWN_TOOL");
+      expect(unknownToolReplayBody).toContain("tool_not_enabled");
+      expect(unknownToolReplayBody).toContain("pwd");
+      expect(completedJob).toMatchObject({
+        id: job.id,
+        status: "completed",
+        progressText: "进度：1/1"
+      });
+      expect(completedJob?.failureReason).toBeUndefined();
+      expect(reports).toHaveLength(1);
+      expect(reports[0]).toMatchObject({
+        fileName: "丹药分析.md",
+        displayName: "丹药分析",
+        reportKind: "template-output"
+      });
+      const reportMarkdown = await fs.readFile(
+        path.join(
+          tempRoot,
+          "projects",
+          "project-a",
+          "assets",
+          "books",
+          book.bookId,
+          "reports",
+          "丹药分析.md"
+        ),
+        "utf8"
+      );
+      expect(reportMarkdown).toBe(recoveredReport);
+    } finally {
+      await mockServer.close();
+    }
+  });
+
   it("returns recoverable errors when read tools target the run root without leaking run logs", async () => {
     const leakPattern = "TRACE_LEAK_MARKER";
     const leakPayload = "SHOULD_NOT_REACH_MODEL";

@@ -19,6 +19,7 @@ export type RecoverableToolErrorReason =
   | "tool_schema_invalid_arguments"
   | "read_tool_invalid_arguments"
   | "edit_target_not_found"
+  | "tool_not_enabled"
   | "tool_invalid_arguments";
 
 export type ToolErrorReason =
@@ -139,11 +140,7 @@ export function classifyToolExecutionError(input: {
   }
 
   if (error.code === "UNKNOWN_TOOL") {
-    return {
-      category: "system_failure",
-      recoverableByModel: false,
-      reason: "unknown_tool"
-    };
+    return recoverable("tool_not_enabled", hints);
   }
 
   if (error.code === "INVALID_ARGUMENTS") {

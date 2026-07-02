@@ -1478,6 +1478,22 @@ function guardRepeatedRecoverableToolError(input: {
   }
 }
 
+function createToolNotEnabledRecoverableResult(input: {
+  secrets: readonly string[];
+  toolCall: ChatCompletionRequestToolCall;
+}): Record<string, unknown> | undefined {
+  if (ENABLED_TOOL_NAME_SET.has(input.toolCall.name)) {
+    return undefined;
+  }
+
+  return {
+    error: {
+      code: "UNKNOWN_TOOL",
+      message: redactSecrets(`Tool is not enabled: ${input.toolCall.name}`, input.secrets)
+    }
+  };
+}
+
 async function createExistingReportWriteRecoverableResult(input: {
   queriedReportFileNames: ReadonlySet<string>;
   reportsRoot: string;
@@ -1959,19 +1975,26 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             实际执行输入: toolCall.executionArguments
           });
 
-          await validateToolCallBeforeExecution({
-            allowedOutputFileNames,
-            artifacts: input.artifacts,
-            queriedReportFileNames,
-            reportsRoot,
+          const toolNotEnabledRecoverableToolResult = createToolNotEnabledRecoverableResult({
             secrets,
-            toolCall,
-            writtenReportFileNames
+            toolCall
           });
+          if (!toolNotEnabledRecoverableToolResult) {
+            await validateToolCallBeforeExecution({
+              allowedOutputFileNames,
+              artifacts: input.artifacts,
+              queriedReportFileNames,
+              reportsRoot,
+              secrets,
+              toolCall,
+              writtenReportFileNames
+            });
+          }
 
           let toolResult: unknown;
           let returnedRecoverableToolError = false;
           const preExecutionRecoverableToolResult =
+            toolNotEnabledRecoverableToolResult ??
             createInternalReportContentMetadataRecoverableResult({
               secrets,
               toolCall

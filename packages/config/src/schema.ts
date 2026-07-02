@@ -106,6 +106,7 @@ export interface ToolRecoverableErrorHints {
   tool_schema_invalid_arguments: string;
   read_tool_invalid_arguments: string;
   edit_target_not_found: string;
+  tool_not_enabled: string;
   tool_invalid_arguments: string;
 }
 

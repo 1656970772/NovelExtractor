@@ -17,6 +17,7 @@ const RECOVERABLE_HINTS = {
   tool_schema_invalid_arguments: "工具参数结构不符合 schema。",
   read_tool_invalid_arguments: "读取工具参数无效。",
   edit_target_not_found: "目标报告不存在。",
+  tool_not_enabled: "只能调用工具清单中列出的工具。",
   tool_invalid_arguments: "工具参数无效。"
 };
 
@@ -90,6 +91,17 @@ describe("tool error classification", () => {
     expect(classify("bash", error)).toMatchObject({
       category: "recoverable_by_model",
       reason: "bash_runtime_failure"
+    });
+  });
+
+  it("classifies model calls to unknown tool names as recoverable by the model", () => {
+    const error = new ToolExecutionError("Tool is not enabled: pwd", "UNKNOWN_TOOL");
+
+    expect(classify("pwd", error)).toEqual({
+      category: "recoverable_by_model",
+      recoverableByModel: true,
+      hint: RECOVERABLE_HINTS.tool_not_enabled,
+      reason: "tool_not_enabled"
     });
   });
 
