@@ -635,15 +635,18 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
 
   if (!project) {
     return (
-      <main className="project-gate-shell" data-testid="desktop-shell">
-        <ProjectGate
-          errorMessage={projectError}
-          projects={projects}
-          state={projectState}
-          onCreateProject={createProject}
-          onSelectProject={setProject}
-        />
-      </main>
+      <div className="project-gate-shell" data-testid="desktop-shell">
+        <WindowTitleBar />
+        <main className="project-gate-main">
+          <ProjectGate
+            errorMessage={projectError}
+            projects={projects}
+            state={projectState}
+            onCreateProject={createProject}
+            onSelectProject={setProject}
+          />
+        </main>
+      </div>
     );
   }
 

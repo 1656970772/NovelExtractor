@@ -201,6 +201,20 @@ describe("desktop workbench shell", () => {
     expect(api.closeWindow).toHaveBeenCalledTimes(1);
   });
 
+  it("routes project gate title bar buttons through desktop window controls", async () => {
+    const user = userEvent.setup();
+    const api = installDesktopApiMock();
+    render(<App initialState={{ project: null }} />);
+
+    await user.click(screen.getByRole("button", { name: "最小化窗口" }));
+    await user.click(screen.getByRole("button", { name: "最大化或还原窗口" }));
+    await user.click(screen.getByRole("button", { name: "关闭窗口" }));
+
+    expect(api.minimizeWindow).toHaveBeenCalledTimes(1);
+    expect(api.toggleMaximizeWindow).toHaveBeenCalledTimes(1);
+    expect(api.closeWindow).toHaveBeenCalledTimes(1);
+  });
+
   it("opens the same provider config dialog from user entry and empty extraction models", async () => {
     const user = userEvent.setup();
     installDesktopApiMock();
