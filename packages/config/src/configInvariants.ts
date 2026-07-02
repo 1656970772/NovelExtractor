@@ -202,6 +202,16 @@ function assertToolLoopDefaults(config: NovelExtractorConfig): void {
   });
   assertNonEmpty(defaults.systemInstruction, "tool loop system instruction");
   assertNonEmptyStringArray(defaults.windowInstructionLines, "tool loop window instruction lines");
+
+  if (typeof defaults.maxRepeatedRecoverableToolErrors !== "number") {
+    throw new ConfigInvariantError(
+      "tool loop max repeated recoverable tool errors must be a positive integer."
+    );
+  }
+  assertPositiveInteger(
+    defaults.maxRepeatedRecoverableToolErrors,
+    "tool loop max repeated recoverable tool errors"
+  );
 }
 
 function assertTemplatePromptProfileDefaults(config: NovelExtractorConfig): void {

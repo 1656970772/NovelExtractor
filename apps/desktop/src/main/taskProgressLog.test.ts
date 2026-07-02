@@ -228,4 +228,39 @@ describe("task progress log summarizer", () => {
       })
     ).toBe("04:50:02 其他/细节：已记录");
   });
+
+  it("summarizes recoverable tool errors with classification without leaking full tool output", () => {
+    expect(
+      summarizeTaskLogEntry({
+        timestamp: "2026-07-02 06:42:46",
+        tags: ["工具返回", "edit_file"],
+        value: {
+          实际执行输入: { path: "事件因果链（长程因果图）.md" },
+          是否可恢复错误: true,
+          返回内容: {
+            classification: "recoverable_by_model",
+            reason: "replacement_text_not_unique",
+            error: {
+              code: "INVALID_ARGUMENTS",
+              message: "old_string is not unique in report.md (5 matches); add more surrounding context"
+            },
+            hint: "old_string 在文件中匹配到多处；请用 read_file/grep 找到目标段落并加入足够上下文。"
+          }
+        }
+      })
+    ).toBe("06:42:46 更新返回可恢复错误：事件因果链（长程因果图）.md，模型将重试");
+  });
+
+  it("summarizes repeated tool failure as a window failure reason", () => {
+    expect(
+      summarizeTaskLogEntry({
+        timestamp: "2026-07-02 06:43:00",
+        tags: ["错误", "窗口"],
+        value: {
+          窗口: "7/10",
+          原因: "同一工具错误重复 3 次：old_string is not unique in report.md"
+        }
+      })
+    ).toBe("06:43:00 窗口失败：窗口 7/10，原因 同一工具错误重复 3 次：old_string is not unique in report.md");
+  });
 });

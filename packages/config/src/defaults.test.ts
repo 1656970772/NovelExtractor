@@ -128,6 +128,7 @@ describe("default config", () => {
         "write_file",
         "mark_no_update"
       ],
+      maxRepeatedRecoverableToolErrors: 3,
       systemInstruction: expect.stringContaining("文件工具"),
       windowInstructionLines: expect.arrayContaining([
         expect.stringContaining("NO_UPDATE"),

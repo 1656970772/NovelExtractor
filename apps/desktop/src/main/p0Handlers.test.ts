@@ -5596,29 +5596,36 @@ describe("P0 desktop IPC handlers", () => {
     }
   });
 
-  it("continues read-only retries beyond the former tool-loop round limit until an explicit no-update outcome", async () => {
-    const formerRoundLimit = 12;
+  it("stops after the same recoverable tool error repeats three times in one window", async () => {
+    let uploadedBookId = "";
+    const initialReport = "# 丹药分析\n\n## 一\n\n重复锚点。\n\n## 二\n\n重复锚点。";
     const mockServer = await startMockOpenAiServer({
       respond: ({ requestIndex }) => {
-        if (requestIndex < formerRoundLimit) {
+        if (requestIndex === 0) {
           return {
             body: createChatCompletionResponse({
               toolCalls: [
-                createToolCall(`call-read-missing-${requestIndex}`, "read_file", {
-                  path: "丹药分析.md"
+                createToolCall("call-window-1-write", "write_file", {
+                  path: "丹药分析.md",
+                  content: initialReport
                 })
               ]
             })
           };
         }
 
-        if (requestIndex === formerRoundLimit) {
+        if (requestIndex === 1) {
+          return {
+            body: createChatCompletionResponse({ content: "第一窗口写入完成。" })
+          };
+        }
+
+        if (requestIndex === 2) {
           return {
             body: createChatCompletionResponse({
               toolCalls: [
-                createToolCall("call-no-update-after-read-retries", "mark_no_update", {
-                  path: "丹药分析.md",
-                  reason: "连续查询后确认当前窗口没有可写入新增信息。"
+                createToolCall("call-window-2-read-existing", "read_file", {
+                  path: `assets/books/${uploadedBookId}/reports/丹药分析.md`
                 })
               ]
             })
@@ -5626,7 +5633,72 @@ describe("P0 desktop IPC handlers", () => {
         }
 
         return {
-          body: createChatCompletionResponse({ content: "连续查询后确认无新增。" })
+          body: createChatCompletionResponse({
+            toolCalls: [
+              createToolCall(`call-window-2-ambiguous-edit-${requestIndex}`, "edit_file", {
+                path: "丹药分析.md",
+                old_string: "重复锚点。",
+                new_string: "重复锚点。\n\n重复错误。"
+              })
+            ]
+          })
+        };
+      }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: mockServer.baseUrl
+        })
+      )
+    });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: utf8FixturePath,
+        displayName: "凡人修仙传.txt"
+      });
+      uploadedBookId = book.bookId;
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 3,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      });
+
+      const failedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+
+      expect(mockServer.requests).toHaveLength(6);
+      expect(requireJobDto(failedJob)).toMatchObject({
+        id: job.id,
+        status: "failed"
+      });
+      expect(requireJobDto(failedJob).failureReason).toContain("同一工具错误重复 3 次");
+    } finally {
+      await mockServer.close();
+    }
+  });
+
+  it("stops after repeated read-only tool errors hit the recoverable error limit", async () => {
+    const mockServer = await startMockOpenAiServer({
+      respond: ({ requestIndex }) => {
+        return {
+          body: createChatCompletionResponse({
+            toolCalls: [
+              createToolCall(`call-read-missing-${requestIndex}`, "read_file", {
+                path: "丹药分析.md"
+              })
+            ]
+          })
         };
       }
     });
@@ -5659,17 +5731,14 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
-      const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
+      const failedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
 
-      expect(mockServer.requests).toHaveLength(formerRoundLimit + 2);
-      expect(completedJob).toMatchObject({
+      expect(mockServer.requests).toHaveLength(3);
+      expect(requireJobDto(failedJob)).toMatchObject({
         id: job.id,
-        status: "completed",
-        progressText: "进度：1/1"
+        status: "failed"
       });
-      expect(requireJobDto(completedJob).failureReason).toBeUndefined();
-      expect(reports).toEqual([]);
+      expect(requireJobDto(failedJob).failureReason).toContain("同一工具错误重复 3 次");
     } finally {
       await mockServer.close();
     }

@@ -170,6 +170,7 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
       "write_file",
       "mark_no_update"
     ],
+    maxRepeatedRecoverableToolErrors: 3,
     systemInstruction:
       "你是小说资料抽取助手。必须通过文件工具写入或更新正式模板 Markdown；如果本窗口没有任何可写入的新信息，最终文本必须严格返回 NO_UPDATE。最终文本只简短说明本窗口处理结果，不要放完整报告正文。",
     windowInstructionLines: [

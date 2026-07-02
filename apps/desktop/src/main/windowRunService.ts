@@ -46,6 +46,18 @@ import type { MainProviderStore } from "./providerStore";
 import { loadReportCoverageIndex, type ReportCoverageTarget } from "./reportCoverageIndex";
 import { planTemplateBatches } from "./templateBatchPlanner";
 import type { TaskTextLogger } from "./taskTextLogger";
+import {
+  BASH_TOOL_SCOPE_DENIED_HINT,
+  BASH_TOOL_SCOPE_DENIED_MESSAGE,
+  classifyToolExecutionError,
+  EDIT_TARGET_NOT_FOUND_HINT,
+  fingerprintRecoverableToolError,
+  READ_TOOL_SCOPE_DENIED_HINT,
+  READ_TOOL_SCOPE_DENIED_MESSAGE,
+  REPLACEMENT_TEXT_NOT_FOUND_HINT,
+  REPLACEMENT_TEXT_NOT_UNIQUE_HINT,
+  type ToolErrorClassification
+} from "./toolErrorClassification";
 
 interface WindowRunJobInput {
   id: string;
@@ -128,18 +140,6 @@ const WRITE_FILE_EXISTING_REPORT_MESSAGE =
   "已有报告不能用 write_file 覆盖；需先 read_file/grep 查询已有内容，再使用 edit_file/multi_edit 追加或修改。";
 const WRITE_FILE_LOSSY_REWRITE_MESSAGE =
   "不能覆盖丢失既有内容，需要使用 edit_file/multi_edit 或包含完整旧内容。";
-const REPLACEMENT_TEXT_NOT_FOUND_HINT =
-  "old_string 必须精确匹配文件中的原文；可先用 grep/read_file 找到准确片段；若已 read_file 且需要整体更新，可用 write_file 提交完整保留旧内容的新版报告。";
-const REPLACEMENT_TEXT_NOT_UNIQUE_HINT =
-  "old_string 在文件中匹配到多处；请用 read_file/grep 找到目标段落并加入足够上下文，或用 write_file 提交完整保留旧内容的新版报告。";
-const EDIT_TARGET_NOT_FOUND_HINT =
-  "目标报告不存在；如果需要创建报告，请改用 write_file 写入完整且合规的报告正文。";
-const READ_TOOL_SCOPE_DENIED_MESSAGE = "读工具路径不在当前窗口允许范围内。";
-const READ_TOOL_SCOPE_DENIED_HINT =
-  "只能读取、搜索、列出或匹配当前窗口文本、当前书籍 reports 目录或本批选中输出报告；请改用窗口文件路径、reports 或选中报告文件名。";
-const BASH_TOOL_SCOPE_DENIED_MESSAGE = "bash 命令路径不在当前窗口允许范围内。";
-const BASH_TOOL_SCOPE_DENIED_HINT =
-  "桌面端 bash 只能在当前书籍 reports 目录内执行；不要读取 source、runs、rules、项目根路径、绝对路径或通过 .. 跳出 reports。";
 const REPORT_CONTENT_INTERNAL_METADATA_MESSAGE = "报告正文不得包含内部运行路径或流程性元数据。";
 const REPORT_CONTENT_INTERNAL_METADATA_HINT =
   "请把资料来源、参考范围等公开元数据改写为窗口编号/章节范围、章节名或原文范围；不要写 runs/job、assets/books、本机绝对路径、AppData 项目路径或后续窗口等流程性措辞。";
@@ -163,12 +163,6 @@ const REPORT_CONTENT_INTERNAL_METADATA_PATTERNS: ReadonlyArray<{
 ];
 const REPORT_CONTENT_WINDOW_FILE_IDENTIFIER_PATTERN = /\bwindow-\d{4}\b/iu;
 const REPORT_CONTENT_DRAFT_OR_TEMPLATE_STATUS_PATTERN = /状态：\s*(?:草案|模板)/u;
-const GREP_BUDGET_ERROR_MESSAGES = new Set([
-  FILE_LARGER_THAN_MAX_READ_BYTES_MESSAGE,
-  "grep file budget exceeded",
-  "grep total byte budget exceeded",
-  "grep match budget exceeded"
-]);
 
 interface BashSandbox {
   env: NodeJS.ProcessEnv;
@@ -1373,108 +1367,26 @@ function recordSuccessfulReportWrite(input: {
   }
 }
 
-function shouldReturnRecoverableToolError(name: string, error: unknown): error is ToolExecutionError {
-  if (!(error instanceof ToolExecutionError)) {
-    return false;
-  }
-
-  if (
-    isDesktopReadScopeTool(name) &&
-    (error.code === "NOT_FOUND" || error.code === "UNSAFE_PATH")
-  ) {
-    return true;
-  }
-
-  if (name === "bash" && error.code === "UNSAFE_PATH") {
-    return true;
-  }
-
-  if (isReportWriteTool(name) && error.code === "UNSAFE_PATH") {
-    return true;
-  }
-
-  if (
-    name === "bash" &&
-    error.code === "IO_ERROR" &&
-    (error.output !== undefined || error.message.startsWith("command exited") || error.message.startsWith("command timed out"))
-  ) {
-    return true;
-  }
-
-  if (isRecoverableToolSchemaInvalidArguments(error)) {
-    return true;
-  }
-
-  if (isRecoverableReadToolInvalidArguments(name, error)) {
-    return true;
-  }
-
-  return (
-    (name === "edit_file" || name === "multi_edit") &&
-    (isReplacementTextNotFoundMessage(error.message) || isReplacementTextNotUniqueMessage(error.message) || error.code === "NOT_FOUND")
-  );
-}
-
-function isRecoverableToolSchemaInvalidArguments(error: ToolExecutionError): boolean {
-  if (error.code !== "INVALID_ARGUMENTS") {
-    return false;
-  }
-
-  return (
-    error.message.startsWith("invalid args:") ||
-    error.message === "path is required" ||
-    error.message === "old_string is required" ||
-    error.message === "edits must not be empty" ||
-    error.message === TOOL_ARGUMENTS_MUST_BE_OBJECT_MESSAGE ||
-    TOOL_SCHEMA_STRING_ARGUMENT_ERROR_MESSAGES.has(error.message) ||
-    error.message.startsWith(UNEXPECTED_TOOL_ARGUMENT_MESSAGE_PREFIX)
-  );
-}
-
-function isReplacementTextNotFoundMessage(message: string): boolean {
-  return message.includes(REPLACEMENT_TEXT_NOT_FOUND_MESSAGE) || /^edit \d+: old_string not found/u.test(message);
-}
-
-function isReplacementTextNotUniqueMessage(message: string): boolean {
-  return message.includes(REPLACEMENT_TEXT_NOT_UNIQUE_MESSAGE) || /^edit \d+: old_string is not unique/u.test(message);
-}
-
-function isRecoverableReadToolInvalidArguments(name: string, error: ToolExecutionError): boolean {
-  if (error.code !== "INVALID_ARGUMENTS") {
-    return false;
-  }
-
-  if (name === "read_file") {
-    return true;
-  }
-
-  return name === "grep" && GREP_BUDGET_ERROR_MESSAGES.has(error.message);
+function classifyToolErrorForRuntime(name: string, error: unknown): ToolErrorClassification {
+  return classifyToolExecutionError({ toolName: name, error });
 }
 
 function toRecoverableToolErrorResult(input: {
+  classification: ToolErrorClassification;
   executionArguments: unknown;
   error: ToolExecutionError;
   secrets: readonly string[];
 }): Record<string, unknown> {
   const pathArgument = getToolPathArgument(input.executionArguments);
-  const hint =
-    isReplacementTextNotFoundMessage(input.error.message)
-      ? REPLACEMENT_TEXT_NOT_FOUND_HINT
-      : isReplacementTextNotUniqueMessage(input.error.message)
-        ? REPLACEMENT_TEXT_NOT_UNIQUE_HINT
-      : input.error.code === "NOT_FOUND"
-        ? EDIT_TARGET_NOT_FOUND_HINT
-      : input.error.message === READ_TOOL_SCOPE_DENIED_MESSAGE
-        ? READ_TOOL_SCOPE_DENIED_HINT
-      : input.error.message === BASH_TOOL_SCOPE_DENIED_MESSAGE
-        ? BASH_TOOL_SCOPE_DENIED_HINT
-        : undefined;
+  const hint = input.classification.hint;
 
   return {
     error: {
       code: input.error.code,
       message: redactSecrets(input.error.message, input.secrets)
     },
+    classification: input.classification.category,
+    reason: input.classification.reason,
     ...(input.error.output !== undefined ? { output: redactSecrets(input.error.output, input.secrets) } : {}),
     ...(hint ? { hint: redactSecrets(hint, input.secrets) } : {}),
     ...(pathArgument ? { path: redactSecrets(pathArgument, input.secrets) } : {})
@@ -1759,6 +1671,8 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
     let usage = { ...EMPTY_USAGE };
     let currentRoundIndex: number | undefined;
     let caughtWindowError: unknown;
+    const recoverableToolErrorCounts = new Map<string, number>();
+    const maxRepeatedRecoverableToolErrors = TOOL_LOOP_DEFAULTS.maxRepeatedRecoverableToolErrors;
 
     const persistBashSandboxReportChanges = async (): Promise<Record<string, unknown> | undefined> => {
       const syncResult = await syncBashSandboxReportsToReal({
@@ -1785,7 +1699,9 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         return undefined;
       }
 
+      const classification = classifyToolErrorForRuntime("bash", syncResult.recoverableError);
       return toRecoverableToolErrorResult({
+        classification,
         executionArguments: {},
         error: syncResult.recoverableError,
         secrets
@@ -2024,12 +1940,26 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
                 }
               }
             } catch (error) {
-              if (!shouldReturnRecoverableToolError(toolCall.name, error)) {
+              const classification = classifyToolErrorForRuntime(toolCall.name, error);
+              if (!classification.recoverableByModel || !(error instanceof ToolExecutionError)) {
                 throw error;
+              }
+
+              const pathArgument = getToolPathArgument(toolCall.executionArguments);
+              const fingerprint = fingerprintRecoverableToolError({
+                toolName: toolCall.name,
+                error,
+                path: pathArgument
+              });
+              const nextCount = (recoverableToolErrorCounts.get(fingerprint) ?? 0) + 1;
+              recoverableToolErrorCounts.set(fingerprint, nextCount);
+              if (nextCount >= maxRepeatedRecoverableToolErrors) {
+                throw new Error(`同一工具错误重复 ${maxRepeatedRecoverableToolErrors} 次：${redactSecrets(error.message, secrets)}`);
               }
 
               returnedRecoverableToolError = true;
               const recoverableToolResult = toRecoverableToolErrorResult({
+                classification,
                 executionArguments: toolCall.executionArguments,
                 error,
                 secrets

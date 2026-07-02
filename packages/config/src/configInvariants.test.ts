@@ -339,5 +339,19 @@ describe("config invariants", () => {
       withToolLoopDefaults({ windowInstructionLines: [" "] }),
       /tool loop window instruction lines/i
     );
+
+    const missingRepeatLimit = getDefaultConfig();
+    delete (
+      missingRepeatLimit.toolLoopDefaults as unknown as Record<string, unknown>
+    ).maxRepeatedRecoverableToolErrors;
+    expectInvariantViolation(missingRepeatLimit, /recoverable tool errors/i);
+
+    const zeroRepeatLimit = getDefaultConfig();
+    zeroRepeatLimit.toolLoopDefaults.maxRepeatedRecoverableToolErrors = 0;
+    expectInvariantViolation(zeroRepeatLimit, /recoverable tool errors/i);
+
+    const fractionalRepeatLimit = getDefaultConfig();
+    fractionalRepeatLimit.toolLoopDefaults.maxRepeatedRecoverableToolErrors = 1.5;
+    expectInvariantViolation(fractionalRepeatLimit, /recoverable tool errors/i);
   });
 });

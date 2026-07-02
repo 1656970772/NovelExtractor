@@ -89,6 +89,7 @@ export type ToolLoopToolName =
 
 export interface ToolLoopDefaults {
   enabledToolNames: ToolLoopToolName[];
+  maxRepeatedRecoverableToolErrors: number;
   systemInstruction: string;
   windowInstructionLines: string[];
 }
