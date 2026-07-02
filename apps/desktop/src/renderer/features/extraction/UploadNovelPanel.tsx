@@ -98,7 +98,13 @@ export function UploadNovelPanel({
         role="button"
         tabIndex={0}
       >
-        <span>拖拽 .txt 或 .md 小说文件到这里</span>
+        <span className="novel-upload__icon" aria-hidden="true">
+          TXT
+        </span>
+        <span className="novel-upload__copy">
+          <strong>拖拽小说原文</strong>
+          <span>支持 .txt / .md，单次上传一本</span>
+        </span>
         <label className="button button--secondary button--compact template-modal__upload-picker">
           <span>选择小说文件</span>
           <input

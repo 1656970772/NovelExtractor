@@ -50,6 +50,82 @@ const projectTemplateForTest: TemplateDto = {
 };
 
 describe("ExtractionPage", () => {
+  it("omits legacy daily summary cards from the extraction page", () => {
+    const { container } = render(
+      <ExtractionPage
+        models={[modelForTest]}
+        books={[]}
+        jobs={[
+          { id: "job-running", status: "running", progressText: "运行中" },
+          { id: "job-completed", status: "completed", progressText: "已完成" },
+          { id: "job-failed", status: "failed", progressText: "失败" }
+        ]}
+        state="ready"
+      />
+    );
+
+    const summaryCards = Array.from(container.querySelectorAll(".summary-card"));
+
+    expect(screen.queryByText("今日任务")).not.toBeInTheDocument();
+    expect(summaryCards).toHaveLength(0);
+    expect(
+      summaryCards.some((card) =>
+        ["进行中", "已完成", "失败"].some((label) => card.textContent?.includes(label))
+      )
+    ).toBe(false);
+  });
+
+  it("renders novel upload before template upload and keeps their regions distinct", () => {
+    const { container } = render(
+      <ExtractionPage
+        projectId="project-a"
+        models={[modelForTest]}
+        books={[]}
+        jobs={[]}
+        state="ready"
+        onSaveTemplate={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+
+    const novelUploadPanel = screen.getByRole("region", { name: "上传小说" });
+    const templateUploadPanel = screen.getByRole("region", { name: "上传模板" });
+    const dropZone = within(novelUploadPanel).getByRole("button", { name: "拖拽上传小说原文" });
+
+    expect(dropZone).toHaveClass("novel-upload__zone");
+    expect(container.querySelector(".extraction-layout")).toBeInTheDocument();
+    expect(novelUploadPanel.compareDocumentPosition(templateUploadPanel) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
+  });
+
+  it("groups extraction parameters without disabling key inputs", () => {
+    render(
+      <ExtractionPage
+        models={[modelForTest]}
+        books={[uploadedBookForTest]}
+        jobs={[]}
+        state="ready"
+        templates={[globalTemplateForTest, projectTemplateForTest]}
+        selectedTemplateIds={[globalTemplateForTest.id]}
+        onOpenTemplateManager={vi.fn()}
+      />
+    );
+
+    const parametersPanel = screen.getByRole("region", { name: "提取参数" });
+    const ruleGroup = within(parametersPanel).getByRole("group", { name: "提取规则" });
+    const chapterGroup = within(parametersPanel).getByRole("group", { name: "章节识别" });
+    const duplicateFilterGroup = within(parametersPanel).getByRole("group", { name: "重复章节过滤" });
+    const modelGroup = within(parametersPanel).getByRole("group", { name: "模型设置" });
+
+    expect(within(ruleGroup).getByLabelText("书籍")).toBeEnabled();
+    expect(within(ruleGroup).getByRole("button", { name: /选择模板/ })).toBeEnabled();
+    expect(within(chapterGroup).getByRole("spinbutton", { name: "单次运行章节数" })).toBeEnabled();
+    expect(within(chapterGroup).getByRole("spinbutton", { name: "提取章节窗口" })).toBeEnabled();
+    expect(within(chapterGroup).getByRole("spinbutton", { name: "重叠章节数" })).toBeEnabled();
+    expect(within(duplicateFilterGroup).getByRole("checkbox", { name: "跳过已提取章节" })).toBeEnabled();
+    expect(within(modelGroup).getByLabelText("模型")).toBeEnabled();
+  });
+
   it("accepts txt and markdown uploads and shows uploaded book metadata", async () => {
     const user = userEvent.setup();
     const onUploadTxt = vi.fn().mockResolvedValue(undefined);
