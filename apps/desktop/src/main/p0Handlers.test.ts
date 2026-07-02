@@ -5677,12 +5677,12 @@ describe("P0 desktop IPC handlers", () => {
 
       const failedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
 
-      expect(mockServer.requests).toHaveLength(6);
+      expect(mockServer.requests).toHaveLength(7);
       expect(requireJobDto(failedJob)).toMatchObject({
         id: job.id,
         status: "failed"
       });
-      expect(requireJobDto(failedJob).failureReason).toContain("同一工具错误重复 3 次");
+      expect(requireJobDto(failedJob).failureReason).toContain("同一工具错误重复超过 3 次");
     } finally {
       await mockServer.close();
     }
@@ -5733,12 +5733,208 @@ describe("P0 desktop IPC handlers", () => {
 
       const failedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
 
-      expect(mockServer.requests).toHaveLength(3);
+      expect(mockServer.requests).toHaveLength(4);
       expect(requireJobDto(failedJob)).toMatchObject({
         id: job.id,
         status: "failed"
       });
-      expect(requireJobDto(failedJob).failureReason).toContain("同一工具错误重复 3 次");
+      expect(requireJobDto(failedJob).failureReason).toContain("同一工具错误重复超过 3 次");
+    } finally {
+      await mockServer.close();
+    }
+  });
+
+  it("stops after the same pre-execution recoverable tool error repeats three times in one window", async () => {
+    const dirtyReport = [
+      "# 事件因果链（长程因果图）",
+      "",
+      "> 状态：草案",
+      "",
+      "窗口一内容。"
+    ].join("\n");
+    const recoveredReport = [
+      "# 事件因果链（长程因果图）",
+      "",
+      "> 状态：原文已复核",
+      "",
+      "窗口一内容。"
+    ].join("\n");
+    const mockServer = await startMockOpenAiServer({
+      respond: ({ requestIndex }) => {
+        if (requestIndex <= 3) {
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall(`call-write-draft-status-${requestIndex}`, "write_file", {
+                  path: "事件因果链（长程因果图）.md",
+                  content: dirtyReport
+                })
+              ]
+            })
+          };
+        }
+
+        if (requestIndex === 4) {
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-write-reviewed-status", "write_file", {
+                  path: "事件因果链（长程因果图）.md",
+                  content: recoveredReport
+                })
+              ]
+            })
+          };
+        }
+
+        return {
+          body: createChatCompletionResponse({ content: "窗口完成。" })
+        };
+      }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: mockServer.baseUrl
+        })
+      )
+    });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: utf8FixturePath,
+        displayName: "凡人修仙传.txt"
+      });
+      const template = await contract.invoke(handlers, "templates:save", {
+        projectId: "project-a",
+        scope: "project",
+        name: "事件因果链模板",
+        fileName: "事件因果链（长程因果图）.md",
+        body: "记录当前窗口原文明确支持的因果链。"
+      });
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: [template.id],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 2,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      });
+
+      const failedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+
+      expect(mockServer.requests).toHaveLength(4);
+      expect(requireJobDto(failedJob)).toMatchObject({
+        id: job.id,
+        status: "failed"
+      });
+      expect(requireJobDto(failedJob).failureReason).toContain("同一工具错误重复超过 3 次");
+    } finally {
+      await mockServer.close();
+    }
+  });
+
+  it("keeps distinct unsafe glob patterns recoverable without sharing the repeated-error fingerprint", async () => {
+    const recoveredReport = "# 丹药分析\n\nglob pattern 边界被拒绝后恢复写入。";
+    const unsafePatterns = [
+      "reports/../source/a*.txt",
+      "reports/../source/b*.txt",
+      "reports/../source/c*.txt",
+      "reports/../source/d*.txt"
+    ];
+    let globReplayBody: Record<string, unknown> | undefined;
+    const mockServer = await startMockOpenAiServer({
+      respond: ({ body, requestIndex }) => {
+        if (requestIndex === 0) {
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: unsafePatterns.map((pattern, index) =>
+                createToolCall(`call-unsafe-glob-${index}`, "glob", { pattern })
+              )
+            })
+          };
+        }
+
+        if (requestIndex === 1) {
+          globReplayBody = body;
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-write-after-glob-pattern-recovery", "write_file", {
+                  path: "丹药分析.md",
+                  content: recoveredReport
+                })
+              ]
+            })
+          };
+        }
+
+        return {
+          body: createChatCompletionResponse({ content: "窗口完成。" })
+        };
+      }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: mockServer.baseUrl
+        })
+      )
+    });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: utf8FixturePath,
+        displayName: "凡人修仙传.txt"
+      });
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 2,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      });
+
+      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
+      const replayMessages = Array.isArray(globReplayBody?.messages) ? globReplayBody.messages : [];
+      const globToolContents = replayMessages
+        .filter((message): message is { role: string; name?: string; content?: string } =>
+          typeof message === "object" &&
+          message !== null &&
+          (message as { role?: unknown }).role === "tool" &&
+          (message as { name?: unknown }).name === "glob"
+        )
+        .map((message) => String(message.content));
+      const joinedGlobToolContents = globToolContents.join("\n");
+
+      expect(mockServer.requests).toHaveLength(3);
+      expect(completedJob).toMatchObject({
+        id: job.id,
+        status: "completed",
+        progressText: "进度：1/1"
+      });
+      expect(reports).toHaveLength(1);
+      expect(reports[0]).toMatchObject({ fileName: "丹药分析.md" });
+      expect(globToolContents).toHaveLength(unsafePatterns.length);
+      expect(joinedGlobToolContents).toContain("UNSAFE_PATH");
+      expect(joinedGlobToolContents).toContain(`assets/books/${book.bookId}/reports/../source/a*.txt`);
+      expect(joinedGlobToolContents).toContain(`assets/books/${book.bookId}/reports/../source/d*.txt`);
     } finally {
       await mockServer.close();
     }
@@ -5929,6 +6125,147 @@ describe("P0 desktop IPC handlers", () => {
       expect(existsSync(leakedReportPath)).toBe(false);
       expect(reports).toEqual([]);
       expect(JSON.stringify(failedJob)).not.toContain(apiKey);
+      expect(JSON.stringify(reports)).not.toContain(apiKey);
+    } finally {
+      await mockServer.close();
+    }
+  });
+
+  it("fails read_file when the read path contains a known API key without leaking the key", async () => {
+    const apiKey = "sk-p0-mock";
+    const mockServer = await startMockOpenAiServer({
+      expectedApiKey: apiKey,
+      respond: ({ requestIndex }) => {
+        if (requestIndex !== 0) {
+          return {
+            status: 500,
+            body: { error: "read secret path fallback should not be called" }
+          };
+        }
+
+        return {
+          body: createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-secret-read-path", "read_file", {
+                path: `${apiKey}.md`
+              })
+            ]
+          })
+        };
+      }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture(apiKey);
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: mockServer.baseUrl
+        })
+      )
+    });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: utf8FixturePath,
+        displayName: "凡人修仙传.txt"
+      });
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 2,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      });
+
+      const failedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
+
+      expect(mockServer.requests).toHaveLength(1);
+      expect(failedJob).toMatchObject({
+        id: job.id,
+        status: "failed",
+        allowedActions: ["resume", "restart", "delete"]
+      });
+      expect(failedJob?.failureReason).toContain("secret");
+      expect(JSON.stringify(failedJob)).not.toContain(apiKey);
+      expect(reports).toEqual([]);
+      expect(JSON.stringify(reports)).not.toContain(apiKey);
+    } finally {
+      await mockServer.close();
+    }
+  });
+
+  it("fails grep when the pattern contains a known API key without leaking the key", async () => {
+    const apiKey = "sk-p0-mock";
+    const mockServer = await startMockOpenAiServer({
+      expectedApiKey: apiKey,
+      respond: ({ requestIndex }) => {
+        if (requestIndex !== 0) {
+          return {
+            status: 500,
+            body: { error: "grep secret pattern fallback should not be called" }
+          };
+        }
+
+        return {
+          body: createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-secret-grep-pattern", "grep", {
+                pattern: apiKey,
+                path: "reports"
+              })
+            ]
+          })
+        };
+      }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture(apiKey);
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: mockServer.baseUrl
+        })
+      )
+    });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: utf8FixturePath,
+        displayName: "凡人修仙传.txt"
+      });
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 2,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      });
+
+      const failedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
+
+      expect(mockServer.requests).toHaveLength(1);
+      expect(failedJob).toMatchObject({
+        id: job.id,
+        status: "failed",
+        allowedActions: ["resume", "restart", "delete"]
+      });
+      expect(failedJob?.failureReason).toContain("secret");
+      expect(JSON.stringify(failedJob)).not.toContain(apiKey);
+      expect(reports).toEqual([]);
       expect(JSON.stringify(reports)).not.toContain(apiKey);
     } finally {
       await mockServer.close();
@@ -7069,9 +7406,31 @@ describe("P0 desktop IPC handlers", () => {
         "utf8"
       );
       const replayAfterDirtyWrite = JSON.stringify(mockServer.requests[1].body);
+      const replayMessages = ((mockServer.requests[1].body as { messages?: unknown[] }).messages ?? []).filter(
+        (message): message is Record<string, unknown> => typeof message === "object" && message !== null
+      );
+      const draftStatusToolMessage = replayMessages.find(
+        (message) =>
+          message.role === "tool" &&
+          message.name === "write_file" &&
+          message.tool_call_id === "call-write-draft-status"
+      );
+      const draftStatusToolResult = JSON.parse(String(draftStatusToolMessage?.content ?? "{}")) as Record<
+        string,
+        unknown
+      >;
 
       expect(mockServer.requests).toHaveLength(3);
-      expect(replayAfterDirtyWrite).toContain("INVALID_ARGUMENTS");
+      expect(draftStatusToolResult).toMatchObject({
+        error: {
+          code: "INVALID_ARGUMENTS",
+          message: "报告正文不得包含模板或草案状态。"
+        },
+        classification: "recoverable_by_model",
+        reason: "tool_invalid_arguments",
+        path: "事件因果链（长程因果图）.md"
+      });
+      expect(draftStatusToolResult.hint).toContain("状态：草案");
       expect(replayAfterDirtyWrite).toContain("报告正文不得包含模板或草案状态");
       expect(completedJob?.status).toBe("completed");
       expect(reportMarkdown).toBe(recoveredReport);

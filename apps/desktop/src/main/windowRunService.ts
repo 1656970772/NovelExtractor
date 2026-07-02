@@ -47,15 +47,10 @@ import { loadReportCoverageIndex, type ReportCoverageTarget } from "./reportCove
 import { planTemplateBatches } from "./templateBatchPlanner";
 import type { TaskTextLogger } from "./taskTextLogger";
 import {
-  BASH_TOOL_SCOPE_DENIED_HINT,
   BASH_TOOL_SCOPE_DENIED_MESSAGE,
   classifyToolExecutionError,
-  EDIT_TARGET_NOT_FOUND_HINT,
   fingerprintRecoverableToolError,
-  READ_TOOL_SCOPE_DENIED_HINT,
   READ_TOOL_SCOPE_DENIED_MESSAGE,
-  REPLACEMENT_TEXT_NOT_FOUND_HINT,
-  REPLACEMENT_TEXT_NOT_UNIQUE_HINT,
   type ToolErrorClassification
 } from "./toolErrorClassification";
 
@@ -101,9 +96,6 @@ const NO_TOOL_FEE: FeeAmount = {
   amount: 0,
   currency: "CNY"
 };
-const REPLACEMENT_TEXT_NOT_FOUND_MESSAGE = "old_string not found";
-const REPLACEMENT_TEXT_NOT_UNIQUE_MESSAGE = "old_string is not unique";
-
 const DEFAULT_CONFIG = getDefaultConfig();
 const TOOL_LOOP_DEFAULTS = DEFAULT_CONFIG.toolLoopDefaults;
 const TEMPLATE_PROMPT_PROFILE_DEFAULTS = DEFAULT_CONFIG.templatePromptProfileDefaults;
@@ -118,18 +110,7 @@ const EMPTY_USAGE: TokenUsage = {
   cacheHitTokens: 0,
   cacheMissTokens: 0
 };
-const TOOL_ARGUMENTS_MUST_BE_OBJECT_MESSAGE = "Tool arguments must be an object";
-const UNEXPECTED_TOOL_ARGUMENT_MESSAGE_PREFIX = "Unexpected argument: ";
 const MARK_NO_UPDATE_TOOL_NAME = "mark_no_update";
-const TOOL_SCHEMA_STRING_ARGUMENT_ERROR_MESSAGES = new Set([
-  "path must be a string",
-  "content must be a string",
-  "pattern must be a string",
-  "old_string must be a string",
-  "new_string must be a string",
-  "reason must be a string"
-]);
-const FILE_LARGER_THAN_MAX_READ_BYTES_MESSAGE = "File is larger than maxReadBytes";
 const NO_TOOL_PROTOCOL_ERROR_MESSAGE =
   "tool loop 协议错误：无工具调用时必须返回 NO_UPDATE，或先通过写工具成功写入报告。";
 const NO_TOOL_PROTOCOL_CORRECTION_MESSAGE =
@@ -1147,6 +1128,26 @@ function getReadScopePathArgument(toolName: string, executionArguments: unknown)
   return getToolPathArgument(args);
 }
 
+function getReadScopeSecretCheckArguments(toolName: string, executionArguments: unknown): string[] {
+  const args = toPlainToolArgumentRecord(executionArguments);
+  if (args === undefined) {
+    return [];
+  }
+
+  if (toolName === "grep") {
+    return [args.path, args.pattern].filter((value): value is string => typeof value === "string");
+  }
+
+  const targetArgument = getReadScopePathArgument(toolName, args);
+  return targetArgument === undefined ? [] : [targetArgument];
+}
+
+function getRecoverableToolErrorTargetArgument(toolName: string, executionArguments: unknown): string | undefined {
+  return isDesktopReadScopeTool(toolName)
+    ? getReadScopePathArgument(toolName, executionArguments)
+    : getToolPathArgument(executionArguments);
+}
+
 function assertBashToolExecutionScope(input: {
   executionArguments: unknown;
   toolName: string;
@@ -1273,6 +1274,16 @@ async function validateToolCallBeforeExecution(input: {
     return;
   }
 
+  if (isDesktopReadScopeTool(toolCall.name)) {
+    const secretArgument = getReadScopeSecretCheckArguments(toolCall.name, toolCall.arguments).find((argument) =>
+      containsKnownSecret(argument, input.secrets)
+    );
+    if (secretArgument !== undefined) {
+      throw new Error(`读工具 ${toolCall.name} 的 path 包含已知 secret，已拒绝执行。`);
+    }
+    return;
+  }
+
   if (!isReportWriteTool(toolCall.name)) {
     return;
   }
@@ -1368,17 +1379,26 @@ function recordSuccessfulReportWrite(input: {
 }
 
 function classifyToolErrorForRuntime(name: string, error: unknown): ToolErrorClassification {
-  return classifyToolExecutionError({ toolName: name, error });
+  return classifyToolExecutionError({
+    toolName: name,
+    error,
+    hints: TOOL_LOOP_DEFAULTS.recoverableToolErrorHints
+  });
 }
 
 function toRecoverableToolErrorResult(input: {
   classification: ToolErrorClassification;
   executionArguments: unknown;
   error: ToolExecutionError;
+  hint?: string;
+  output?: string;
+  path?: string;
   secrets: readonly string[];
+  toolName: string;
 }): Record<string, unknown> {
-  const pathArgument = getToolPathArgument(input.executionArguments);
-  const hint = input.classification.hint;
+  const pathArgument = input.path ?? getRecoverableToolErrorTargetArgument(input.toolName, input.executionArguments);
+  const hint = input.hint ?? input.classification.hint;
+  const output = input.output ?? input.error.output;
 
   return {
     error: {
@@ -1387,10 +1407,75 @@ function toRecoverableToolErrorResult(input: {
     },
     classification: input.classification.category,
     reason: input.classification.reason,
-    ...(input.error.output !== undefined ? { output: redactSecrets(input.error.output, input.secrets) } : {}),
+    ...(output !== undefined ? { output: redactSecrets(output, input.secrets) } : {}),
     ...(hint ? { hint: redactSecrets(hint, input.secrets) } : {}),
     ...(pathArgument ? { path: redactSecrets(pathArgument, input.secrets) } : {})
   };
+}
+
+const TOOL_EXECUTION_ERROR_CODES = new Set<string>([
+  "UNKNOWN_TOOL",
+  "INVALID_ARGUMENTS",
+  "UNSAFE_PATH",
+  "NOT_FOUND",
+  "IO_ERROR"
+]);
+
+function toToolExecutionErrorCode(code: unknown): ToolExecutionError["code"] {
+  return typeof code === "string" && TOOL_EXECUTION_ERROR_CODES.has(code)
+    ? (code as ToolExecutionError["code"])
+    : "INVALID_ARGUMENTS";
+}
+
+function toRecoverableToolResultError(toolResult: Record<string, unknown>): ToolExecutionError {
+  const error = isPlainRecord(toolResult.error) ? toolResult.error : {};
+  const message = typeof error.message === "string" ? error.message : "可恢复工具错误";
+  const output = typeof toolResult.output === "string" ? toolResult.output : undefined;
+  return new ToolExecutionError(message, toToolExecutionErrorCode(error.code), output);
+}
+
+function toClassifiedPreExecutionRecoverableToolResult(input: {
+  classification: ToolErrorClassification;
+  error: ToolExecutionError;
+  executionArguments: unknown;
+  preExecutionResult: Record<string, unknown>;
+  secrets: readonly string[];
+  toolName: string;
+}): Record<string, unknown> {
+  return toRecoverableToolErrorResult({
+    classification: input.classification,
+    executionArguments: input.executionArguments,
+    error: input.error,
+    ...(typeof input.preExecutionResult.hint === "string" ? { hint: input.preExecutionResult.hint } : {}),
+    ...(typeof input.preExecutionResult.output === "string" ? { output: input.preExecutionResult.output } : {}),
+    ...(typeof input.preExecutionResult.path === "string" ? { path: input.preExecutionResult.path } : {}),
+    secrets: input.secrets,
+    toolName: input.toolName
+  });
+}
+
+function guardRepeatedRecoverableToolError(input: {
+  counts: Map<string, number>;
+  error: ToolExecutionError;
+  executionArguments: unknown;
+  maxRepeatedRecoverableToolErrors: number;
+  secrets: readonly string[];
+  toolName: string;
+}): void {
+  const pathArgument = getRecoverableToolErrorTargetArgument(input.toolName, input.executionArguments);
+  const fingerprint = fingerprintRecoverableToolError({
+    toolName: input.toolName,
+    error: input.error,
+    path: pathArgument
+  });
+  const nextCount = (input.counts.get(fingerprint) ?? 0) + 1;
+  input.counts.set(fingerprint, nextCount);
+
+  if (nextCount > input.maxRepeatedRecoverableToolErrors) {
+    throw new Error(
+      `同一工具错误重复超过 ${input.maxRepeatedRecoverableToolErrors} 次：${redactSecrets(input.error.message, input.secrets)}`
+    );
+  }
 }
 
 async function createExistingReportWriteRecoverableResult(input: {
@@ -1700,11 +1785,20 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
       }
 
       const classification = classifyToolErrorForRuntime("bash", syncResult.recoverableError);
+      guardRepeatedRecoverableToolError({
+        counts: recoverableToolErrorCounts,
+        error: syncResult.recoverableError,
+        executionArguments: {},
+        maxRepeatedRecoverableToolErrors,
+        secrets,
+        toolName: "bash"
+      });
       return toRecoverableToolErrorResult({
         classification,
         executionArguments: {},
         error: syncResult.recoverableError,
-        secrets
+        secrets,
+        toolName: "bash"
       });
     };
 
@@ -1897,8 +1991,25 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
               toolCall
             }));
           if (preExecutionRecoverableToolResult) {
+            const preExecutionRecoverableToolError = toRecoverableToolResultError(preExecutionRecoverableToolResult);
+            const classification = classifyToolErrorForRuntime(toolCall.name, preExecutionRecoverableToolError);
+            guardRepeatedRecoverableToolError({
+              counts: recoverableToolErrorCounts,
+              error: preExecutionRecoverableToolError,
+              executionArguments: toolCall.executionArguments,
+              maxRepeatedRecoverableToolErrors,
+              secrets,
+              toolName: toolCall.name
+            });
             returnedRecoverableToolError = true;
-            toolResult = preExecutionRecoverableToolResult;
+            toolResult = toClassifiedPreExecutionRecoverableToolResult({
+              classification,
+              error: preExecutionRecoverableToolError,
+              executionArguments: toolCall.executionArguments,
+              preExecutionResult: preExecutionRecoverableToolResult,
+              secrets,
+              toolName: toolCall.name
+            });
           } else {
             try {
               assertReadToolExecutionScope({
@@ -1945,24 +2056,22 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
                 throw error;
               }
 
-              const pathArgument = getToolPathArgument(toolCall.executionArguments);
-              const fingerprint = fingerprintRecoverableToolError({
-                toolName: toolCall.name,
+              guardRepeatedRecoverableToolError({
+                counts: recoverableToolErrorCounts,
                 error,
-                path: pathArgument
+                executionArguments: toolCall.executionArguments,
+                maxRepeatedRecoverableToolErrors,
+                secrets,
+                toolName: toolCall.name
               });
-              const nextCount = (recoverableToolErrorCounts.get(fingerprint) ?? 0) + 1;
-              recoverableToolErrorCounts.set(fingerprint, nextCount);
-              if (nextCount >= maxRepeatedRecoverableToolErrors) {
-                throw new Error(`同一工具错误重复 ${maxRepeatedRecoverableToolErrors} 次：${redactSecrets(error.message, secrets)}`);
-              }
 
               returnedRecoverableToolError = true;
               const recoverableToolResult = toRecoverableToolErrorResult({
                 classification,
                 executionArguments: toolCall.executionArguments,
                 error,
-                secrets
+                secrets,
+                toolName: toolCall.name
               });
               if (isBashToolFamily(toolCall.name)) {
                 const bashReportSyncError = await persistBashSandboxReportChanges();

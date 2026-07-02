@@ -58,6 +58,19 @@ const ALLOWED_TOOL_LOOP_TOOL_NAMES = new Set<ToolLoopToolName>([
   "kill_shell",
   "mark_no_update"
 ]);
+const REQUIRED_RECOVERABLE_TOOL_ERROR_HINT_KEYS = [
+  "replacement_text_not_found",
+  "replacement_text_not_unique",
+  "read_tool_target_not_found",
+  "read_tool_scope_denied",
+  "bash_tool_scope_denied",
+  "write_tool_scope_denied",
+  "bash_runtime_failure",
+  "tool_schema_invalid_arguments",
+  "read_tool_invalid_arguments",
+  "edit_target_not_found",
+  "tool_invalid_arguments"
+] as const;
 const WINDOWS_DRIVE_PATH_PREFIX = /^[A-Za-z]:/;
 
 function assertNonEmpty(value: unknown, label: string): asserts value is string {
@@ -212,6 +225,18 @@ function assertToolLoopDefaults(config: NovelExtractorConfig): void {
     defaults.maxRepeatedRecoverableToolErrors,
     "tool loop max repeated recoverable tool errors"
   );
+  assertRequiredRecoverableToolErrorHints(defaults.recoverableToolErrorHints);
+}
+
+function assertRequiredRecoverableToolErrorHints(value: unknown): void {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new ConfigInvariantError("tool loop recoverable tool error hints must be configured.");
+  }
+
+  const hints = value as Record<string, unknown>;
+  REQUIRED_RECOVERABLE_TOOL_ERROR_HINT_KEYS.forEach((key) => {
+    assertNonEmpty(hints[key], `tool loop recoverable tool error hint ${key}`);
+  });
 }
 
 function assertTemplatePromptProfileDefaults(config: NovelExtractorConfig): void {

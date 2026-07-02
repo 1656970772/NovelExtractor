@@ -129,6 +129,30 @@ describe("default config", () => {
         "mark_no_update"
       ],
       maxRepeatedRecoverableToolErrors: 3,
+      recoverableToolErrorHints: {
+        replacement_text_not_found:
+          "old_string 必须精确匹配文件中的原文；可先用 grep/read_file 找到准确片段；若已 read_file 且需要整体更新，可用 write_file 提交完整保留旧内容的新版报告。",
+        replacement_text_not_unique:
+          "old_string 在文件中匹配到多处；请用 read_file/grep 找到目标段落并加入足够上下文，或用 write_file 提交完整保留旧内容的新版报告。",
+        read_tool_target_not_found:
+          "读取目标不存在；请先用 ls/glob 确认可读路径，或改用当前窗口文本、reports 目录或本批选中报告文件名。",
+        read_tool_scope_denied:
+          "只能读取、搜索、列出或匹配当前窗口文本、当前书籍 reports 目录或本批选中输出报告；请改用窗口文件路径、reports 或选中报告文件名。",
+        bash_tool_scope_denied:
+          "桌面端 bash 只能在当前书籍 reports 目录内执行；不要读取 source、runs、rules、项目根路径、绝对路径或通过 .. 跳出 reports。",
+        write_tool_scope_denied:
+          "写工具只能写入本批允许的输出报告；path 必须使用模板 outputFileName 或对应报告文件名。",
+        bash_runtime_failure:
+          "bash 命令执行失败；请根据 stderr/stdout 调整命令、参数或先用文件工具确认目标。",
+        tool_schema_invalid_arguments:
+          "工具参数结构不符合 schema；请只传入该工具支持的字段，并确保 path/content/pattern/old_string/new_string 等字段类型正确。",
+        read_tool_invalid_arguments:
+          "读取工具参数无效；请检查 path/pattern 是否为字符串，并缩小读取或搜索范围。",
+        edit_target_not_found:
+          "目标报告不存在；如果需要创建报告，请改用 write_file 写入完整且合规的报告正文。",
+        tool_invalid_arguments:
+          "工具参数无效；请根据错误消息修正参数后重试，必要时先读取文件确认当前状态。"
+      },
       systemInstruction: expect.stringContaining("文件工具"),
       windowInstructionLines: expect.arrayContaining([
         expect.stringContaining("NO_UPDATE"),

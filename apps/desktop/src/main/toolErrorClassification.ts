@@ -1,3 +1,4 @@
+import type { ToolRecoverableErrorHints } from "@novel-extractor/config/schema";
 import { ToolExecutionError } from "@novel-extractor/tools";
 
 export type ToolErrorCategory =
@@ -7,25 +8,37 @@ export type ToolErrorCategory =
   | "resource_failure"
   | "repeated_failure";
 
+export type RecoverableToolErrorReason =
+  | "replacement_text_not_found"
+  | "replacement_text_not_unique"
+  | "read_tool_target_not_found"
+  | "read_tool_scope_denied"
+  | "bash_tool_scope_denied"
+  | "write_tool_scope_denied"
+  | "bash_runtime_failure"
+  | "tool_schema_invalid_arguments"
+  | "read_tool_invalid_arguments"
+  | "edit_target_not_found"
+  | "tool_invalid_arguments";
+
+export type ToolErrorReason =
+  | RecoverableToolErrorReason
+  | "secret_boundary"
+  | "unexpected_exception"
+  | "tool_resource_failure"
+  | "unknown_tool"
+  | "unclassified_tool_error"
+  | "repeated_recoverable_tool_error";
+
 export interface ToolErrorClassification {
   category: ToolErrorCategory;
   recoverableByModel: boolean;
-  reason: string;
+  reason: ToolErrorReason;
   hint?: string;
 }
 
 export const READ_TOOL_SCOPE_DENIED_MESSAGE = "读工具路径不在当前窗口允许范围内。";
-export const READ_TOOL_SCOPE_DENIED_HINT =
-  "只能读取、搜索、列出或匹配当前窗口文本、当前书籍 reports 目录或本批选中输出报告；请改用窗口文件路径、reports 或选中报告文件名。";
 export const BASH_TOOL_SCOPE_DENIED_MESSAGE = "bash 命令路径不在当前窗口允许范围内。";
-export const BASH_TOOL_SCOPE_DENIED_HINT =
-  "桌面端 bash 只能在当前书籍 reports 目录内执行；不要读取 source、runs、rules、项目根路径、绝对路径或通过 .. 跳出 reports。";
-export const REPLACEMENT_TEXT_NOT_FOUND_HINT =
-  "old_string 必须精确匹配文件中的原文；可先用 grep/read_file 找到准确片段；若已 read_file 且需要整体更新，可用 write_file 提交完整保留旧内容的新版报告。";
-export const REPLACEMENT_TEXT_NOT_UNIQUE_HINT =
-  "old_string 在文件中匹配到多处；请用 read_file/grep 找到目标段落并加入足够上下文，或用 write_file 提交完整保留旧内容的新版报告。";
-export const EDIT_TARGET_NOT_FOUND_HINT =
-  "目标报告不存在；如果需要创建报告，请改用 write_file 写入完整且合规的报告正文。";
 
 const REPLACEMENT_TEXT_NOT_FOUND_MESSAGE = "old_string not found";
 const REPLACEMENT_TEXT_NOT_UNIQUE_MESSAGE = "old_string is not unique";
@@ -53,8 +66,9 @@ const TOOL_SCHEMA_STRING_ARGUMENT_ERROR_MESSAGES = new Set([
 export function classifyToolExecutionError(input: {
   toolName: string;
   error: unknown;
+  hints: ToolRecoverableErrorHints;
 }): ToolErrorClassification {
-  const { toolName, error } = input;
+  const { toolName, error, hints } = input;
 
   if (!(error instanceof ToolExecutionError)) {
     return {
@@ -73,27 +87,27 @@ export function classifyToolExecutionError(input: {
   }
 
   if (isReplacementTextNotFoundMessage(error.message)) {
-    return recoverable("replacement_text_not_found", REPLACEMENT_TEXT_NOT_FOUND_HINT);
+    return recoverable("replacement_text_not_found", hints);
   }
 
   if (isReplacementTextNotUniqueMessage(error.message)) {
-    return recoverable("replacement_text_not_unique", REPLACEMENT_TEXT_NOT_UNIQUE_HINT);
+    return recoverable("replacement_text_not_unique", hints);
   }
 
   if (DESKTOP_READ_SCOPE_TOOL_NAMES.has(toolName) && error.code === "NOT_FOUND") {
-    return recoverable("read_tool_target_not_found", EDIT_TARGET_NOT_FOUND_HINT);
+    return recoverable("read_tool_target_not_found", hints);
   }
 
   if (DESKTOP_READ_SCOPE_TOOL_NAMES.has(toolName) && error.code === "UNSAFE_PATH") {
-    return recoverable("read_tool_scope_denied", READ_TOOL_SCOPE_DENIED_HINT);
+    return recoverable("read_tool_scope_denied", hints);
   }
 
   if (toolName === "bash" && error.code === "UNSAFE_PATH") {
-    return recoverable("bash_tool_scope_denied", BASH_TOOL_SCOPE_DENIED_HINT);
+    return recoverable("bash_tool_scope_denied", hints);
   }
 
   if (REPORT_WRITE_TOOL_NAMES.has(toolName) && error.code === "UNSAFE_PATH") {
-    return recoverable("write_tool_scope_denied");
+    return recoverable("write_tool_scope_denied", hints);
   }
 
   if (
@@ -101,19 +115,19 @@ export function classifyToolExecutionError(input: {
     error.code === "IO_ERROR" &&
     (error.output !== undefined || error.message.startsWith("command exited") || error.message.startsWith("command timed out"))
   ) {
-    return recoverable("bash_runtime_failure");
+    return recoverable("bash_runtime_failure", hints);
   }
 
   if (isRecoverableSchemaInvalidArguments(error)) {
-    return recoverable("tool_schema_invalid_arguments");
+    return recoverable("tool_schema_invalid_arguments", hints);
   }
 
   if (isRecoverableReadInvalidArguments(toolName, error)) {
-    return recoverable("read_tool_invalid_arguments");
+    return recoverable("read_tool_invalid_arguments", hints);
   }
 
   if ((toolName === "edit_file" || toolName === "multi_edit") && error.code === "NOT_FOUND") {
-    return recoverable("edit_target_not_found", EDIT_TARGET_NOT_FOUND_HINT);
+    return recoverable("edit_target_not_found", hints);
   }
 
   if (error.code === "IO_ERROR") {
@@ -133,7 +147,7 @@ export function classifyToolExecutionError(input: {
   }
 
   if (error.code === "INVALID_ARGUMENTS") {
-    return recoverable("tool_invalid_arguments");
+    return recoverable("tool_invalid_arguments", hints);
   }
 
   return {
@@ -159,12 +173,15 @@ export function repeatedFailureClassification(): ToolErrorClassification {
   };
 }
 
-function recoverable(reason: string, hint?: string): ToolErrorClassification {
+function recoverable(
+  reason: RecoverableToolErrorReason,
+  hints: ToolRecoverableErrorHints
+): ToolErrorClassification {
   return {
     category: "recoverable_by_model",
     recoverableByModel: true,
     reason,
-    ...(hint ? { hint } : {})
+    hint: hints[reason]
   };
 }
 

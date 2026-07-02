@@ -90,8 +90,23 @@ export type ToolLoopToolName =
 export interface ToolLoopDefaults {
   enabledToolNames: ToolLoopToolName[];
   maxRepeatedRecoverableToolErrors: number;
+  recoverableToolErrorHints: ToolRecoverableErrorHints;
   systemInstruction: string;
   windowInstructionLines: string[];
+}
+
+export interface ToolRecoverableErrorHints {
+  replacement_text_not_found: string;
+  replacement_text_not_unique: string;
+  read_tool_target_not_found: string;
+  read_tool_scope_denied: string;
+  bash_tool_scope_denied: string;
+  write_tool_scope_denied: string;
+  bash_runtime_failure: string;
+  tool_schema_invalid_arguments: string;
+  read_tool_invalid_arguments: string;
+  edit_target_not_found: string;
+  tool_invalid_arguments: string;
 }
 
 export interface TemplatePromptProfileDefaults {

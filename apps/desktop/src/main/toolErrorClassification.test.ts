@@ -3,12 +3,29 @@ import { ToolExecutionError } from "@novel-extractor/tools";
 import {
   classifyToolExecutionError,
   fingerprintRecoverableToolError,
-  REPLACEMENT_TEXT_NOT_UNIQUE_HINT,
   type ToolErrorClassification
 } from "./toolErrorClassification";
 
+const RECOVERABLE_HINTS = {
+  replacement_text_not_found: "old_string 必须精确匹配文件中的原文。",
+  replacement_text_not_unique: "old_string 在文件中匹配到多处。",
+  read_tool_target_not_found: "读取目标不存在。",
+  read_tool_scope_denied: "读工具路径不在允许范围内。",
+  bash_tool_scope_denied: "bash 路径不在允许范围内。",
+  write_tool_scope_denied: "写工具路径不在允许范围内。",
+  bash_runtime_failure: "bash 命令执行失败。",
+  tool_schema_invalid_arguments: "工具参数结构不符合 schema。",
+  read_tool_invalid_arguments: "读取工具参数无效。",
+  edit_target_not_found: "目标报告不存在。",
+  tool_invalid_arguments: "工具参数无效。"
+};
+
 function classify(toolName: string, error: unknown): ToolErrorClassification {
-  return classifyToolExecutionError({ toolName, error });
+  return classifyToolExecutionError({
+    toolName,
+    error,
+    hints: RECOVERABLE_HINTS
+  });
 }
 
 describe("tool error classification", () => {
@@ -21,7 +38,7 @@ describe("tool error classification", () => {
     expect(result).toEqual({
       category: "recoverable_by_model",
       recoverableByModel: true,
-      hint: REPLACEMENT_TEXT_NOT_UNIQUE_HINT,
+      hint: RECOVERABLE_HINTS.replacement_text_not_unique,
       reason: "replacement_text_not_unique"
     });
   });
@@ -44,7 +61,26 @@ describe("tool error classification", () => {
     });
     expect(classify("grep", new ToolExecutionError("Path is outside allowed root", "UNSAFE_PATH"))).toMatchObject({
       category: "recoverable_by_model",
+      hint: RECOVERABLE_HINTS.read_tool_scope_denied,
       reason: "read_tool_scope_denied"
+    });
+  });
+
+  it("returns configured hints for recoverable errors that need model correction", () => {
+    expect(classify("write_file", new ToolExecutionError("Path is outside allowed root", "UNSAFE_PATH"))).toMatchObject({
+      category: "recoverable_by_model",
+      hint: RECOVERABLE_HINTS.write_tool_scope_denied,
+      reason: "write_tool_scope_denied"
+    });
+    expect(classify("write_file", new ToolExecutionError("content must be a string", "INVALID_ARGUMENTS"))).toMatchObject({
+      category: "recoverable_by_model",
+      hint: RECOVERABLE_HINTS.tool_schema_invalid_arguments,
+      reason: "tool_schema_invalid_arguments"
+    });
+    expect(classify("write_file", new ToolExecutionError("invalid but model-correctable", "INVALID_ARGUMENTS"))).toMatchObject({
+      category: "recoverable_by_model",
+      hint: RECOVERABLE_HINTS.tool_invalid_arguments,
+      reason: "tool_invalid_arguments"
     });
   });
 

@@ -3,8 +3,24 @@ import { getDefaultConfig } from "./defaults";
 import { ConfigInvariantError, assertValidConfigInvariants } from "./configInvariants";
 import type { NovelExtractorConfig } from "./schema";
 
+interface ToolRecoverableErrorHintsTestShape {
+  replacement_text_not_found: string;
+  replacement_text_not_unique: string;
+  read_tool_target_not_found: string;
+  read_tool_scope_denied: string;
+  bash_tool_scope_denied: string;
+  write_tool_scope_denied: string;
+  bash_runtime_failure: string;
+  tool_schema_invalid_arguments: string;
+  read_tool_invalid_arguments: string;
+  edit_target_not_found: string;
+  tool_invalid_arguments: string;
+}
+
 interface ToolLoopDefaultsTestShape {
   enabledToolNames: string[];
+  maxRepeatedRecoverableToolErrors: number;
+  recoverableToolErrorHints: ToolRecoverableErrorHintsTestShape;
   systemInstruction: string;
   windowInstructionLines: string[];
 }
@@ -33,6 +49,20 @@ function withToolLoopDefaults(
       "write_file",
       "mark_no_update"
     ],
+    maxRepeatedRecoverableToolErrors: 3,
+    recoverableToolErrorHints: {
+      replacement_text_not_found: "old_string 必须精确匹配文件中的原文。",
+      replacement_text_not_unique: "old_string 在文件中匹配到多处。",
+      read_tool_target_not_found: "读取目标不存在。",
+      read_tool_scope_denied: "读工具路径不在允许范围内。",
+      bash_tool_scope_denied: "bash 路径不在允许范围内。",
+      write_tool_scope_denied: "写工具路径不在允许范围内。",
+      bash_runtime_failure: "bash 命令执行失败。",
+      tool_schema_invalid_arguments: "工具参数结构不符合 schema。",
+      read_tool_invalid_arguments: "读取工具参数无效。",
+      edit_target_not_found: "目标报告不存在。",
+      tool_invalid_arguments: "工具参数无效。"
+    },
     systemInstruction: "必须通过文件工具写入或返回 NO_UPDATE。",
     windowInstructionLines: ["写工具 path 必须使用模板 outputFileName。", "无更新时只返回 NO_UPDATE。"],
     ...overrides
@@ -353,5 +383,24 @@ describe("config invariants", () => {
     const fractionalRepeatLimit = getDefaultConfig();
     fractionalRepeatLimit.toolLoopDefaults.maxRepeatedRecoverableToolErrors = 1.5;
     expectInvariantViolation(fractionalRepeatLimit, /recoverable tool errors/i);
+
+    const missingHints = getDefaultConfig();
+    delete (
+      missingHints.toolLoopDefaults as unknown as Record<string, unknown>
+    ).recoverableToolErrorHints;
+    expectInvariantViolation(missingHints, /recoverable tool error hints/i);
+
+    const missingHintKey = getDefaultConfig();
+    delete (
+      missingHintKey.toolLoopDefaults.recoverableToolErrorHints as unknown as Record<
+        string,
+        unknown
+      >
+    ).replacement_text_not_found;
+    expectInvariantViolation(missingHintKey, /replacement_text_not_found/i);
+
+    const emptyHint = getDefaultConfig();
+    emptyHint.toolLoopDefaults.recoverableToolErrorHints.tool_invalid_arguments = " ";
+    expectInvariantViolation(emptyHint, /tool_invalid_arguments/i);
   });
 });

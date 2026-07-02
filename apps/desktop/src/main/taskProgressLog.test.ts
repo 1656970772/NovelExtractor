@@ -258,9 +258,9 @@ describe("task progress log summarizer", () => {
         tags: ["错误", "窗口"],
         value: {
           窗口: "7/10",
-          原因: "同一工具错误重复 3 次：old_string is not unique in report.md"
+          原因: "同一工具错误重复超过 3 次：old_string is not unique in report.md"
         }
       })
-    ).toBe("06:43:00 窗口失败：窗口 7/10，原因 同一工具错误重复 3 次：old_string is not unique in report.md");
+    ).toBe("06:43:00 窗口失败：窗口 7/10，原因 同一工具错误重复超过 3 次：old_string is not unique in report.md");
   });
 });
