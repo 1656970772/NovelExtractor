@@ -464,6 +464,67 @@ describe("P0 desktop IPC handlers", () => {
     });
   });
 
+  it("clears stale remaining time estimates while running before any window completes", () => {
+    const buildPatch = (p0HandlersModule as {
+      toJobPatchFromRuntimeState?: (
+        state: JobRuntimeState,
+        previousJob: ProjectRuntimeJobRecord,
+        clock: { now(): string }
+      ) => Partial<ProjectRuntimeJobRecord>;
+    }).toJobPatchFromRuntimeState;
+    if (!buildPatch) {
+      throw new Error("toJobPatchFromRuntimeState helper is not exported");
+    }
+    const previousJob = {
+      id: "job-1",
+      bookId: "book-1",
+      status: "running",
+      progressText: "进度：0/6",
+      tokenText: "Token 0 / 缓存命中率 0.00%",
+      createdAt: "2026-07-02T10:00:00.000Z",
+      updatedAt: "2026-07-02T10:02:00.000Z",
+      input: {
+        bookId: "book-1",
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 3,
+        extractionChapterCount: 18,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      },
+      timing: {
+        startedAt: "2026-07-02T10:00:00.000Z",
+        estimatedRemainingMs: 420000,
+        estimateFrozenAt: "2026-07-02T10:01:00.000Z"
+      }
+    } as ProjectRuntimeJobRecord;
+    const runtimeState: JobRuntimeState = {
+      jobId: "job-1",
+      status: "running",
+      completedWindowCount: 0,
+      totalWindowCount: 6,
+      usage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        cacheHitTokens: 0,
+        cacheMissTokens: 0
+      },
+      fee: null
+    };
+
+    const patch = buildPatch(runtimeState, previousJob, {
+      now: () => "2026-07-02T10:05:00.000Z"
+    });
+
+    expect(patch.timing).toMatchObject({
+      startedAt: "2026-07-02T10:00:00.000Z"
+    });
+    expect(patch.timing?.estimatedRemainingMs).toBeUndefined();
+    expect(patch.timing?.estimateFrozenAt).toBeUndefined();
+  });
+
   it("rejects jobs whose selected templates share the same output file name", async () => {
     const contract = createIpcContract();
     const handlers = createHandlers();
@@ -823,6 +884,66 @@ describe("P0 desktop IPC handlers", () => {
       estimateState: "unknown"
     });
     expect(failedJob?.timing?.estimateState).not.toBe("available");
+  });
+
+  it("resets stale remaining time estimates for persisted completed jobs that finished all windows", async () => {
+    const contract = createIpcContract();
+    const handlers = createHandlers();
+    const novelPath = await writeTempNovel(tempRoot, "六章完成小说.txt", 6);
+
+    const book = await contract.invoke(handlers, "books:uploadTxt", {
+      projectId: "project-a",
+      filePath: novelPath,
+      displayName: "六章完成小说.txt"
+    });
+    const job = requireJobDto(
+      await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 1,
+        extractionChapterCount: 6,
+        overlapChapterCount: 0,
+        skipAlreadyExtracted: true
+      })
+    );
+    const runtimePath = path.join(tempRoot, "projects", "project-a", "state", "project-runtime.json");
+    const rawRuntime = JSON.parse(await fs.readFile(runtimePath, "utf8")) as {
+      jobs: ProjectRuntimeJobRecord[];
+    };
+    rawRuntime.jobs = rawRuntime.jobs.map((storedJob) =>
+      storedJob.id === job.id
+        ? {
+            ...storedJob,
+            status: "completed",
+            progressText: "进度：6/6",
+            progress: {
+              completedWindowCount: 6,
+              totalWindowCount: 6
+            },
+            timing: {
+              startedAt: "2026-07-02T10:00:00.000Z",
+              completedAt: "2026-07-02T10:06:00.000Z",
+              estimatedRemainingMs: 420000
+            }
+          }
+        : storedJob
+    );
+    await fs.writeFile(runtimePath, `${JSON.stringify(rawRuntime, null, 2)}\n`, "utf8");
+
+    const restartedHandlers = createHandlers();
+    const runtime = await contract.invoke(restartedHandlers, "projectRuntime:get", {
+      projectId: "project-a"
+    });
+    const completedJob = runtime.jobs.find((runtimeJob) => runtimeJob.id === job.id);
+
+    expect(completedJob?.timing).toMatchObject({
+      startedAt: "2026-07-02T10:00:00.000Z",
+      completedAt: "2026-07-02T10:06:00.000Z",
+      estimatedRemainingMs: 0,
+      estimateState: "available"
+    });
   });
 
   it("restarts paused jobs without skipping already extracted coverage", async () => {
@@ -2951,7 +3072,7 @@ describe("P0 desktop IPC handlers", () => {
     }
   });
 
-  it("creates jobs with planned window progress instead of chapter count", async () => {
+  it("creates jobs with structured planned window progress instead of chapter count", async () => {
     const contract = createIpcContract();
     const handlers = createHandlers();
     const novelPath = await writeTempNovel(tempRoot, "九章小说.txt", 9);
@@ -2976,6 +3097,11 @@ describe("P0 desktop IPC handlers", () => {
 
     expect(job).toMatchObject({
       progressText: "进度：0/4",
+      progress: {
+        completedWindowCount: 0,
+        totalWindowCount: 4,
+        percent: 0
+      },
       tokenText: "Token 0 / 缓存命中率 0.00%"
     });
   });

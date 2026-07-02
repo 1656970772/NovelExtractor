@@ -27,6 +27,7 @@ import { createMemoryCredentialStore, type MemoryCredentialStore } from "./crede
 import type { DesktopIpcHandlers } from "./ipc";
 import {
   createFileProjectRuntimeStore,
+  type ProjectRuntimeJobProgressRecord,
   type ProjectRuntimeJobTimingRecord,
   type ProjectRuntimeJobRecord,
   type ProjectRuntimeState,
@@ -251,6 +252,16 @@ function calculateEstimatedRemainingMs(
   return Math.max(0, Math.round(averageWindowMs * remainingWindowCount));
 }
 
+function isAllWindowsCompleted(
+  progress: Pick<ProjectRuntimeJobProgressRecord, "completedWindowCount" | "totalWindowCount"> | undefined
+): boolean {
+  return Boolean(
+    progress &&
+      progress.totalWindowCount > 0 &&
+      progress.completedWindowCount >= progress.totalWindowCount
+  );
+}
+
 export function toJobPatchFromRuntimeState(
   state: JobRuntimeState,
   previousJob: Pick<ProjectRuntimeJobRecord, "timing"> | undefined,
@@ -269,12 +280,16 @@ export function toJobPatchFromRuntimeState(
     timing.completedAt = now;
   }
 
-  if (
-    (status === "running" || status === "completed") &&
-    state.totalWindowCount > 0 &&
-    state.completedWindowCount >= state.totalWindowCount
-  ) {
+  const progress = {
+    completedWindowCount: state.completedWindowCount,
+    totalWindowCount: state.totalWindowCount
+  };
+
+  if ((status === "running" || status === "completed") && isAllWindowsCompleted(progress)) {
     timing.estimatedRemainingMs = 0;
+    timing.estimateFrozenAt = undefined;
+  } else if (status === "running" && state.completedWindowCount <= 0) {
+    timing.estimatedRemainingMs = undefined;
     timing.estimateFrozenAt = undefined;
   } else if (
     status === "running" &&
@@ -304,10 +319,7 @@ export function toJobPatchFromRuntimeState(
     progressText: formatRuntimeProgress(state),
     tokenText: formatTokenText(state.usage),
     failureReason: state.failureReason,
-    progress: {
-      completedWindowCount: state.completedWindowCount,
-      totalWindowCount: state.totalWindowCount
-    },
+    progress,
     timing
   };
 }
@@ -438,7 +450,8 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       return undefined;
     }
 
-    const hasEstimatedRemaining = timing.estimatedRemainingMs !== undefined;
+    const estimatedRemainingMs = isAllWindowsCompleted(job.progress) ? 0 : timing.estimatedRemainingMs;
+    const hasEstimatedRemaining = estimatedRemainingMs !== undefined;
     const estimateState: JobTimingDto["estimateState"] =
       job.status === "paused" && hasEstimatedRemaining
         ? "frozen"
@@ -459,8 +472,8 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     if (elapsedMs !== undefined) {
       dto.elapsedMs = elapsedMs;
     }
-    if (timing.estimatedRemainingMs !== undefined) {
-      dto.estimatedRemainingMs = timing.estimatedRemainingMs;
+    if (estimatedRemainingMs !== undefined) {
+      dto.estimatedRemainingMs = estimatedRemainingMs;
     }
 
     return dto;
@@ -1369,11 +1382,16 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       const project = await ensureProject(book.projectId);
       await resolveTemplatesForProject(book.projectId, normalizedInput.templateIds);
       const now = clock.now();
+      const totalWindowCount = estimateRuntimeWindowCount(book, normalizedInput);
       const job: P0JobRecord = {
         id: await createUniqueJobId(project.rootPath),
         bookId: book.id,
         status: "created",
-        progressText: `进度：0/${estimateRuntimeWindowCount(book, normalizedInput)}`,
+        progressText: `进度：0/${totalWindowCount}`,
+        progress: {
+          completedWindowCount: 0,
+          totalWindowCount
+        },
         tokenText: formatTokenText(null),
         input: normalizedInput,
         createdAt: now,
