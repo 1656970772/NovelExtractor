@@ -1,9 +1,9 @@
 /* @vitest-environment jsdom */
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ProjectDto, TemplateDto } from "../shared/ipcTypes";
+import type { JobDto, ProjectDto, TemplateDto } from "../shared/ipcTypes";
 import { App } from "./App";
 import { getDefaultTemplateViews } from "./features/templates/templateViewModel";
 import { applyThemeTokens } from "./theme";
@@ -51,7 +51,8 @@ function installDesktopApiMock() {
     pauseJob: vi.fn(),
     resumeJob: vi.fn(),
     deleteJob: vi.fn(),
-    readJobLog: vi.fn()
+    readJobLog: vi.fn(),
+    onJobUpdated: vi.fn()
   };
 
   Object.defineProperty(window, "novelExtractor", {
@@ -378,6 +379,99 @@ describe("desktop workbench shell", () => {
 
     expect(api.startJob).toHaveBeenCalledWith({ jobId: "job-1" });
     expect(await screen.findByText("运行中")).toBeInTheDocument();
+  });
+
+  it("refreshes a long-running job from pushed desktop snapshots before start resolves", async () => {
+    const user = userEvent.setup();
+    const api = installDesktopApiMock();
+    let pushedJobHandler: ((job: JobDto) => void) | undefined;
+    api.onJobUpdated.mockImplementation((handler: (job: JobDto) => void) => {
+      pushedJobHandler = handler;
+      return () => {
+        if (pushedJobHandler === handler) {
+          pushedJobHandler = undefined;
+        }
+      };
+    });
+    api.listProviders.mockResolvedValue([
+      {
+        id: "provider-1",
+        presetId: "deepseek",
+        displayName: "DeepSeek",
+        kind: "openai-compatible",
+        baseUrl: "https://api.deepseek.com",
+        models: [{ id: "model-a", displayName: "模型 A", enabled: true, isDefault: true }],
+        hasApiKey: true,
+        enabled: true
+      }
+    ]);
+    api.uploadTxt.mockResolvedValue({
+      bookId: "book-1",
+      displayName: "凡人修仙传",
+      sourceAssetId: "asset-1",
+      sourceTextPath: "assets/books/book-1/source/original.txt",
+      fileName: "凡人修仙传.txt",
+      byteSize: 2048,
+      encoding: "utf-8",
+      chapterCount: 3
+    });
+    api.createJob.mockResolvedValue({
+      id: "job-1",
+      bookId: "book-1",
+      status: "created",
+      progressText: "进度：0/3",
+      tokenText: "Token 0 / 缓存命中率 0.00%",
+      allowedActions: ["start", "delete"],
+      createdAt: "2026-06-27T00:00:00.000Z",
+      updatedAt: "2026-06-27T00:00:00.000Z"
+    });
+    api.startJob.mockReturnValue(new Promise(() => undefined));
+    api.readJobLog.mockResolvedValue({
+      jobId: "job-1",
+      logFilePath: "runs/job-1/logs/live.txt",
+      content: "[2026-06-30 15:30:12][窗口] 已完成 1/3"
+    });
+
+    render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
+
+    await user.click(screen.getByRole("button", { name: "功能" }));
+    await user.click(
+      within(screen.getByRole("navigation", { name: "功能入口" })).getByRole("button", {
+        name: "小说提取"
+      })
+    );
+    expect(await screen.findByText("DeepSeek / 模型 A")).toBeInTheDocument();
+
+    const file = new File(["第一章 初入仙途"], "凡人修仙传.txt", { type: "text/plain" });
+    await user.upload(screen.getByLabelText("选择 .txt 文件"), file);
+    await user.click(screen.getByRole("button", { name: "创建任务" }));
+    expect(await screen.findByText("待开始")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "开始" }));
+
+    expect(api.startJob).toHaveBeenCalledWith({ jobId: "job-1" });
+    await waitFor(() => expect(api.onJobUpdated).toHaveBeenCalledTimes(1));
+    expect(pushedJobHandler).toBeDefined();
+
+    act(() => {
+      pushedJobHandler?.({
+        id: "job-1",
+        bookId: "book-1",
+        status: "running",
+        progressText: "进度：1/3",
+        tokenText: "Token 99 / 缓存命中率 50.00%",
+        logFilePath: "runs/job-1/logs/live.txt",
+        allowedActions: ["pause"],
+        createdAt: "2026-06-27T00:00:00.000Z",
+        updatedAt: "2026-06-27T00:01:00.000Z"
+      });
+    });
+
+    expect(await screen.findByText("进度：1/3")).toBeInTheDocument();
+    expect(screen.getByText("Token 99 / 缓存命中率 50.00%")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "展开日志" }));
+    expect(api.readJobLog).toHaveBeenCalledWith({ jobId: "job-1" });
+    expect(await screen.findByText(/已完成 1\/3/)).toBeInTheDocument();
   });
 
   it("loads project template selection, saves changes, and opens template management", async () => {
