@@ -165,11 +165,40 @@ export interface CreateJobDto {
   skipAlreadyExtracted: boolean;
 }
 
+export interface JobProgressDto {
+  completedWindowCount: number;
+  totalWindowCount: number;
+  percent: number;
+}
+
+export interface JobTimingDto {
+  startedAt?: string;
+  completedAt?: string;
+  elapsedMs?: number;
+  estimatedRemainingMs?: number;
+  estimateState: "unknown" | "calculating" | "available" | "frozen";
+}
+
+export interface JobOutputDto {
+  outputDirectoryLabel?: string;
+  canOpenOutputDirectory: boolean;
+}
+
+export interface InputSummaryDto {
+  bookDisplayName: string;
+  templateNames: string[];
+  modelId: string;
+}
+
 export interface JobDto {
   id: string;
   bookId: string;
   status: JobStatus;
   progressText: string;
+  progress?: JobProgressDto;
+  timing?: JobTimingDto;
+  output?: JobOutputDto;
+  inputSummary?: InputSummaryDto;
   tokenText?: string;
   failureReason?: string;
   logFilePath?: string;

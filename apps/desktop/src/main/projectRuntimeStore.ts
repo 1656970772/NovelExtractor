@@ -11,11 +11,25 @@ export interface ProjectRuntimeBookRecord {
   upload: BookUploadResultDto;
 }
 
+export interface ProjectRuntimeJobProgressRecord {
+  completedWindowCount: number;
+  totalWindowCount: number;
+}
+
+export interface ProjectRuntimeJobTimingRecord {
+  startedAt?: string;
+  completedAt?: string;
+  estimatedRemainingMs?: number;
+  estimateFrozenAt?: string;
+}
+
 export interface ProjectRuntimeJobRecord {
   id: string;
   bookId: string;
   status: JobStatus;
   progressText: string;
+  progress?: ProjectRuntimeJobProgressRecord;
+  timing?: ProjectRuntimeJobTimingRecord;
   tokenText?: string;
   failureReason?: string;
   logFilePath?: string;
@@ -81,6 +95,8 @@ function cloneChapter(chapter: Chapter): Chapter {
 function cloneJob(job: ProjectRuntimeJobRecord): ProjectRuntimeJobRecord {
   return {
     ...job,
+    progress: job.progress ? { ...job.progress } : undefined,
+    timing: job.timing ? { ...job.timing } : undefined,
     input: {
       ...job.input,
       templateIds: [...job.input.templateIds]
@@ -180,6 +196,24 @@ function isCreateJobDto(value: unknown): value is CreateJobDto {
   );
 }
 
+function isJobProgress(value: unknown): value is ProjectRuntimeJobProgressRecord {
+  return (
+    isPlainRecord(value) &&
+    typeof value.completedWindowCount === "number" &&
+    typeof value.totalWindowCount === "number"
+  );
+}
+
+function isJobTiming(value: unknown): value is ProjectRuntimeJobTimingRecord {
+  return (
+    isPlainRecord(value) &&
+    (value.startedAt === undefined || typeof value.startedAt === "string") &&
+    (value.completedAt === undefined || typeof value.completedAt === "string") &&
+    (value.estimatedRemainingMs === undefined || typeof value.estimatedRemainingMs === "number") &&
+    (value.estimateFrozenAt === undefined || typeof value.estimateFrozenAt === "string")
+  );
+}
+
 function isJob(value: unknown): value is ProjectRuntimeJobRecord {
   return (
     isPlainRecord(value) &&
@@ -187,6 +221,8 @@ function isJob(value: unknown): value is ProjectRuntimeJobRecord {
     typeof value.bookId === "string" &&
     isJobStatus(value.status) &&
     typeof value.progressText === "string" &&
+    (value.progress === undefined || isJobProgress(value.progress)) &&
+    (value.timing === undefined || isJobTiming(value.timing)) &&
     isCreateJobDto(value.input) &&
     typeof value.createdAt === "string" &&
     typeof value.updatedAt === "string"

@@ -7,11 +7,14 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getDefaultConfig } from "@novel-extractor/config";
 import type { ApiKeyRef, ProviderConfig } from "@novel-extractor/domain";
+import type { JobRuntimeState } from "@novel-extractor/jobs";
 import { reasonixToolOrder } from "@novel-extractor/tools";
 import type { CreateJobDto, JobDto } from "../shared/ipcTypes";
 import { createMemoryCredentialStore, type MemoryCredentialStore } from "./credentials";
 import { createIpcContract, createNotImplementedIpcHandlers } from "./ipc";
+import * as p0HandlersModule from "./p0Handlers";
 import { createP0IpcHandlers } from "./p0Handlers";
+import type { ProjectRuntimeJobRecord } from "./projectRuntimeStore";
 
 function findWorkspaceRoot(): string {
   const cwd = process.cwd();
@@ -326,6 +329,73 @@ describe("P0 desktop IPC handlers", () => {
       } as Parameters<typeof createP0IpcHandlers>[0])
     };
   }
+
+  it("freezes the remaining time estimate when a runtime state pauses", () => {
+    const buildPatch = (p0HandlersModule as {
+      toJobPatchFromRuntimeState?: (
+        state: JobRuntimeState,
+        previousJob: ProjectRuntimeJobRecord,
+        clock: { now(): string }
+      ) => Partial<ProjectRuntimeJobRecord>;
+    }).toJobPatchFromRuntimeState;
+    if (!buildPatch) {
+      throw new Error("toJobPatchFromRuntimeState helper is not exported");
+    }
+    const previousJob = {
+      id: "job-1",
+      bookId: "book-1",
+      status: "running",
+      progressText: "进度：1/4",
+      tokenText: "Token 100 / 缓存命中率 75.00%",
+      createdAt: "2026-07-02T10:00:00.000Z",
+      updatedAt: "2026-07-02T10:02:00.000Z",
+      input: {
+        bookId: "book-1",
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 3,
+        extractionChapterCount: 9,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      },
+      timing: {
+        startedAt: "2026-07-02T10:00:00.000Z",
+        estimatedRemainingMs: 420000
+      }
+    } as ProjectRuntimeJobRecord;
+    const runtimeState: JobRuntimeState = {
+      jobId: "job-1",
+      status: "paused",
+      completedWindowCount: 2,
+      totalWindowCount: 4,
+      usage: {
+        inputTokens: 80,
+        outputTokens: 20,
+        totalTokens: 100,
+        cacheHitTokens: 60,
+        cacheMissTokens: 20
+      },
+      fee: null
+    };
+
+    const patch = buildPatch(runtimeState, previousJob, {
+      now: () => "2026-07-02T10:05:00.000Z"
+    });
+
+    expect(patch).toMatchObject({
+      status: "paused",
+      progress: {
+        completedWindowCount: 2,
+        totalWindowCount: 4
+      },
+      timing: {
+        startedAt: "2026-07-02T10:00:00.000Z",
+        estimatedRemainingMs: 420000,
+        estimateFrozenAt: "2026-07-02T10:05:00.000Z"
+      }
+    });
+  });
 
   it("rejects jobs whose selected templates share the same output file name", async () => {
     const contract = createIpcContract();
@@ -2840,8 +2910,30 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         status: "completed",
         progressText: "进度：4/4",
-        tokenText: "Token 400 / 缓存命中率 75.00%"
+        tokenText: "Token 400 / 缓存命中率 75.00%",
+        progress: {
+          completedWindowCount: 4,
+          totalWindowCount: 4,
+          percent: 100
+        },
+        timing: {
+          startedAt: expect.any(String),
+          completedAt: expect.any(String),
+          elapsedMs: expect.any(Number),
+          estimatedRemainingMs: expect.any(Number),
+          estimateState: "available"
+        },
+        output: {
+          outputDirectoryLabel: "九章运行小说.txt",
+          canOpenOutputDirectory: true
+        },
+        inputSummary: {
+          bookDisplayName: "九章运行小说.txt",
+          templateNames: expect.arrayContaining([expect.any(String)]),
+          modelId: "mock-model"
+        }
       });
+      expect(completedJob.timing?.elapsedMs).toBeGreaterThanOrEqual(0);
       expect(pushedJobs).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -2849,13 +2941,36 @@ describe("P0 desktop IPC handlers", () => {
             status: "running",
             progressText: "进度：1/4",
             tokenText: "Token 100 / 缓存命中率 75.00%",
-            logFilePath: expect.stringContaining("runs/job-")
+            logFilePath: expect.stringContaining("runs/job-"),
+            progress: {
+              completedWindowCount: 1,
+              totalWindowCount: 4,
+              percent: 25
+            },
+            timing: expect.objectContaining({
+              startedAt: expect.any(String),
+              estimateState: "available"
+            }),
+            inputSummary: expect.objectContaining({
+              bookDisplayName: "九章运行小说.txt",
+              templateNames: expect.arrayContaining([expect.any(String)]),
+              modelId: "mock-model"
+            })
           }),
           expect.objectContaining({
             id: job.id,
             status: "completed",
             progressText: "进度：4/4",
-            tokenText: "Token 400 / 缓存命中率 75.00%"
+            tokenText: "Token 400 / 缓存命中率 75.00%",
+            progress: {
+              completedWindowCount: 4,
+              totalWindowCount: 4,
+              percent: 100
+            },
+            output: {
+              outputDirectoryLabel: "九章运行小说.txt",
+              canOpenOutputDirectory: true
+            }
           })
         ])
       );

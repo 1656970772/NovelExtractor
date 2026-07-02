@@ -25,11 +25,40 @@ export interface ExtractionBook {
   sourceAssetId?: string;
 }
 
+export interface ExtractionJobProgress {
+  completedWindowCount: number;
+  totalWindowCount: number;
+  percent: number;
+}
+
+export interface ExtractionJobTiming {
+  startedAt?: string;
+  completedAt?: string;
+  elapsedMs?: number;
+  estimatedRemainingMs?: number;
+  estimateState: "unknown" | "calculating" | "available" | "frozen";
+}
+
+export interface ExtractionJobOutput {
+  outputDirectoryLabel?: string;
+  canOpenOutputDirectory: boolean;
+}
+
+export interface ExtractionJobInputSummary {
+  bookDisplayName: string;
+  templateNames: string[];
+  modelId: string;
+}
+
 export interface ExtractionJob {
   id: string;
   bookId?: string;
   status: TaskStatus;
   progressText?: string;
+  progress?: ExtractionJobProgress;
+  timing?: ExtractionJobTiming;
+  output?: ExtractionJobOutput;
+  inputSummary?: ExtractionJobInputSummary;
   tokenText?: string;
   failureReason?: string;
   logFilePath?: string;
@@ -206,6 +235,10 @@ export function mapJobDtoToExtractionJob(job: JobDto): ExtractionJob | null {
     bookId: job.bookId,
     status,
     progressText: job.progressText,
+    progress: job.progress,
+    timing: job.timing,
+    output: job.output,
+    inputSummary: job.inputSummary,
     tokenText: job.tokenText,
     failureReason: job.failureReason,
     logFilePath: job.logFilePath,
