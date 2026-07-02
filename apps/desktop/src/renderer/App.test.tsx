@@ -285,7 +285,7 @@ describe("desktop workbench shell", () => {
     expect(await screen.findByText("DeepSeek / 模型 A")).toBeInTheDocument();
 
     const file = new File(["第一章 初入仙途"], "凡人修仙传.txt", { type: "text/plain" });
-    await user.upload(screen.getByLabelText("选择 .txt 文件"), file);
+    await user.upload(screen.getByLabelText("选择小说文件"), file);
 
     expect(await screen.findByText("凡人修仙传.txt")).toBeInTheDocument();
     expect(api.uploadTxt).toHaveBeenCalledWith(
@@ -375,7 +375,7 @@ describe("desktop workbench shell", () => {
     expect(await screen.findByText("DeepSeek / 模型 A")).toBeInTheDocument();
 
     const file = new File(["第一章 初入仙途"], "凡人修仙传.txt", { type: "text/plain" });
-    await user.upload(screen.getByLabelText("选择 .txt 文件"), file);
+    await user.upload(screen.getByLabelText("选择小说文件"), file);
     await user.click(screen.getByRole("button", { name: "创建任务" }));
     expect(await screen.findByText("待开始")).toBeInTheDocument();
 
@@ -571,7 +571,7 @@ describe("desktop workbench shell", () => {
     expect(await screen.findByText("DeepSeek / 模型 A")).toBeInTheDocument();
 
     const file = new File(["第一章 初入仙途"], "凡人修仙传.txt", { type: "text/plain" });
-    await user.upload(screen.getByLabelText("选择 .txt 文件"), file);
+    await user.upload(screen.getByLabelText("选择小说文件"), file);
     await user.click(screen.getByRole("button", { name: "创建任务" }));
     expect(await screen.findByText("待开始")).toBeInTheDocument();
 
@@ -804,7 +804,7 @@ describe("desktop workbench shell", () => {
       })
     );
     const file = new File(["第一章 初入仙途"], "凡人修仙传.txt", { type: "text/plain" });
-    await user.upload(screen.getByLabelText("选择 .txt 文件"), file);
+    await user.upload(screen.getByLabelText("选择小说文件"), file);
     expect(await screen.findByText("凡人修仙传.txt")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "资源" }));
@@ -851,7 +851,7 @@ describe("desktop workbench shell", () => {
       })
     );
     const file = new File(["第一章 初入仙途"], "凡人修仙传.txt", { type: "text/plain" });
-    await user.upload(screen.getByLabelText("选择 .txt 文件"), file);
+    await user.upload(screen.getByLabelText("选择小说文件"), file);
     await screen.findByText("凡人修仙传.txt");
 
     await user.click(screen.getByRole("button", { name: "资源" }));

@@ -50,7 +50,7 @@ const projectTemplateForTest: TemplateDto = {
 };
 
 describe("ExtractionPage", () => {
-  it("accepts only txt uploads and shows uploaded book metadata", async () => {
+  it("accepts txt and markdown uploads and shows uploaded book metadata", async () => {
     const user = userEvent.setup();
     const onUploadTxt = vi.fn().mockResolvedValue(undefined);
     const { rerender } = render(
@@ -63,11 +63,11 @@ describe("ExtractionPage", () => {
       />
     );
 
-    const file = new File(["第一章 初入仙途"], "凡人修仙传.txt", { type: "text/plain" });
-    const fileInput = screen.getByLabelText("选择 .txt 文件");
+    const file = createMockFile("markdown.md", "text/markdown", "# 第一章");
+    const fileInput = screen.getByLabelText("选择小说文件");
     const dropZone = screen.getByRole("button", { name: "拖拽上传小说原文" });
 
-    expect(fileInput).toHaveAttribute("accept", ".txt,text/plain");
+    expect(fileInput).toHaveAttribute("accept", ".txt,.md,text/plain,text/markdown");
     expect(fileInput).not.toHaveAttribute("multiple");
 
     await user.upload(fileInput, file);
@@ -96,6 +96,28 @@ describe("ExtractionPage", () => {
     expect(screen.getByText("2 KB")).toBeInTheDocument();
     expect(screen.getByText("utf-8")).toBeInTheDocument();
     expect(screen.getByText("章节数 3")).toBeInTheDocument();
+  });
+
+  it("rejects unsupported source files before sending upload request", async () => {
+    const onUploadTxt = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ExtractionPage
+        models={[modelForTest]}
+        books={[]}
+        jobs={[]}
+        state="ready"
+        onUploadTxt={onUploadTxt}
+      />
+    );
+
+    fireEvent.drop(screen.getByRole("button", { name: "拖拽上传小说原文" }), {
+      dataTransfer: {
+        files: [createMockFile("book.epub", "application/epub+zip", "data")]
+      }
+    });
+
+    expect(onUploadTxt).not.toHaveBeenCalled();
+    expect(screen.getByText("仅支持 .txt 或 .md 小说文件")).toBeInTheDocument();
   });
 
   it("rejects dropping more than one novel file at a time", () => {
@@ -655,3 +677,7 @@ describe("ExtractionPage", () => {
     }
   });
 });
+
+function createMockFile(fileName: string, type: string, content: string): File {
+  return new File([content], fileName, { type });
+}

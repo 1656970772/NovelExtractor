@@ -64,6 +64,7 @@ const DEFAULT_ASSET_LAYOUT = {
 } satisfies Required<UploadBookAssetLayout>;
 
 const DEFAULT_BOOK_ID_COLLISION_RETRY_LIMIT = 20;
+const SUPPORTED_NOVEL_SOURCE_EXTENSIONS = new Set([".txt", ".md"]);
 
 const systemClock: Clock = {
   now: () => new Date().toISOString()
@@ -76,7 +77,7 @@ const randomIdGenerator: IdGenerator = {
 };
 
 export async function uploadBook(input: UploadBookInput): Promise<UploadBookResult> {
-  assertTxtSource(input.sourcePath);
+  assertSupportedNovelSource(input.sourcePath);
 
   const sourceBuffer = await fs.readFile(input.sourcePath);
   const decoded = decodeNovelText(sourceBuffer);
@@ -276,9 +277,11 @@ function throwIfAssetAlreadyExists(error: unknown, destinationPath: string): voi
   }
 }
 
-function assertTxtSource(sourcePath: string): void {
-  if (path.extname(sourcePath).toLowerCase() !== ".txt") {
-    throw new UploadBookError("UNSUPPORTED_FILE_EXTENSION", "Only .txt novel sources can be uploaded");
+function assertSupportedNovelSource(sourcePath: string): void {
+  const extension = path.extname(sourcePath).toLowerCase();
+
+  if (!SUPPORTED_NOVEL_SOURCE_EXTENSIONS.has(extension)) {
+    throw new UploadBookError("UNSUPPORTED_FILE_EXTENSION", "Only .txt or .md novel sources can be uploaded");
   }
 }
 
