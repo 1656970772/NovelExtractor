@@ -60,32 +60,34 @@ export function JobList({ jobs, onDeleteJob, onJobAction, onOpenJobLog, onReadJo
             const statusConfig = STATUS_CONFIG[job.status];
             return (
               <li className="job-row" key={job.id}>
-                <div className="job-row__main">
+                <div className="job-row__header">
                   <div className="job-row__summary">
                     <strong>{statusConfig.label}</strong>
                     <span>{job.progressText ?? "尚未开始"}</span>
-                    {job.tokenText ? <span>{job.tokenText}</span> : null}
-                    {job.failureReason ? (
-                      <p className="danger-text">{job.failureReason}</p>
-                    ) : null}
                   </div>
+                  <div className="job-row__actions">
+                    {statusConfig.allowedActions.map((action) => (
+                      <button
+                        key={action}
+                        onClick={() => runAction(job, action)}
+                        type="button"
+                      >
+                        {TASK_ACTION_CONFIG[action].label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="job-row__details">
+                  {job.tokenText ? <span className="job-row__token">{job.tokenText}</span> : null}
+                  {job.failureReason ? (
+                    <p className="danger-text job-row__failure">{job.failureReason}</p>
+                  ) : null}
                   <JobLogPanel
                     jobId={job.id}
                     logFilePath={job.logFilePath}
                     onOpenLog={onOpenJobLog}
                     onReadLog={onReadJobLog}
                   />
-                </div>
-                <div className="job-row__actions">
-                  {statusConfig.allowedActions.map((action) => (
-                    <button
-                      key={action}
-                      onClick={() => runAction(job, action)}
-                      type="button"
-                    >
-                      {TASK_ACTION_CONFIG[action].label}
-                    </button>
-                  ))}
                 </div>
               </li>
             );

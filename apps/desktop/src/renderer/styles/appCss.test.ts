@@ -84,11 +84,19 @@ describe("app css template modal layout", () => {
   });
 
   it("keeps job action buttons pinned to the top when progress logs expand", () => {
+    const headerRule = getRuleBody(".job-row__header");
     const actionsRule = getRuleBody(".job-row__actions");
+    const detailsRule = getRuleBody(".job-row__details");
+    const logActionsRule = getRuleBody(".job-log-actions");
 
-    expect(appCss).toMatch(/\.job-row\s*\{[^}]*align-items:\s*start/u);
+    expect(headerRule).toContain("grid-template-columns: minmax(0, 1fr) auto");
+    expect(headerRule).toContain("align-items: start");
     expect(actionsRule).toContain("align-self: start");
     expect(actionsRule).toContain("justify-content: end");
+    expect(detailsRule).toContain("min-width: 0");
+    expect(detailsRule).toContain("max-width: 100%");
+    expect(logActionsRule).toContain("flex-wrap: nowrap");
+    expect(logActionsRule).toContain("justify-content: end");
   });
 
   it("keeps desktop settings modal aligned with the template modal shell", () => {

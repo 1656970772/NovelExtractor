@@ -599,20 +599,37 @@ p {
 }
 
 .job-row {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
+  grid-template-columns: 1fr;
+  align-items: stretch;
+  gap: 8px;
 }
 
-.job-row > div:first-child {
+.entity-row > div:first-child {
   display: grid;
   gap: 4px;
 }
 
+.job-row__header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  min-width: 0;
+}
+
 .job-row__actions {
   display: flex;
+  flex-wrap: nowrap;
   align-self: start;
   gap: 8px;
   justify-content: end;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.job-row__actions button {
+  white-space: nowrap;
 }
 
 .state-banner {
@@ -947,29 +964,53 @@ p {
   gap: 10px;
 }
 
-.job-row__main {
-  display: grid;
-  gap: 8px;
-  min-width: 0;
-}
-
 .job-row__summary {
   display: grid;
   gap: 4px;
 }
 
+.job-row__details {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.job-row__token {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.job-row__failure {
+  max-width: 100%;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .job-log-panel {
   display: grid;
   gap: 6px;
-  justify-items: start;
+  justify-items: end;
+  width: 100%;
   max-width: 100%;
 }
 
 .job-log-actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 8px;
   align-items: center;
+  justify-content: end;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.job-log-actions button {
+  white-space: nowrap;
 }
 
 .job-log-content {
@@ -1922,7 +1963,6 @@ p {
     display: grid;
   }
 
-  .job-row__actions,
   .delete-confirm__actions {
     flex-wrap: wrap;
     justify-content: start;
