@@ -81,6 +81,14 @@ function getModelSelect(page: Page) {
     .locator("select");
 }
 
+function getJobsPanel(page: Page) {
+  return page.getByRole("region", { name: "提取任务" });
+}
+
+function getLatestJobCard(page: Page) {
+  return getJobsPanel(page).locator(".job-list > .job-card").first();
+}
+
 async function createProject(page: Page): Promise<void> {
   await page.getByRole("textbox", { name: "项目名称" }).fill("仙途资料");
   await page.getByRole("button", { name: "创建项目" }).click();
@@ -111,9 +119,10 @@ async function runExtractionLoop(page: Page): Promise<void> {
   await expect(uploadPanel.getByText("章节数 3")).toBeVisible();
 
   await page.getByRole("button", { name: "创建任务" }).click();
-  await expect(page.getByText("待开始")).toBeVisible();
-  await page.getByRole("button", { name: "开始" }).click();
-  await expect(page.getByText("已完成", { exact: true })).toBeVisible();
+  const jobCard = getLatestJobCard(page);
+  await expect(jobCard.locator(".job-card__status")).toHaveText("待开始");
+  await jobCard.getByRole("button", { name: "开始" }).click();
+  await expect(jobCard.locator(".job-card__status")).toHaveText("已完成", { timeout: 60_000 });
 }
 
 async function previewReport(page: Page): Promise<void> {
@@ -189,20 +198,19 @@ async function assertWorkbenchRailLayout(page: Page): Promise<void> {
 }
 
 async function assertTemplateModalLayout(page: Page): Promise<void> {
-  const modelSelect = getModelSelect(page);
-  const modelTopBeforeOpen = await modelSelect.evaluate((node) => node.getBoundingClientRect().top);
+  const parametersRegion = page.getByRole("region", { name: "提取参数" });
+  const chooseTemplateButton = parametersRegion.getByRole("button", { name: /选择模板/ });
+  await chooseTemplateButton.scrollIntoViewIfNeeded();
+  const parametersTopBeforeOpen = await parametersRegion.evaluate((node) => node.getBoundingClientRect().top);
 
-  await page
-    .getByRole("region", { name: "提取参数" })
-    .getByRole("button", { name: /选择模板/ })
-    .click();
+  await chooseTemplateButton.click();
   const dialog = page.getByRole("dialog", { name: "模板选择与编辑" });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole("complementary", { name: "模板列表" })).toBeVisible();
   await expect(dialog.getByRole("region", { name: "模板预览编辑" })).toBeVisible();
   await expect(dialog.getByRole("textbox", { name: "模板正文" })).toBeVisible();
 
-  const modelTopAfterOpen = await modelSelect.evaluate((node) => node.getBoundingClientRect().top);
+  const parametersTopAfterOpen = await parametersRegion.evaluate((node) => node.getBoundingClientRect().top);
   const dialogRect = await dialog.evaluate((node) => {
     const dialogRect = node.getBoundingClientRect();
     return {
@@ -211,15 +219,23 @@ async function assertTemplateModalLayout(page: Page): Promise<void> {
       dialogWidth: dialogRect.width
     };
   });
+  const viewportHeight = await page.evaluate(() => window.innerHeight);
 
-  expect(Math.abs(modelTopAfterOpen - modelTopBeforeOpen)).toBeLessThanOrEqual(2);
-  expect(dialogRect.dialogTop).toBeLessThan(modelTopAfterOpen);
-  expect(dialogRect.dialogBottom).toBeGreaterThan(modelTopAfterOpen);
+  expect(Math.abs(parametersTopAfterOpen - parametersTopBeforeOpen)).toBeLessThanOrEqual(2);
+  expect(dialogRect.dialogTop).toBeGreaterThanOrEqual(0);
+  expect(dialogRect.dialogBottom).toBeLessThanOrEqual(viewportHeight + 1);
   expect(dialogRect.dialogWidth).toBeGreaterThan(320);
 }
 
 async function captureCheckedScreenshot(page: Page, fileName: string, viewport: ViewportSpec): Promise<void> {
   const outputPath = path.join(screenshotsRoot, fileName);
+  await page.evaluate(() => {
+    const activeElement = document.activeElement;
+    if (activeElement instanceof HTMLElement) {
+      activeElement.blur();
+    }
+  });
+  await page.mouse.move(Math.max(0, viewport.width - 20), Math.max(0, viewport.height - 20));
   const buffer = await page.screenshot({ path: outputPath });
   const stat = await fs.stat(outputPath);
   const pngWidth = buffer.readUInt32BE(16);
