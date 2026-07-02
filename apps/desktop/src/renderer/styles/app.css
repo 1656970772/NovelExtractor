@@ -598,6 +598,32 @@ p {
   list-style: none;
 }
 
+.job-filter-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.job-filter-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: var(--app-radius-control);
+  background: var(--app-color-surface-paper);
+  color: var(--app-color-ink-muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.job-filter-tab[aria-pressed="true"] {
+  border-color: var(--app-color-accent);
+  background: color-mix(in srgb, var(--app-color-accent) 10%, var(--app-color-surface-paper));
+  color: var(--app-color-accent);
+  font-weight: 700;
+}
+
 .entity-row,
 .job-row {
   display: grid;

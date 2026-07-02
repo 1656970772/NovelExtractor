@@ -3,6 +3,12 @@ import type { TaskAction } from "@novel-extractor/config";
 import { getTaskActionConfig, getTaskStatusConfig } from "@novel-extractor/config";
 import { JobLogPanel } from "./JobLogPanel";
 import { sortExtractionJobsByCreatedAtDesc, type ExtractionJob } from "./extractionViewModel";
+import {
+  filterJobs,
+  getFilterCount,
+  JOB_QUEUE_FILTERS,
+  type JobQueueFilter
+} from "./jobQueueViewModel";
 
 export interface JobListProps {
   jobs: readonly ExtractionJob[];
@@ -17,7 +23,9 @@ const TASK_ACTION_CONFIG = getTaskActionConfig();
 
 export function JobList({ jobs, onDeleteJob, onJobAction, onOpenJobLog, onReadJobLog }: JobListProps) {
   const [deleteCandidate, setDeleteCandidate] = useState<ExtractionJob | null>(null);
+  const [activeFilter, setActiveFilter] = useState<JobQueueFilter>("all");
   const sortedJobs = sortExtractionJobsByCreatedAtDesc(jobs);
+  const visibleJobs = filterJobs(sortedJobs, activeFilter);
 
   function runAction(job: ExtractionJob, action: TaskAction): void {
     if (action === "delete") {
@@ -50,13 +58,28 @@ export function JobList({ jobs, onDeleteJob, onJobAction, onOpenJobLog, onReadJo
     <section className="tool-panel tool-panel--wide jobs-panel" aria-labelledby="jobs-title">
       <div className="panel-heading">
         <h2 id="jobs-title">提取任务</h2>
-        <span>{jobs.length} 项</span>
+        <span>{visibleJobs.length} 项</span>
       </div>
-      {jobs.length === 0 ? (
-        <p className="empty-text">暂无提取任务</p>
+      <div className="job-filter-tabs" role="group" aria-label="任务状态筛选">
+        {JOB_QUEUE_FILTERS.map((filter) => (
+          <button
+            aria-pressed={activeFilter === filter.key}
+            className="job-filter-tab"
+            key={filter.key}
+            onClick={() => setActiveFilter(filter.key)}
+            type="button"
+          >
+            <span>{filter.label}</span>
+            {" "}
+            <span>{getFilterCount(jobs, filter.key)}</span>
+          </button>
+        ))}
+      </div>
+      {visibleJobs.length === 0 ? (
+        <p className="empty-text">{jobs.length === 0 ? "暂无提取任务" : "当前筛选暂无任务"}</p>
       ) : (
         <ul className="job-list">
-          {sortedJobs.map((job) => {
+          {visibleJobs.map((job) => {
             const statusConfig = STATUS_CONFIG[job.status];
             return (
               <li className="job-row" key={job.id}>

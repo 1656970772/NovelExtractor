@@ -327,6 +327,81 @@ describe("ExtractionPage", () => {
     expect(onOpenProviderConfig).toHaveBeenCalledTimes(1);
   });
 
+  it("renders queue filter buttons with counts and excludes bulk clear completed", async () => {
+    const user = userEvent.setup();
+    const onJobAction = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ExtractionPage
+        models={[modelForTest]}
+        books={[]}
+        jobs={[
+          {
+            id: "job-running",
+            status: "running",
+            progressText: "运行窗口",
+            createdAt: "2026-07-02T10:00:00.000Z"
+          },
+          {
+            id: "job-paused",
+            status: "paused",
+            progressText: "暂停窗口",
+            createdAt: "2026-07-02T09:00:00.000Z"
+          },
+          {
+            id: "job-failed",
+            status: "failed",
+            progressText: "失败窗口",
+            failureReason: "失败原因",
+            createdAt: "2026-07-02T08:00:00.000Z"
+          },
+          {
+            id: "job-completed",
+            status: "completed",
+            progressText: "完成窗口",
+            createdAt: "2026-07-02T07:00:00.000Z"
+          },
+          {
+            id: "job-pending",
+            status: "pending",
+            progressText: "等待队列",
+            createdAt: "2026-07-02T06:00:00.000Z"
+          }
+        ]}
+        state="ready"
+        onJobAction={onJobAction}
+      />
+    );
+
+    const jobPanel = screen.getByRole("region", { name: "提取任务" });
+    const filterGroup = within(jobPanel).getByRole("group", { name: "任务状态筛选" });
+
+    expect(within(filterGroup).getAllByRole("button").map((button) => button.textContent?.replace(/\s+/g, " ").trim())).toEqual([
+      "全部 5",
+      "进行中 1",
+      "暂停 1",
+      "失败 1",
+      "已完成 1"
+    ]);
+    expect(within(filterGroup).getByRole("button", { name: "全部 5" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(jobPanel).getByText("5 项")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "清空已完成" })).not.toBeInTheDocument();
+
+    await user.click(within(filterGroup).getByRole("button", { name: "暂停 1" }));
+
+    expect(within(filterGroup).getByRole("button", { name: "暂停 1" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(jobPanel).getByText("1 项")).toBeInTheDocument();
+    expect(within(jobPanel).getByText("暂停窗口")).toBeInTheDocument();
+    expect(within(jobPanel).queryByText("等待队列")).not.toBeInTheDocument();
+    expect(within(jobPanel).queryByText("运行窗口")).not.toBeInTheDocument();
+    expect(within(jobPanel).queryByText("失败窗口")).not.toBeInTheDocument();
+    expect(within(jobPanel).queryByText("完成窗口")).not.toBeInTheDocument();
+    expect(within(jobPanel).queryByRole("button", { name: "暂停" })).not.toBeInTheDocument();
+
+    await user.click(within(jobPanel).getByRole("button", { name: "继续" }));
+
+    expect(onJobAction).toHaveBeenCalledWith("job-paused", "resume");
+  });
+
   it("shows upload and task loading states", () => {
     render(<ExtractionPage models={[]} books={[]} jobs={[]} state="loading" />);
 
@@ -392,7 +467,7 @@ describe("ExtractionPage", () => {
     expect(screen.getByRole("button", { name: "删除任务" })).toBeInTheDocument();
   });
 
-  it("orders task rows by creation time with the newest task first", () => {
+  it("orders task rows by creation time with the newest task first inside the active filter", () => {
     render(
       <ExtractionPage
         models={[modelForTest]}
@@ -400,7 +475,7 @@ describe("ExtractionPage", () => {
         jobs={[
           {
             id: "job-old",
-            status: "completed",
+            status: "failed",
             progressText: "旧任务",
             createdAt: "2026-06-27T09:00:00.000Z"
           },
@@ -413,9 +488,15 @@ describe("ExtractionPage", () => {
           },
           {
             id: "job-middle",
-            status: "running",
+            status: "failed",
             progressText: "中间任务",
             createdAt: "2026-06-30T09:00:00.000Z"
+          },
+          {
+            id: "job-running",
+            status: "running",
+            progressText: "运行任务",
+            createdAt: "2026-07-03T09:00:00.000Z"
           }
         ]}
         state="ready"
@@ -423,11 +504,14 @@ describe("ExtractionPage", () => {
     );
 
     const jobPanel = screen.getByRole("region", { name: "提取任务" });
+    const filterGroup = within(jobPanel).getByRole("group", { name: "任务状态筛选" });
+    fireEvent.click(within(filterGroup).getByRole("button", { name: "失败 3" }));
     const rows = within(jobPanel).getAllByRole("listitem");
 
     expect(rows[0]).toHaveTextContent("新任务");
     expect(rows[1]).toHaveTextContent("中间任务");
     expect(rows[2]).toHaveTextContent("旧任务");
+    expect(within(jobPanel).queryByText("运行任务")).not.toBeInTheDocument();
   });
 
   it("shows start when a task is pending", () => {
