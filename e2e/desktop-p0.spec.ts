@@ -61,7 +61,7 @@ async function openFunction(page: Page, name: "小说提取" | "关系图谱"): 
 }
 
 async function openAssets(page: Page): Promise<void> {
-  await page.getByLabel("资产入口").getByRole("button", { name: "资产" }).click();
+  await page.getByLabel("资源入口").getByRole("button", { name: "资源" }).click();
 }
 
 async function createProject(page: Page): Promise<void> {
