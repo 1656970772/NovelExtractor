@@ -59,6 +59,10 @@ export interface NovelExtractorDesktopApi {
   deleteJob(input: DeleteJobDto): Promise<void>;
   readJobLog(input: { jobId: string }): Promise<JobLogDto>;
   openJobLog(input: { jobId: string }): Promise<void>;
+  openJobOutputDirectory(input: { jobId: string }): Promise<void>;
+  minimizeWindow(): Promise<void>;
+  toggleMaximizeWindow(): Promise<void>;
+  closeWindow(): Promise<void>;
   onJobUpdated(handler: (job: JobDto) => void): () => void;
 }
 
@@ -99,6 +103,10 @@ export function createNovelExtractorDesktopApi(
     deleteJob: (input) => invokeTyped(invoke, "jobs:delete", input),
     readJobLog: (input) => invokeTyped(invoke, "jobs:readLog", input),
     openJobLog: (input) => invokeTyped(invoke, "jobs:openLog", input),
+    openJobOutputDirectory: (input) => invokeTyped(invoke, "jobs:openOutputDirectory", input),
+    minimizeWindow: () => invokeTyped(invoke, "window:minimize", undefined),
+    toggleMaximizeWindow: () => invokeTyped(invoke, "window:toggleMaximize", undefined),
+    closeWindow: () => invokeTyped(invoke, "window:close", undefined),
     onJobUpdated: (handler) => subscribe?.("jobs:updated", handler) ?? (() => undefined)
   };
 

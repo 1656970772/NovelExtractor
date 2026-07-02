@@ -70,6 +70,7 @@ type P0Handlers = Pick<
   | "jobs:delete"
   | "jobs:readLog"
   | "jobs:openLog"
+  | "jobs:openOutputDirectory"
   | "reports:preview"
 >;
 
@@ -1006,6 +1007,17 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     }
   }
 
+  async function openJobOutputDirectory(job: P0JobRecord): Promise<void> {
+    const book = requireBook(job.bookId);
+    const project = await ensureProject(book.projectId);
+    const result = await shellApi.openPath(
+      path.join(project.rootPath, "assets", "books", book.id, "reports")
+    );
+    if (result) {
+      throw new Error(result);
+    }
+  }
+
   async function persistJob(job: P0JobRecord): Promise<void> {
     const book = requireBook(job.bookId);
     const project = await ensureProject(book.projectId);
@@ -1480,6 +1492,10 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     "jobs:openLog": async (input) => {
       const job = requireJob(input.jobId);
       await openJobLog(job);
+    },
+    "jobs:openOutputDirectory": async (input) => {
+      const job = requireJob(input.jobId);
+      await openJobOutputDirectory(job);
     },
     "reports:preview": async (input) => {
       const report = reportsById.get(input.reportId);

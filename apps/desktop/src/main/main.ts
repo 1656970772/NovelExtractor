@@ -13,6 +13,7 @@ import { createNotImplementedIpcHandlers, registerIpcHandlers } from "./ipc";
 import { createP0IpcHandlers } from "./p0Handlers";
 import { createProviderIpcHandlers } from "./providerHandlers";
 import { createFileProviderStore } from "./providerStore";
+import { createWindowIpcHandlers } from "./windowHandlers";
 
 function canOpenExternalUrl(url: string): boolean {
   try {
@@ -31,6 +32,7 @@ function createMainWindow(): void {
     minWidth: 960,
     minHeight: 640,
     title: "NovelExtractor",
+    frame: false,
     backgroundColor: themeTokens.color.appBackground,
     webPreferences: {
       preload: join(__dirname, "../preload/index.cjs"),
@@ -131,6 +133,7 @@ void app.whenReady().then(async () => {
       onJobUpdated: notifyRendererJobUpdated
     }),
     ...createProviderIpcHandlers({ credentialStore, providerStore }),
+    ...createWindowIpcHandlers(BrowserWindow),
     ...createDesktopSettingsIpcHandlers({
       settingsStore,
       chooseProjectDirectory,

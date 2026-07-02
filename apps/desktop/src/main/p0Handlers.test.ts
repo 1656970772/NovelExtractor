@@ -1499,6 +1499,58 @@ describe("P0 desktop IPC handlers", () => {
     }
   });
 
+  it("opens the final report directory for a job output directory request", async () => {
+    const contract = createIpcContract();
+    const openPath = vi.fn().mockResolvedValue("");
+    const handlers = createHandlers({ shell: { openPath } });
+    const book = await contract.invoke(handlers, "books:uploadTxt", {
+      projectId: "project-a",
+      filePath: utf8FixturePath,
+      displayName: "凡人修仙传.txt"
+    });
+    const job = await contract.invoke(handlers, "jobs:create", {
+      bookId: book.bookId,
+      templateIds: ["pill-analysis"],
+      providerConfigId: "provider-1",
+      modelId: "mock-model",
+      singleRunChapterCount: 2,
+      extractionChapterCount: 2,
+      overlapChapterCount: 1,
+      skipAlreadyExtracted: true
+    });
+
+    await contract.invoke(handlers, "jobs:openOutputDirectory", { jobId: job.id });
+
+    expect(openPath).toHaveBeenCalledWith(
+      path.join(tempRoot, "projects", "project-a", "assets", "books", book.bookId, "reports")
+    );
+  });
+
+  it("surfaces shell failures when opening a job output directory", async () => {
+    const contract = createIpcContract();
+    const openPath = vi.fn().mockResolvedValue("无法打开目录");
+    const handlers = createHandlers({ shell: { openPath } });
+    const book = await contract.invoke(handlers, "books:uploadTxt", {
+      projectId: "project-a",
+      filePath: utf8FixturePath,
+      displayName: "凡人修仙传.txt"
+    });
+    const job = await contract.invoke(handlers, "jobs:create", {
+      bookId: book.bookId,
+      templateIds: ["pill-analysis"],
+      providerConfigId: "provider-1",
+      modelId: "mock-model",
+      singleRunChapterCount: 2,
+      extractionChapterCount: 2,
+      overlapChapterCount: 1,
+      skipAlreadyExtracted: true
+    });
+
+    await expect(
+      contract.invoke(handlers, "jobs:openOutputDirectory", { jobId: job.id })
+    ).rejects.toThrow("无法打开目录");
+  });
+
   it("lets a later window read and edit an existing template report without duplicating its report asset", async () => {
     let uploadedBookId = "";
     const mockServer = await startMockOpenAiServer({
@@ -7468,6 +7520,100 @@ describe("P0 desktop IPC handlers", () => {
     expect(preview.html).not.toContain(apiKey);
     expect(JSON.stringify(completedJob)).not.toContain(apiKey);
     expect(JSON.stringify(reports)).not.toContain(apiKey);
+  });
+
+  it("keeps report assets readable after deleting a completed job", async () => {
+    let requestIndex = 0;
+    const fetch = vi.fn(async () => {
+      const responseBody =
+        requestIndex === 0
+          ? createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-write-report-before-delete", "write_file", {
+                  path: "丹药分析.md",
+                  content: "# 丹药分析\n\n删除任务后仍应保留的报告。"
+                })
+              ],
+              totalTokens: 17
+            })
+          : createChatCompletionResponse({
+              content: "窗口完成。",
+              totalTokens: 17
+            });
+      requestIndex += 1;
+
+      return new Response(JSON.stringify(responseBody), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: "https://mock-provider.test/v1"
+        })
+      ),
+      fetch
+    });
+    const book = await contract.invoke(handlers, "books:uploadTxt", {
+      projectId: "project-a",
+      filePath: utf8FixturePath,
+      displayName: "凡人修仙传.txt"
+    });
+    const job = await contract.invoke(handlers, "jobs:create", {
+      bookId: book.bookId,
+      templateIds: ["pill-analysis"],
+      providerConfigId: "provider-1",
+      modelId: "mock-model",
+      singleRunChapterCount: 2,
+      extractionChapterCount: 2,
+      overlapChapterCount: 1,
+      skipAlreadyExtracted: true
+    });
+
+    const completedJob = requireJobDto(
+      await contract.invoke(handlers, "jobs:start", { jobId: job.id })
+    );
+    const reportsBeforeDelete = await contract.invoke(handlers, "books:listReports", {
+      bookId: book.bookId
+    });
+    const reportDirectory = path.join(
+      tempRoot,
+      "projects",
+      "project-a",
+      "assets",
+      "books",
+      book.bookId,
+      "reports"
+    );
+    const reportPath = path.join(reportDirectory, "丹药分析.md");
+
+    expect(completedJob.status).toBe("completed");
+    expect(reportsBeforeDelete).toHaveLength(1);
+    expect(await pathExists(reportDirectory)).toBe(true);
+    expect(await pathExists(reportPath)).toBe(true);
+
+    await contract.invoke(handlers, "jobs:delete", { jobId: job.id, confirm: true });
+
+    const runtime = await contract.invoke(handlers, "projectRuntime:get", {
+      projectId: "project-a"
+    });
+    const reportsAfterDelete = await contract.invoke(handlers, "books:listReports", {
+      bookId: book.bookId
+    });
+    const previewAfterDelete = await contract.invoke(handlers, "reports:preview", {
+      reportId: reportsBeforeDelete[0].id
+    });
+
+    expect(runtime.jobs.find((runtimeJob) => runtimeJob.id === job.id)).toBeUndefined();
+    expect(reportsAfterDelete).toEqual(reportsBeforeDelete);
+    expect(previewAfterDelete.html).toContain("删除任务后仍应保留的报告");
+    expect(await pathExists(reportDirectory)).toBe(true);
+    expect(await pathExists(reportPath)).toBe(true);
   });
 
   it("rejects jobs:create payloads missing required extraction boundary fields", async () => {
