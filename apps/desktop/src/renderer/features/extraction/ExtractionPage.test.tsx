@@ -402,6 +402,150 @@ describe("ExtractionPage", () => {
     expect(onJobAction).toHaveBeenCalledWith("job-paused", "resume");
   });
 
+  it("renders advanced job cards with structured progress, timing, summary, and output action", async () => {
+    const user = userEvent.setup();
+    const onOpenOutputDirectory = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ExtractionPage
+        models={[modelForTest]}
+        books={[]}
+        jobs={[
+          {
+            id: "job-running",
+            status: "running",
+            progressText: "窗口 2/6",
+            progress: { completedWindowCount: 2, totalWindowCount: 5, percent: 40 },
+            timing: {
+              startedAt: "2026-07-02T11:00:00.000Z",
+              elapsedMs: 332_000,
+              estimatedRemainingMs: 478_000,
+              estimateState: "available"
+            },
+            inputSummary: {
+              bookDisplayName: "凡人修仙传",
+              templateNames: ["丹药分析", "人物关系"],
+              modelId: "deepseek-chat"
+            },
+            logFilePath: "runs/job-running/logs/live.txt",
+            createdAt: "2026-07-02T11:00:00.000Z"
+          },
+          {
+            id: "job-completed",
+            status: "completed",
+            progressText: "完成窗口",
+            progress: { completedWindowCount: 4, totalWindowCount: 4, percent: 100 },
+            timing: {
+              startedAt: "2026-07-02T10:00:00.000Z",
+              completedAt: "2026-07-02T10:12:48.000Z",
+              elapsedMs: 768_000,
+              estimateState: "unknown"
+            },
+            output: { outputDirectoryLabel: "凡人修仙传", canOpenOutputDirectory: true },
+            inputSummary: {
+              bookDisplayName: "已完成的书",
+              templateNames: ["世界观模板"],
+              modelId: "deepseek-reasoner"
+            },
+            createdAt: "2026-07-02T10:00:00.000Z"
+          }
+        ]}
+        state="ready"
+        onOpenOutputDirectory={onOpenOutputDirectory}
+      />
+    );
+
+    expect(screen.getByRole("heading", { name: "凡人修仙传" })).toBeInTheDocument();
+    expect(screen.getByText("模板：丹药分析、人物关系")).toBeInTheDocument();
+    expect(screen.getByText("模型：deepseek-chat")).toBeInTheDocument();
+    expect(screen.getByText("2 / 5")).toBeInTheDocument();
+    expect(screen.getByText("40%")).toBeInTheDocument();
+    expect(screen.getByText("已用时：00:05:32")).toBeInTheDocument();
+    expect(screen.getByText("预计剩余：00:07:58")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "已完成的书" })).toBeInTheDocument();
+    expect(screen.getByText("模板：世界观模板")).toBeInTheDocument();
+    expect(screen.getByText("模型：deepseek-reasoner")).toBeInTheDocument();
+    expect(screen.getByText("完成时间：2026-07-02 10:12:48")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "打开输出目录" }));
+
+    expect(onOpenOutputDirectory).toHaveBeenCalledWith("job-completed");
+  });
+
+  it("only renders output directory action for completed jobs", () => {
+    render(
+      <ExtractionPage
+        models={[modelForTest]}
+        books={[]}
+        jobs={[
+          {
+            id: "job-running-output",
+            status: "running",
+            progressText: "窗口 1/4",
+            output: { outputDirectoryLabel: "未完成输出", canOpenOutputDirectory: true },
+            createdAt: "2026-07-02T11:00:00.000Z"
+          }
+        ]}
+        state="ready"
+        onOpenOutputDirectory={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+
+    expect(screen.queryByRole("button", { name: "打开输出目录" })).not.toBeInTheDocument();
+  });
+
+  it("renders paused remaining time and failed reason with failure timestamp", () => {
+    render(
+      <ExtractionPage
+        models={[modelForTest]}
+        books={[]}
+        jobs={[
+          {
+            id: "job-paused",
+            status: "paused",
+            progressText: "窗口 1/4",
+            progress: { completedWindowCount: 1, totalWindowCount: 4, percent: 25 },
+            timing: {
+              elapsedMs: 180_000,
+              estimatedRemainingMs: 420_000,
+              estimateState: "frozen"
+            },
+            inputSummary: {
+              bookDisplayName: "暂停的书",
+              templateNames: [],
+              modelId: "model-paused"
+            },
+            createdAt: "2026-07-02T09:00:00.000Z"
+          },
+          {
+            id: "job-failed",
+            status: "failed",
+            progressText: "窗口 3/5",
+            failureReason: "模型返回格式无效",
+            timing: {
+              completedAt: "2026-07-02T09:40:30.000Z",
+              elapsedMs: 930_000,
+              estimateState: "unknown"
+            },
+            inputSummary: {
+              bookDisplayName: "失败的书",
+              templateNames: ["失败模板"],
+              modelId: "model-failed"
+            },
+            createdAt: "2026-07-02T09:20:00.000Z"
+          }
+        ]}
+        state="ready"
+      />
+    );
+
+    expect(screen.getByRole("heading", { name: "暂停的书" })).toBeInTheDocument();
+    expect(screen.getByText("模板：未选择模板")).toBeInTheDocument();
+    expect(screen.getByText("预计剩余：已暂停 00:07:00")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "失败的书" })).toBeInTheDocument();
+    expect(screen.getByText("模型返回格式无效")).toBeInTheDocument();
+    expect(screen.getByText("失败时间：2026-07-02 09:40:30")).toBeInTheDocument();
+  });
+
   it("shows upload and task loading states", () => {
     render(<ExtractionPage models={[]} books={[]} jobs={[]} state="loading" />);
 

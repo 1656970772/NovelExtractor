@@ -56,6 +56,7 @@ function installDesktopApiMock() {
     deleteJob: vi.fn(),
     readJobLog: vi.fn(),
     openJobLog: vi.fn(),
+    openJobOutputDirectory: vi.fn(),
     minimizeWindow: vi.fn(),
     toggleMaximizeWindow: vi.fn(),
     closeWindow: vi.fn(),
@@ -662,6 +663,83 @@ describe("desktop workbench shell", () => {
 
     await user.click(screen.getByRole("button", { name: "打开完整日志" }));
     expect(api.openJobLog).toHaveBeenCalledWith({ jobId: "job-1" });
+  });
+
+  it("opens a completed job output directory through the desktop api", async () => {
+    const user = userEvent.setup();
+    const api = installDesktopApiMock();
+    api.getProjectRuntime.mockResolvedValue({
+      books: [],
+      jobs: [
+        {
+          id: "job-completed",
+          bookId: "book-1",
+          status: "completed",
+          progressText: "进度：4/4",
+          progress: { completedWindowCount: 4, totalWindowCount: 4, percent: 100 },
+          output: { outputDirectoryLabel: "凡人修仙传", canOpenOutputDirectory: true },
+          inputSummary: {
+            bookDisplayName: "凡人修仙传",
+            templateNames: ["丹药分析模板"],
+            modelId: "deepseek-chat"
+          },
+          timing: {
+            completedAt: "2026-07-02T10:12:48.000Z",
+            elapsedMs: 768_000,
+            estimateState: "unknown"
+          },
+          allowedActions: ["delete"],
+          createdAt: "2026-07-02T10:00:00.000Z",
+          updatedAt: "2026-07-02T10:12:48.000Z"
+        }
+      ]
+    });
+
+    render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
+
+    await user.click(screen.getByRole("button", { name: "提取" }));
+    await user.click(await screen.findByRole("button", { name: "打开输出目录" }));
+
+    expect(api.openJobOutputDirectory).toHaveBeenCalledWith({ jobId: "job-completed" });
+  });
+
+  it("shows an extraction error when opening the job output directory fails", async () => {
+    const user = userEvent.setup();
+    const api = installDesktopApiMock();
+    api.getProjectRuntime.mockResolvedValue({
+      books: [],
+      jobs: [
+        {
+          id: "job-completed",
+          bookId: "book-1",
+          status: "completed",
+          progressText: "进度：4/4",
+          progress: { completedWindowCount: 4, totalWindowCount: 4, percent: 100 },
+          output: { outputDirectoryLabel: "凡人修仙传", canOpenOutputDirectory: true },
+          inputSummary: {
+            bookDisplayName: "凡人修仙传",
+            templateNames: ["丹药分析模板"],
+            modelId: "deepseek-chat"
+          },
+          timing: {
+            completedAt: "2026-07-02T10:12:48.000Z",
+            elapsedMs: 768_000,
+            estimateState: "unknown"
+          },
+          allowedActions: ["delete"],
+          createdAt: "2026-07-02T10:00:00.000Z",
+          updatedAt: "2026-07-02T10:12:48.000Z"
+        }
+      ]
+    });
+    api.openJobOutputDirectory.mockRejectedValueOnce(new Error("无法打开目录"));
+
+    render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
+
+    await user.click(screen.getByRole("button", { name: "提取" }));
+    await user.click(await screen.findByRole("button", { name: "打开输出目录" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("无法打开目录");
   });
 
   it("loads project template selection, saves changes, and opens template management", async () => {

@@ -626,6 +626,22 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
     }
   }
 
+  async function openJobOutputDirectory(jobId: string): Promise<void> {
+    const api = window.novelExtractor;
+    if (!api?.openJobOutputDirectory) {
+      setExtractionError("输出目录打开入口尚未就绪。");
+      return;
+    }
+
+    setExtractionError(undefined);
+
+    try {
+      await api.openJobOutputDirectory({ jobId });
+    } catch (error) {
+      setExtractionError(getErrorMessage(error, "打开输出目录失败"));
+    }
+  }
+
   async function deleteJob(jobId: string): Promise<void> {
     await runJobAction(jobId, "delete");
   }
@@ -713,6 +729,7 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
             onDeleteJob={deleteJob}
             onJobAction={runJobAction}
             onOpenJobLog={openJobLog}
+            onOpenOutputDirectory={openJobOutputDirectory}
             onReadJobLog={readJobLog}
             onTemplateSelectionChange={(templateIds) => {
               void saveTemplateSelection(templateIds);

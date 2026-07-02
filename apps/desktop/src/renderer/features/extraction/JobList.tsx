@@ -5,6 +5,7 @@ import { JobLogPanel } from "./JobLogPanel";
 import { sortExtractionJobsByCreatedAtDesc, type ExtractionJob } from "./extractionViewModel";
 import {
   filterJobs,
+  getJobCardViewModel,
   getFilterCount,
   JOB_QUEUE_FILTERS,
   type JobQueueFilter
@@ -12,16 +13,26 @@ import {
 
 export interface JobListProps {
   jobs: readonly ExtractionJob[];
+  activeJobId?: string;
   onJobAction?: (jobId: string, action: TaskAction) => Promise<void>;
   onDeleteJob?: (jobId: string) => Promise<void>;
   onOpenJobLog?: (jobId: string) => Promise<void>;
   onReadJobLog?: (jobId: string) => Promise<string>;
+  onOpenOutputDirectory?: (jobId: string) => Promise<void>;
 }
 
 const STATUS_CONFIG = getTaskStatusConfig();
 const TASK_ACTION_CONFIG = getTaskActionConfig();
 
-export function JobList({ jobs, onDeleteJob, onJobAction, onOpenJobLog, onReadJobLog }: JobListProps) {
+export function JobList({
+  activeJobId,
+  jobs,
+  onDeleteJob,
+  onJobAction,
+  onOpenJobLog,
+  onOpenOutputDirectory,
+  onReadJobLog
+}: JobListProps) {
   const [deleteCandidate, setDeleteCandidate] = useState<ExtractionJob | null>(null);
   const [activeFilter, setActiveFilter] = useState<JobQueueFilter>("all");
   const sortedJobs = sortExtractionJobsByCreatedAtDesc(jobs);
@@ -54,6 +65,14 @@ export function JobList({ jobs, onDeleteJob, onJobAction, onOpenJobLog, onReadJo
     }
   }
 
+  function openOutputDirectory(job: ExtractionJob): void {
+    if (job.status !== "completed" || !job.output?.canOpenOutputDirectory) {
+      return;
+    }
+
+    void onOpenOutputDirectory?.(job.id).catch(() => undefined);
+  }
+
   return (
     <section className="tool-panel tool-panel--wide jobs-panel" aria-labelledby="jobs-title">
       <div className="panel-heading">
@@ -81,16 +100,31 @@ export function JobList({ jobs, onDeleteJob, onJobAction, onOpenJobLog, onReadJo
         <ul className="job-list">
           {visibleJobs.map((job) => {
             const statusConfig = STATUS_CONFIG[job.status];
+            const card = getJobCardViewModel(job);
+            const jobRowClassName =
+              job.id === activeJobId ? "job-row job-card job-card--active" : "job-row job-card";
+            const shouldShowProgress =
+              card.hasStructuredProgress || card.progressText !== card.title;
+
             return (
-              <li className="job-row" key={job.id}>
-                <div className="job-row__header">
-                  <div className="job-row__summary">
-                    <strong>{statusConfig.label}</strong>
-                    <span>{job.progressText ?? "尚未开始"}</span>
+              <li className={jobRowClassName} key={job.id}>
+                <div className="job-card__header">
+                  <div className="job-card__identity">
+                    <div className="job-card__title-line">
+                      <h3 className="job-card__title">{card.title}</h3>
+                      <span className={`job-card__status job-card__status--${job.status}`}>
+                        {statusConfig.label}
+                      </span>
+                    </div>
+                    <div className="job-card__meta">
+                      <span>模板：{card.templateNamesText}</span>
+                      <span>模型：{card.modelText}</span>
+                    </div>
                   </div>
                   <div className="job-row__actions">
                     {statusConfig.allowedActions.map((action) => (
                       <button
+                        className="button button--secondary button--compact"
                         key={action}
                         onClick={() => runAction(job, action)}
                         type="button"
@@ -100,17 +134,70 @@ export function JobList({ jobs, onDeleteJob, onJobAction, onOpenJobLog, onReadJo
                     ))}
                   </div>
                 </div>
-                <div className="job-row__details">
+                {shouldShowProgress ? (
+                  <div className="job-card__progress">
+                    <div className="job-card__progress-heading">
+                      {card.hasStructuredProgress ? (
+                        <>
+                          <span>{card.progressCountText}</span>
+                          {card.progressPercentText ? <strong>{card.progressPercentText}</strong> : null}
+                        </>
+                      ) : (
+                        <span>{card.progressText}</span>
+                      )}
+                    </div>
+                    {card.hasStructuredProgress ? (
+                      <div
+                        aria-label={`任务进度 ${card.progressPercentText ?? "--"}`}
+                        aria-valuemax={100}
+                        aria-valuemin={0}
+                        aria-valuenow={card.progressWidthPercent}
+                        className="job-card__progress-track"
+                        role="progressbar"
+                      >
+                        <span
+                          className={`job-card__progress-bar job-card__progress-bar--${job.status}`}
+                          style={{ width: `${card.progressWidthPercent}%` }}
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+                <div className="job-card__details">
+                  {job.status === "completed" ? (
+                    <>
+                      <span>耗时：{card.elapsedText}</span>
+                      <span>完成时间：{card.completedAtText}</span>
+                    </>
+                  ) : null}
+                  {job.status === "failed" ? <span>失败时间：{card.failedAtText}</span> : null}
+                  {job.status === "running" || job.status === "paused" ? (
+                    <>
+                      <span>已用时：{card.elapsedText}</span>
+                      <span>预计剩余：{card.remainingText}</span>
+                    </>
+                  ) : null}
                   {job.tokenText ? <span className="job-row__token">{job.tokenText}</span> : null}
                   {job.failureReason ? (
                     <p className="danger-text job-row__failure">{job.failureReason}</p>
                   ) : null}
+                </div>
+                <div className="job-card__footer">
                   <JobLogPanel
                     jobId={job.id}
                     logFilePath={job.logFilePath}
                     onOpenLog={onOpenJobLog}
                     onReadLog={onReadJobLog}
                   />
+                  {job.status === "completed" && job.output?.canOpenOutputDirectory ? (
+                    <button
+                      className="button button--secondary button--compact"
+                      onClick={() => openOutputDirectory(job)}
+                      type="button"
+                    >
+                      打开输出目录
+                    </button>
+                  ) : null}
                 </div>
               </li>
             );

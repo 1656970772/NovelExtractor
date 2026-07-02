@@ -4,6 +4,8 @@ import type { ExtractionJob } from "./extractionViewModel";
 import {
   filterJobs,
   formatDuration,
+  formatTimestamp,
+  getJobCardViewModel,
   getFilterCount,
   getRemainingTimeLabel,
   JOB_QUEUE_FILTERS
@@ -47,6 +49,56 @@ describe("jobQueueViewModel", () => {
     expect(formatDuration(59_999)).toBe("00:59");
     expect(formatDuration(60_000)).toBe("01:00");
     expect(formatDuration(3_723_000)).toBe("01:02:03");
+  });
+
+  it("builds stable card display values from structured job fields", () => {
+    const card = getJobCardViewModel({
+      id: "job-card",
+      status: "running",
+      progressText: "窗口 2/5",
+      progress: { completedWindowCount: 2, totalWindowCount: 5, percent: 140 },
+      timing: {
+        completedAt: "2026-07-02T10:12:48.000Z",
+        elapsedMs: 332_000,
+        estimatedRemainingMs: 478_000,
+        estimateState: "available"
+      },
+      inputSummary: {
+        bookDisplayName: "凡人修仙传",
+        templateNames: ["丹药分析", "人物关系"],
+        modelId: "deepseek-chat"
+      }
+    });
+
+    expect(card.title).toBe("凡人修仙传");
+    expect(card.templateNamesText).toBe("丹药分析、人物关系");
+    expect(card.modelText).toBe("deepseek-chat");
+    expect(card.progressCountText).toBe("2 / 5");
+    expect(card.progressPercentText).toBe("100%");
+    expect(card.progressWidthPercent).toBe(100);
+    expect(card.elapsedText).toBe("00:05:32");
+    expect(card.remainingText).toBe("00:07:58");
+    expect(card.completedAtText).toBe("2026-07-02 10:12:48");
+  });
+
+  it("formats timestamps without depending on locale settings", () => {
+    expect(formatTimestamp()).toBe("--");
+    expect(formatTimestamp("2026-07-02T10:12:48.000Z")).toBe("2026-07-02 10:12:48");
+    expect(formatTimestamp("not-an-iso-timestamp-value")).toBe("--");
+  });
+
+  it("formats frozen card remaining time with three duration segments", () => {
+    const card = getJobCardViewModel({
+      id: "paused-card",
+      status: "paused",
+      timing: {
+        elapsedMs: 180_000,
+        estimatedRemainingMs: 420_000,
+        estimateState: "frozen"
+      }
+    });
+
+    expect(card.remainingText).toBe("已暂停 00:07:00");
   });
 
   it("labels frozen paused remaining time", () => {
