@@ -103,8 +103,8 @@ describe("app css template modal layout", () => {
     const templateModalRule = getRuleBody(".template-modal");
     const settingsWorkspaceRule = getRuleBody(".settings-modal__workspace");
     const activeCategoryRule = getRuleBody(".settings-modal__category-button[aria-pressed=\"true\"]");
-    const railNavRule = getRuleBody(".rail-nav");
-    const utilityGroupRule = getRuleBody(".rail-nav__utility-group");
+    const railNavRule = getRuleBody(".workbench-rail");
+    const utilityGroupRule = getRuleBody(".workbench-rail__utility-group");
     const pathPickerRule = getRuleBody(".settings-modal__path-picker");
 
     expect(templateModalRule).toContain("width: min(920px, 100%)");

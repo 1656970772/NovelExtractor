@@ -1,29 +1,38 @@
 import type { LucideIcon } from "lucide-react";
-import { FileText, FolderOpen, Settings, Workflow } from "lucide-react";
-import type { MenuItemId } from "@novel-extractor/config";
+import { Bot, FileText, FolderOpen, Settings, Workflow } from "lucide-react";
+import type { WorkbenchPage } from "./WorkbenchNav";
 
-export type WorkbenchRailPageId = Extract<MenuItemId, "assets" | "extraction" | "graph">;
-export type WorkbenchRailUtilityId = Extract<MenuItemId, "desktop-settings">;
-export type WorkbenchRailItemId = WorkbenchRailPageId | WorkbenchRailUtilityId;
-
-export interface WorkbenchRailRendererConfig {
-  readonly icon: LucideIcon;
+export interface WorkbenchNavItem {
+  readonly page: WorkbenchPage;
   readonly label: string;
+  readonly icon: LucideIcon;
 }
 
-const WORKBENCH_RAIL_RENDERER_CONFIG_BY_ID = {
-  assets: { icon: FolderOpen, label: "资源" },
-  extraction: { icon: FileText, label: "提取" },
-  graph: { icon: Workflow, label: "关系图" },
-  "desktop-settings": { icon: Settings, label: "设置" }
-} satisfies Record<WorkbenchRailItemId, WorkbenchRailRendererConfig>;
-
-export function getWorkbenchRailRendererConfig(
-  id: MenuItemId
-): WorkbenchRailRendererConfig | undefined {
-  const configs = WORKBENCH_RAIL_RENDERER_CONFIG_BY_ID as Partial<
-    Record<MenuItemId, WorkbenchRailRendererConfig>
-  >;
-
-  return configs[id];
+export interface WorkbenchUtilityNavItem {
+  readonly id: "provider-settings" | "desktop-settings";
+  readonly label: string;
+  readonly icon: LucideIcon;
 }
+
+export const WORKBENCH_NAV_ITEMS: readonly WorkbenchNavItem[] = [
+  { page: "assets", label: "资源", icon: FolderOpen },
+  { page: "extraction", label: "提取", icon: FileText },
+  { page: "graph", label: "关系图", icon: Workflow }
+];
+
+export const WORKBENCH_SETTINGS_ITEM: WorkbenchUtilityNavItem = {
+  id: "desktop-settings",
+  label: "设置",
+  icon: Settings
+};
+
+export const WORKBENCH_PROVIDER_SETTINGS_ITEM: WorkbenchUtilityNavItem = {
+  id: "provider-settings",
+  label: "大模型配置",
+  icon: Bot
+};
+
+export const WORKBENCH_UTILITY_ITEMS: readonly WorkbenchUtilityNavItem[] = [
+  WORKBENCH_PROVIDER_SETTINGS_ITEM,
+  WORKBENCH_SETTINGS_ITEM
+];

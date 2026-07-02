@@ -1,287 +1,139 @@
-import { getWorkbenchNavigation, type MenuItemConfig } from "@novel-extractor/config";
-import type { FocusEvent, ReactNode } from "react";
-import { useId, useState } from "react";
+import type { ReactNode } from "react";
+import { useState } from "react";
+import { flushSync } from "react-dom";
 import {
-  getWorkbenchRailRendererConfig,
-  type WorkbenchRailPageId,
-  type WorkbenchRailRendererConfig,
-  type WorkbenchRailUtilityId
+  WORKBENCH_NAV_ITEMS,
+  WORKBENCH_UTILITY_ITEMS,
+  type WorkbenchNavItem,
+  type WorkbenchUtilityNavItem
 } from "./workbenchNavConfig";
 
-export type WorkbenchPage = WorkbenchRailPageId;
+export type WorkbenchPage = "assets" | "extraction" | "graph";
 
 export interface WorkbenchNavProps {
   activePage: WorkbenchPage;
-  projectName: string;
   onPageChange: (page: WorkbenchPage) => void;
+  onOpenProviderConfig?: () => void;
   onOpenSettings?: () => void;
-  userMenu?: ReactNode;
 }
 
-interface WorkbenchNavigationItem extends MenuItemConfig {
-  id: WorkbenchPage;
-}
-
-interface WorkbenchPageRailItem {
-  readonly id: WorkbenchPage;
-  readonly label: string;
-  readonly icon: WorkbenchRailRendererConfig["icon"];
-}
-
-interface WorkbenchUtilityRailItem {
-  readonly id: WorkbenchRailUtilityId;
-  readonly label: string;
-  readonly icon: WorkbenchRailRendererConfig["icon"];
-}
-
-type RailItemId = WorkbenchPage | WorkbenchRailUtilityId;
-
-function isWorkbenchNavigationItem(item: MenuItemConfig): item is WorkbenchNavigationItem {
-  return item.id === "assets" || item.id === "extraction" || item.id === "graph";
-}
-
-function createPageRailItem(item: MenuItemConfig): WorkbenchPageRailItem | null {
-  if (!isWorkbenchNavigationItem(item)) {
-    return null;
-  }
-
-  const rendererConfig = getWorkbenchRailRendererConfig(item.id);
-
-  if (!rendererConfig) {
-    return null;
-  }
-
-  return {
-    id: item.id,
-    label: rendererConfig.label,
-    icon: rendererConfig.icon
-  };
-}
-
-function createUtilityRailItem(item: MenuItemConfig): WorkbenchUtilityRailItem | null {
-  if (item.id !== "desktop-settings") {
-    return null;
-  }
-
-  const rendererConfig = getWorkbenchRailRendererConfig(item.id);
-
-  if (!rendererConfig) {
-    return null;
-  }
-
-  return {
-    id: item.id,
-    label: rendererConfig.label,
-    icon: rendererConfig.icon
-  };
-}
-
-function getRailLabel(item: MenuItemConfig): string {
-  return item.shortLabel ?? item.label.slice(0, 1);
-}
+type RailItemId = WorkbenchPage | WorkbenchUtilityNavItem["id"];
 
 function getRailTooltipId(id: RailItemId): string {
-  return `rail-nav-tooltip-${id}`;
+  return `workbench-rail-tooltip-${id}`;
 }
 
 export function WorkbenchNav({
   activePage,
-  projectName,
   onPageChange,
-  onOpenSettings,
-  userMenu
-}: WorkbenchNavProps) {
-  const functionMenuId = useId();
-  const [isFunctionMenuHovered, setFunctionMenuHovered] = useState(false);
-  const [isFunctionMenuFocused, setFunctionMenuFocused] = useState(false);
-  const [isFunctionMenuPinnedOpen, setFunctionMenuPinnedOpen] = useState(false);
+  onOpenProviderConfig,
+  onOpenSettings
+}: WorkbenchNavProps): JSX.Element {
   const [hoveredRailItemId, setHoveredRailItemId] = useState<RailItemId | null>(null);
   const [focusedRailItemId, setFocusedRailItemId] = useState<RailItemId | null>(null);
-  const workbenchNavigation = getWorkbenchNavigation();
-  const topFunctionItems = workbenchNavigation.topFunctionItems.filter(isWorkbenchNavigationItem);
-  const railAssetItem = createPageRailItem(workbenchNavigation.railAssetItem);
-  const railFunctionItems = workbenchNavigation.railFunctionItems.flatMap((item) => {
-    const railItem = createPageRailItem(item);
+  const visibleRailItemId = hoveredRailItemId ?? focusedRailItemId;
 
-    return railItem ? [railItem] : [];
-  });
-  const railUtilityItems = workbenchNavigation.railUtilityItems.flatMap((item) => {
-    const railItem = createUtilityRailItem(item);
-
-    return railItem ? [railItem] : [];
-  });
-  const visibleRailTooltipId = hoveredRailItemId ?? focusedRailItemId;
-  const isFunctionMenuOpen =
-    isFunctionMenuHovered || isFunctionMenuFocused || isFunctionMenuPinnedOpen;
-
-  function changePage(page: WorkbenchPage): void {
-    onPageChange(page);
-    setFunctionMenuHovered(false);
-    setFunctionMenuFocused(false);
-    setFunctionMenuPinnedOpen(false);
+  function showFocusedTooltip(id: RailItemId): void {
+    flushSync(() => {
+      setFocusedRailItemId(id);
+    });
   }
 
-  function closeFunctionMenuAfterBlur(event: FocusEvent<HTMLDivElement>): void {
-    const nextTarget = event.relatedTarget;
+  function hideFocusedTooltip(id: RailItemId): void {
+    flushSync(() => {
+      setFocusedRailItemId((currentId) => (currentId === id ? null : currentId));
+    });
+  }
 
-    if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) {
-      setFunctionMenuFocused(false);
-      setFunctionMenuPinnedOpen(false);
+  function renderTooltip(id: RailItemId, label: string): ReactNode {
+    if (visibleRailItemId !== id) {
+      return null;
     }
-  }
-
-  function handleUtilityItemClick(item: WorkbenchUtilityRailItem): void {
-    if (item.id === "desktop-settings") {
-      onOpenSettings?.();
-    }
-  }
-
-  function focusRailItem(id: RailItemId): void {
-    setFocusedRailItemId(id);
-  }
-
-  function renderPageRailButton(item: WorkbenchPageRailItem): ReactNode {
-    const Icon = item.icon;
-    const tooltipId = getRailTooltipId(item.id);
 
     return (
-      <div className="rail-nav__button-wrap" key={item.id}>
+      <span
+        aria-label={label}
+        className="workbench-rail__tooltip"
+        id={getRailTooltipId(id)}
+        role="tooltip"
+      >
+        {label}
+      </span>
+    );
+  }
+
+  function renderPageButton(item: WorkbenchNavItem): ReactNode {
+    const Icon = item.icon;
+    const tooltipId = getRailTooltipId(item.page);
+
+    return (
+      <div className="workbench-rail__button-wrap" key={item.page}>
         <button
-          aria-describedby={visibleRailTooltipId === item.id ? tooltipId : undefined}
+          aria-describedby={visibleRailItemId === item.page ? tooltipId : undefined}
           aria-label={item.label}
-          aria-pressed={activePage === item.id}
-          className="rail-nav__button rail-nav__button--icon"
-          onBlur={() => setFocusedRailItemId(null)}
-          onClick={() => changePage(item.id)}
-          onFocus={() => focusRailItem(item.id)}
-          onMouseEnter={() => setHoveredRailItemId(item.id)}
+          aria-pressed={activePage === item.page}
+          className="workbench-rail__button"
+          onBlur={() => hideFocusedTooltip(item.page)}
+          onClick={() => onPageChange(item.page)}
+          onFocus={() => showFocusedTooltip(item.page)}
+          onMouseEnter={() => setHoveredRailItemId(item.page)}
           onMouseLeave={() => setHoveredRailItemId(null)}
           type="button"
         >
-          <Icon aria-hidden="true" className="rail-nav__icon" />
-        </button>
-        {visibleRailTooltipId === item.id ? (
-          <span className="rail-nav__tooltip" id={tooltipId} role="tooltip">
-            {item.label}
+          <span className="workbench-rail__icon" aria-hidden="true">
+            <Icon className="workbench-rail__glyph" />
           </span>
-        ) : null}
+        </button>
+        {renderTooltip(item.page, item.label)}
       </div>
     );
   }
 
-  function renderUtilityRailButton(item: WorkbenchUtilityRailItem): ReactNode {
+  function getUtilityClickHandler(item: WorkbenchUtilityNavItem): (() => void) | undefined {
+    if (item.id === "provider-settings") {
+      return onOpenProviderConfig;
+    }
+
+    return onOpenSettings;
+  }
+
+  function renderUtilityButton(item: WorkbenchUtilityNavItem): ReactNode {
     const Icon = item.icon;
     const tooltipId = getRailTooltipId(item.id);
 
     return (
-      <div className="rail-nav__button-wrap" key={item.id}>
+      <div className="workbench-rail__button-wrap" key={item.id}>
         <button
-          aria-describedby={visibleRailTooltipId === item.id ? tooltipId : undefined}
+          aria-describedby={visibleRailItemId === item.id ? tooltipId : undefined}
           aria-label={item.label}
-          className="rail-nav__button rail-nav__button--icon"
-          onBlur={() => setFocusedRailItemId(null)}
-          onClick={() => handleUtilityItemClick(item)}
-          onFocus={() => focusRailItem(item.id)}
+          className="workbench-rail__button"
+          onBlur={() => hideFocusedTooltip(item.id)}
+          onClick={getUtilityClickHandler(item)}
+          onFocus={() => showFocusedTooltip(item.id)}
           onMouseEnter={() => setHoveredRailItemId(item.id)}
           onMouseLeave={() => setHoveredRailItemId(null)}
           type="button"
         >
-          <Icon aria-hidden="true" className="rail-nav__icon" />
-        </button>
-        {visibleRailTooltipId === item.id ? (
-          <span className="rail-nav__tooltip" id={tooltipId} role="tooltip">
-            {item.label}
+          <span className="workbench-rail__icon" aria-hidden="true">
+            <Icon className="workbench-rail__glyph" />
           </span>
-        ) : null}
+        </button>
+        {renderTooltip(item.id, item.label)}
       </div>
     );
   }
 
   return (
-    <header className="workbench-nav">
-      <aside className="rail-nav" aria-label="快捷功能栏">
-        <div className="rail-nav__brand" aria-hidden="true">
-          NE
-        </div>
-        {railAssetItem ? (
-          <div className="rail-nav__group" aria-label="资源入口">
-            {renderPageRailButton(railAssetItem)}
-          </div>
-        ) : null}
-        {railFunctionItems.length > 0 ? (
-          <div className="rail-nav__group" aria-label="功能快捷入口">
-            {railFunctionItems.map(renderPageRailButton)}
-          </div>
-        ) : null}
-        {railUtilityItems.length > 0 ? (
-          <div className="rail-nav__group rail-nav__utility-group" aria-label="底部工具入口">
-            {railUtilityItems.map(renderUtilityRailButton)}
-          </div>
-        ) : null}
-      </aside>
-      <div className="top-nav">
-        <div className="top-nav__project">
-          <span>当前项目</span>
-          <strong>{projectName}</strong>
-        </div>
-        <div className="top-nav__tabs">
-          <div
-            className="top-nav__menu-wrap"
-            onBlur={closeFunctionMenuAfterBlur}
-            onFocus={() => setFunctionMenuFocused(true)}
-            onMouseEnter={() => setFunctionMenuHovered(true)}
-            onMouseLeave={() => setFunctionMenuHovered(false)}
-          >
-            <button
-              aria-controls={functionMenuId}
-              aria-expanded={isFunctionMenuOpen}
-              className="nav-tab"
-              onClick={() => setFunctionMenuPinnedOpen((currentValue) => !currentValue)}
-              type="button"
-            >
-              {workbenchNavigation.topFunctionLabel}
-            </button>
-            {isFunctionMenuOpen ? (
-              <div className="top-nav__function-panel" id={functionMenuId}>
-                <nav className="top-nav__feature-grid" aria-label="功能入口">
-                  {topFunctionItems.map((item) => (
-                    <button
-                      aria-current={activePage === item.id ? "page" : undefined}
-                      className="top-nav__feature-card"
-                      key={item.id}
-                      onClick={() => changePage(item.id)}
-                      type="button"
-                    >
-                      {item.imageSrc ? (
-                        <img
-                          alt=""
-                          className="top-nav__feature-image"
-                          src={item.imageSrc}
-                        />
-                      ) : (
-                        <span className="top-nav__feature-fallback" aria-hidden="true">
-                          {getRailLabel(item)}
-                        </span>
-                      )}
-                      <span className="top-nav__feature-name">{item.label}</span>
-                    </button>
-                  ))}
-                </nav>
-              </div>
-            ) : null}
-          </div>
-        </div>
-        <div className="top-nav__actions">
-          <button className="button button--quiet" type="button">
-            {workbenchNavigation.languageAction.label}
-          </button>
-          {userMenu ?? (
-            <button className="button button--user" type="button">
-              {workbenchNavigation.userAction.label}
-            </button>
-          )}
-        </div>
+    <nav className="workbench-rail" aria-label="工作台导航">
+      <div className="workbench-rail__brand" aria-hidden="true">
+        NE
       </div>
-    </header>
+      <div className="workbench-rail__group" aria-label="页面入口">
+        {WORKBENCH_NAV_ITEMS.map(renderPageButton)}
+      </div>
+      <div className="workbench-rail__group workbench-rail__utility-group" aria-label="工具入口">
+        {WORKBENCH_UTILITY_ITEMS.map(renderUtilityButton)}
+      </div>
+    </nav>
   );
 }

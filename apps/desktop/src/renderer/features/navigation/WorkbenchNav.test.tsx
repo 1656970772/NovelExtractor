@@ -8,101 +8,44 @@ import { WorkbenchNav } from "./WorkbenchNav";
 afterEach(() => cleanup());
 
 describe("WorkbenchNav", () => {
-  it("renders desktop function panel cards without menu roles", async () => {
-    const user = userEvent.setup();
-    render(
+  it("renders the configured page rail and utility entries with accessible names and icons", () => {
+    const { container } = render(
       <WorkbenchNav
-        activePage="assets"
-        projectName="仙途资料"
+        activePage="extraction"
         onPageChange={vi.fn()}
+        onOpenProviderConfig={vi.fn()}
         onOpenSettings={vi.fn()}
       />
     );
 
-    await user.click(screen.getByRole("button", { name: "功能" }));
+    const rail = screen.getByRole("navigation", { name: "工作台导航" });
+    const buttons = within(rail).getAllByRole("button");
+    expect(buttons).toHaveLength(5);
+    expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
+      "资源",
+      "提取",
+      "关系图",
+      "大模型配置",
+      "设置"
+    ]);
+    expect(container.querySelectorAll(".workbench-rail__icon")).toHaveLength(buttons.length);
 
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
-    expect(screen.queryByRole("menuitem")).not.toBeInTheDocument();
-
-    const desktopFunctionEntry = screen.getByRole("navigation", { name: "功能入口" });
-    expect(desktopFunctionEntry).toHaveTextContent("小说提取");
-    expect(desktopFunctionEntry).toHaveTextContent("关系图谱");
-    expect(desktopFunctionEntry).not.toHaveTextContent("资产");
-    const featureImages = desktopFunctionEntry.querySelectorAll(".top-nav__feature-image");
-    expect(featureImages).toHaveLength(2);
-    expect(featureImages[0]).toHaveAttribute("src", "function-extraction.svg");
-    expect(featureImages[1]).toHaveAttribute("src", "function-graph.svg");
-
-    expect(screen.getByLabelText("资源入口")).toBeInTheDocument();
-    expect(screen.getByLabelText("功能快捷入口")).toBeInTheDocument();
-    expect(screen.getByLabelText("底部工具入口")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "设置" }).querySelector(".rail-nav__icon")
-    ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "语言" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "用户菜单" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "大模型配置" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "功能" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "语言" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "用户菜单" })).not.toBeInTheDocument();
   });
 
-  it("opens the desktop function entry on hover and closes it after leaving", async () => {
-    const user = userEvent.setup();
-    render(
-      <WorkbenchNav
-        activePage="assets"
-        projectName="仙途资料"
-        onPageChange={vi.fn()}
-        onOpenSettings={vi.fn()}
-      />
-    );
+  it("marks the active rail page as pressed", () => {
+    render(<WorkbenchNav activePage="extraction" onPageChange={vi.fn()} onOpenSettings={vi.fn()} />);
 
-    expect(screen.queryByRole("navigation", { name: "功能入口" })).not.toBeInTheDocument();
-
-    await user.hover(screen.getByRole("button", { name: "功能" }));
-
-    const desktopFunctionEntry = screen.getByRole("navigation", { name: "功能入口" });
-    expect(within(desktopFunctionEntry).getByRole("button", { name: "小说提取" })).toBeInTheDocument();
-    expect(within(desktopFunctionEntry).getByRole("button", { name: "关系图谱" })).toBeInTheDocument();
-    expect(within(desktopFunctionEntry).queryByRole("button", { name: "资产" })).not.toBeInTheDocument();
-
-    await user.unhover(screen.getByRole("button", { name: "功能" }));
-
-    expect(screen.queryByRole("navigation", { name: "功能入口" })).not.toBeInTheDocument();
-  });
-
-  it("requests navigation changes", async () => {
-    const user = userEvent.setup();
-    const onPageChange = vi.fn();
-
-    render(
-      <WorkbenchNav
-        activePage="assets"
-        projectName="仙途资料"
-        onPageChange={onPageChange}
-        onOpenSettings={vi.fn()}
-      />
-    );
-
-    await user.click(screen.getByRole("button", { name: "功能" }));
-    await user.click(
-      within(screen.getByRole("navigation", { name: "功能入口" })).getByRole("button", {
-        name: "小说提取"
-      })
-    );
-
-    await user.click(screen.getByRole("button", { name: "功能" }));
-    await user.click(
-      within(screen.getByRole("navigation", { name: "功能入口" })).getByRole("button", {
-        name: "关系图谱"
-      })
-    );
-
-    expect(onPageChange).toHaveBeenNthCalledWith(1, "extraction");
-    expect(onPageChange).toHaveBeenNthCalledWith(2, "graph");
+    expect(screen.getByRole("button", { name: "资源" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "提取" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "关系图" })).toHaveAttribute("aria-pressed", "false");
   });
 
   it("shows a label tooltip when a rail item is hovered or focused", async () => {
     const user = userEvent.setup();
-    render(<WorkbenchNav activePage="extraction" projectName="demo" onPageChange={vi.fn()} />);
+    render(<WorkbenchNav activePage="extraction" onPageChange={vi.fn()} />);
 
     const resourceButton = screen.getByRole("button", { name: "资源" });
 
@@ -110,20 +53,18 @@ describe("WorkbenchNav", () => {
     expect(screen.getByRole("tooltip", { name: "资源" })).toBeInTheDocument();
 
     await user.unhover(resourceButton);
-    await user.tab();
-    expect(resourceButton).toHaveFocus();
+    resourceButton.focus();
     expect(screen.getByRole("tooltip", { name: "资源" })).toBeInTheDocument();
   });
 
   it("shows the hovered rail tooltip over the focused rail tooltip", async () => {
     const user = userEvent.setup();
-    render(<WorkbenchNav activePage="extraction" projectName="demo" onPageChange={vi.fn()} />);
+    render(<WorkbenchNav activePage="extraction" onPageChange={vi.fn()} />);
 
     const resourceButton = screen.getByRole("button", { name: "资源" });
     const graphButton = screen.getByRole("button", { name: "关系图" });
 
-    await user.tab();
-    expect(resourceButton).toHaveFocus();
+    resourceButton.focus();
     expect(screen.getByRole("tooltip", { name: "资源" })).toBeInTheDocument();
 
     await user.hover(graphButton);
@@ -135,7 +76,7 @@ describe("WorkbenchNav", () => {
     const user = userEvent.setup();
     const onPageChange = vi.fn();
 
-    render(<WorkbenchNav activePage="extraction" projectName="demo" onPageChange={onPageChange} />);
+    render(<WorkbenchNav activePage="extraction" onPageChange={onPageChange} />);
 
     await user.click(screen.getByRole("button", { name: "资源" }));
     await user.click(screen.getByRole("button", { name: "关系图" }));
@@ -144,21 +85,25 @@ describe("WorkbenchNav", () => {
     expect(onPageChange).toHaveBeenNthCalledWith(2, "graph");
   });
 
-  it("opens settings from the left rail utility item", async () => {
+  it("opens provider config and settings from bottom rail utility items", async () => {
     const user = userEvent.setup();
+    const onOpenProviderConfig = vi.fn();
     const onOpenSettings = vi.fn();
 
     render(
       <WorkbenchNav
         activePage="assets"
-        projectName="仙途资料"
         onPageChange={vi.fn()}
+        onOpenProviderConfig={onOpenProviderConfig}
         onOpenSettings={onOpenSettings}
       />
     );
 
-    await user.click(screen.getByRole("button", { name: "设置" }));
+    const utilityGroup = screen.getByLabelText("工具入口");
+    await user.click(within(utilityGroup).getByRole("button", { name: "大模型配置" }));
+    await user.click(within(utilityGroup).getByRole("button", { name: "设置" }));
 
+    expect(onOpenProviderConfig).toHaveBeenCalledTimes(1);
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
   });
 });

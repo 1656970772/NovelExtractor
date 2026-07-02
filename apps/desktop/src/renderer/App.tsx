@@ -27,9 +27,9 @@ import {
 } from "./features/extraction/extractionViewModel";
 import { GraphPlaceholderPage } from "./features/graph/GraphPlaceholderPage";
 import { WorkbenchNav, type WorkbenchPage } from "./features/navigation/WorkbenchNav";
+import { WorkbenchStatusBar } from "./features/navigation/WorkbenchStatusBar";
 import { WindowTitleBar } from "./features/navigation/WindowTitleBar";
 import { ProviderConfigModal } from "./features/providers/ProviderConfigModal";
-import { UserMenu } from "./features/providers/UserMenu";
 import {
   StorageSettingsModal,
   type SettingsLoadState,
@@ -182,6 +182,18 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
   function openSettings(): void {
     setSettingsModalOpen(true);
     void refreshSettings();
+  }
+
+  function minimizeWindow(): void {
+    void window.novelExtractor?.minimizeWindow?.();
+  }
+
+  function toggleMaximizeWindow(): void {
+    void window.novelExtractor?.toggleMaximizeWindow?.();
+  }
+
+  function closeWindow(): void {
+    void window.novelExtractor?.closeWindow?.();
   }
 
   async function chooseProjectDirectory(): Promise<string | undefined> {
@@ -636,7 +648,11 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
   if (!project) {
     return (
       <div className="project-gate-shell" data-testid="desktop-shell">
-        <WindowTitleBar />
+        <WindowTitleBar
+          onClose={closeWindow}
+          onMinimize={minimizeWindow}
+          onToggleMaximize={toggleMaximizeWindow}
+        />
         <main className="project-gate-main">
           <ProjectGate
             errorMessage={projectError}
@@ -652,17 +668,16 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
 
   return (
     <div className="workbench-shell" data-testid="desktop-shell">
-      <WindowTitleBar />
+      <WindowTitleBar
+        onClose={closeWindow}
+        onMinimize={minimizeWindow}
+        onToggleMaximize={toggleMaximizeWindow}
+      />
       <WorkbenchNav
         activePage={activePage}
-        projectName={project.displayName}
         onPageChange={setActivePage}
+        onOpenProviderConfig={() => setProviderModalOpen(true)}
         onOpenSettings={openSettings}
-        userMenu={
-          <UserMenu
-            onOpenProviderConfig={() => setProviderModalOpen(true)}
-          />
-        }
       />
       <main className="workbench-main" aria-label="工作台内容">
         {activePage === "assets" ? (
@@ -712,6 +727,7 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
         ) : null}
         {activePage === "graph" ? <GraphPlaceholderPage state="ready" /> : null}
       </main>
+      <WorkbenchStatusBar />
       <ProviderConfigModal
         open={isProviderModalOpen}
         providerError={providerError}

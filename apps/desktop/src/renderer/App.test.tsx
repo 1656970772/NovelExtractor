@@ -110,9 +110,16 @@ describe("desktop workbench shell", () => {
     await waitFor(() => {
       expect(api.createProject).toHaveBeenCalledWith({ displayName: "仙途资料" });
     });
-    expect(screen.getByRole("button", { name: "功能" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "语言" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "用户菜单" })).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "工作台导航" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "资源" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "提取" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "关系图" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "大模型配置" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "设置" })).toBeInTheDocument();
+    expect(screen.getByRole("contentinfo", { name: "状态栏" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "功能" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "语言" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "用户菜单" })).not.toBeInTheDocument();
   });
 
   it("loads persisted local projects before creating a new one", async () => {
@@ -164,26 +171,39 @@ describe("desktop workbench shell", () => {
     expect(await screen.findByText("已保存")).toBeInTheDocument();
   });
 
+  it("opens provider config from the rail when models already exist", async () => {
+    const user = userEvent.setup();
+    const api = installDesktopApiMock();
+    api.listProviders.mockResolvedValue([
+      {
+        id: "provider-1",
+        presetId: "deepseek",
+        displayName: "DeepSeek",
+        kind: "openai-compatible",
+        baseUrl: "https://api.deepseek.com",
+        models: [{ id: "model-a", displayName: "模型 A", enabled: true, isDefault: true }],
+        hasApiKey: true,
+        enabled: true
+      }
+    ]);
+    render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
+
+    expect(screen.queryByRole("button", { name: "前往大模型配置" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "大模型配置" }));
+
+    expect(await screen.findByRole("dialog", { name: "大模型配置" })).toBeInTheDocument();
+  });
+
   it("switches between workbench pages from navigation", async () => {
     const user = userEvent.setup();
     render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
 
     expect(screen.getByRole("heading", { name: "资产" })).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "功能" }));
-    await user.click(
-      within(screen.getByRole("navigation", { name: "功能入口" })).getByRole("button", {
-        name: "小说提取"
-      })
-    );
+    await user.click(screen.getByRole("button", { name: "提取" }));
     expect(screen.getByRole("heading", { name: "小说提取" })).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "功能" }));
-    await user.click(
-      within(screen.getByRole("navigation", { name: "功能入口" })).getByRole("button", {
-        name: "关系图谱"
-      })
-    );
+    await user.click(screen.getByRole("button", { name: "关系图" }));
     expect(screen.getByRole("heading", { name: "关系图谱" })).toBeInTheDocument();
   });
 
@@ -215,23 +235,12 @@ describe("desktop workbench shell", () => {
     expect(api.closeWindow).toHaveBeenCalledTimes(1);
   });
 
-  it("opens the same provider config dialog from user entry and empty extraction models", async () => {
+  it("opens the provider config dialog from empty extraction models", async () => {
     const user = userEvent.setup();
     installDesktopApiMock();
     render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
 
-    await user.click(screen.getByRole("button", { name: "用户菜单" }));
-    await user.click(screen.getByRole("button", { name: "大模型配置" }));
-
-    expect(screen.getByRole("dialog", { name: "大模型配置" })).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "取消" }));
-    await user.click(screen.getByRole("button", { name: "功能" }));
-    await user.click(
-      within(screen.getByRole("navigation", { name: "功能入口" })).getByRole("button", {
-        name: "小说提取"
-      })
-    );
+    await user.click(screen.getByRole("button", { name: "提取" }));
     await user.click(screen.getByRole("button", { name: "前往大模型配置" }));
 
     expect(screen.getByRole("dialog", { name: "大模型配置" })).toBeInTheDocument();
@@ -243,8 +252,8 @@ describe("desktop workbench shell", () => {
     api.saveProvider.mockRejectedValueOnce(new Error("ipc failed"));
     render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
 
-    await user.click(screen.getByRole("button", { name: "用户菜单" }));
-    await user.click(screen.getByRole("button", { name: "大模型配置" }));
+    await user.click(screen.getByRole("button", { name: "提取" }));
+    await user.click(screen.getByRole("button", { name: "前往大模型配置" }));
 
     await user.type(screen.getByLabelText("API key"), "sk-retry-after-failure");
     await user.click(screen.getByRole("button", { name: "保存配置" }));
@@ -306,12 +315,7 @@ describe("desktop workbench shell", () => {
     });
     render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
 
-    await user.click(screen.getByRole("button", { name: "功能" }));
-    await user.click(
-      within(screen.getByRole("navigation", { name: "功能入口" })).getByRole("button", {
-        name: "小说提取"
-      })
-    );
+    await user.click(screen.getByRole("button", { name: "提取" }));
 
     expect(await screen.findByText("DeepSeek / 模型 A")).toBeInTheDocument();
 
@@ -397,12 +401,7 @@ describe("desktop workbench shell", () => {
 
     render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
 
-    await user.click(screen.getByRole("button", { name: "功能" }));
-    await user.click(
-      within(screen.getByRole("navigation", { name: "功能入口" })).getByRole("button", {
-        name: "小说提取"
-      })
-    );
+    await user.click(screen.getByRole("button", { name: "提取" }));
     expect(await screen.findByText("DeepSeek / 模型 A")).toBeInTheDocument();
 
     const file = new File(["第一章 初入仙途"], "凡人修仙传.txt", { type: "text/plain" });
@@ -483,12 +482,7 @@ describe("desktop workbench shell", () => {
 
     render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
 
-    await user.click(screen.getByRole("button", { name: "功能" }));
-    await user.click(
-      within(screen.getByRole("navigation", { name: "功能入口" })).getByRole("button", {
-        name: "小说提取"
-      })
-    );
+    await user.click(screen.getByRole("button", { name: "提取" }));
 
     expect(await screen.findByText("凡人修仙传.txt")).toBeInTheDocument();
     expect(screen.getByText("已暂停")).toBeInTheDocument();
@@ -530,12 +524,7 @@ describe("desktop workbench shell", () => {
 
     cleanup();
     render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
-    await user.click(screen.getByRole("button", { name: "功能" }));
-    await user.click(
-      within(screen.getByRole("navigation", { name: "功能入口" })).getByRole("button", {
-        name: "小说提取"
-      })
-    );
+    await user.click(screen.getByRole("button", { name: "提取" }));
     await user.click(await screen.findByRole("button", { name: "重新开始" }));
     expect(api.restartJob).toHaveBeenCalledWith({ jobId: "job-1" });
   });
@@ -593,12 +582,7 @@ describe("desktop workbench shell", () => {
 
     render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
 
-    await user.click(screen.getByRole("button", { name: "功能" }));
-    await user.click(
-      within(screen.getByRole("navigation", { name: "功能入口" })).getByRole("button", {
-        name: "小说提取"
-      })
-    );
+    await user.click(screen.getByRole("button", { name: "提取" }));
     expect(await screen.findByText("DeepSeek / 模型 A")).toBeInTheDocument();
 
     const file = new File(["第一章 初入仙途"], "凡人修仙传.txt", { type: "text/plain" });
@@ -666,12 +650,7 @@ describe("desktop workbench shell", () => {
 
     render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
 
-    await user.click(screen.getByRole("button", { name: "功能" }));
-    await user.click(
-      within(screen.getByRole("navigation", { name: "功能入口" })).getByRole("button", {
-        name: "小说提取"
-      })
-    );
+    await user.click(screen.getByRole("button", { name: "提取" }));
 
     await user.click(await screen.findByRole("button", { name: "展开流程" }));
     expect(await screen.findByText(/开始任务：凡人修仙传/)).toBeInTheDocument();
@@ -710,12 +689,7 @@ describe("desktop workbench shell", () => {
     });
     render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
 
-    await user.click(screen.getByRole("button", { name: "功能" }));
-    await user.click(
-      within(screen.getByRole("navigation", { name: "功能入口" })).getByRole("button", {
-        name: "小说提取"
-      })
-    );
+    await user.click(screen.getByRole("button", { name: "提取" }));
 
     await user.click(await screen.findByRole("button", { name: /选择模板/ }));
 
@@ -768,12 +742,7 @@ describe("desktop workbench shell", () => {
     });
     render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
 
-    await user.click(screen.getByRole("button", { name: "功能" }));
-    await user.click(
-      within(screen.getByRole("navigation", { name: "功能入口" })).getByRole("button", {
-        name: "小说提取"
-      })
-    );
+    await user.click(screen.getByRole("button", { name: "提取" }));
 
     await user.click(await screen.findByRole("button", { name: "手动新增模板" }));
 
@@ -828,12 +797,7 @@ describe("desktop workbench shell", () => {
     });
     render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
 
-    await user.click(screen.getByRole("button", { name: "功能" }));
-    await user.click(
-      within(screen.getByRole("navigation", { name: "功能入口" })).getByRole("button", {
-        name: "小说提取"
-      })
-    );
+    await user.click(screen.getByRole("button", { name: "提取" }));
     const file = new File(["第一章 初入仙途"], "凡人修仙传.txt", { type: "text/plain" });
     await user.upload(screen.getByLabelText("选择小说文件"), file);
     expect(await screen.findByText("凡人修仙传.txt")).toBeInTheDocument();
@@ -875,12 +839,7 @@ describe("desktop workbench shell", () => {
     api.previewReport.mockRejectedValueOnce(new Error("预览失败"));
     render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
 
-    await user.click(screen.getByRole("button", { name: "功能" }));
-    await user.click(
-      within(screen.getByRole("navigation", { name: "功能入口" })).getByRole("button", {
-        name: "小说提取"
-      })
-    );
+    await user.click(screen.getByRole("button", { name: "提取" }));
     const file = new File(["第一章 初入仙途"], "凡人修仙传.txt", { type: "text/plain" });
     await user.upload(screen.getByLabelText("选择小说文件"), file);
     await screen.findByText("凡人修仙传.txt");
