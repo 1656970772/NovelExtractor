@@ -252,6 +252,9 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
     resume: {
       label: "继续"
     },
+    restart: {
+      label: "重新开始"
+    },
     delete: {
       label: "删除任务"
     }
@@ -267,7 +270,7 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
     },
     paused: {
       label: "已暂停",
-      allowedActions: ["resume", "delete"]
+      allowedActions: ["resume", "restart", "delete"]
     },
     completed: {
       label: "已完成",

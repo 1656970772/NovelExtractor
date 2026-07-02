@@ -74,7 +74,7 @@ export interface WindowRunServiceOptions {
   idGenerator: IdGenerator;
   onRuntimeState(state: JobRuntimeState): Promise<void> | void;
   providerStore: MainProviderStore;
-  registerReport(input: { path: string; report: ReportAsset }): void;
+  registerReport(input: { path: string; report: ReportAsset }): Promise<void> | void;
   taskLogger?: TaskTextLogger;
 }
 
@@ -1695,7 +1695,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
       reportKind: "template-output"
     };
 
-    options.registerReport({ path: reportPath, report });
+    await options.registerReport({ path: reportPath, report });
     return report;
   }
 

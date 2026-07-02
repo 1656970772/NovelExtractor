@@ -1,0 +1,367 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import type { Book, Chapter, ReportAsset } from "@novel-extractor/domain";
+import type { JobStatus } from "@novel-extractor/domain/job";
+import type { BookUploadResultDto, CreateJobDto } from "../shared/ipcTypes";
+
+export const PROJECT_RUNTIME_SCHEMA_VERSION = 1;
+
+export interface ProjectRuntimeBookRecord {
+  book: Book;
+  upload: BookUploadResultDto;
+}
+
+export interface ProjectRuntimeJobRecord {
+  id: string;
+  bookId: string;
+  status: JobStatus;
+  progressText: string;
+  tokenText?: string;
+  failureReason?: string;
+  logFilePath?: string;
+  input: CreateJobDto;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectRuntimeState {
+  schemaVersion: 1;
+  books: ProjectRuntimeBookRecord[];
+  chaptersByBookId: Record<string, Chapter[]>;
+  jobs: ProjectRuntimeJobRecord[];
+  reports: ReportAsset[];
+  reportPathById: Record<string, string>;
+}
+
+export interface SaveProjectRuntimeReportInput {
+  report: ReportAsset;
+  path: string;
+}
+
+export interface ProjectRuntimeStore {
+  load(): Promise<ProjectRuntimeState>;
+  saveUploadedBook(input: {
+    book: Book;
+    chapters: Chapter[];
+    upload: BookUploadResultDto;
+  }): Promise<void>;
+  saveJob(job: ProjectRuntimeJobRecord): Promise<void>;
+  deleteJob(jobId: string): Promise<void>;
+  saveReport(input: SaveProjectRuntimeReportInput): Promise<void>;
+}
+
+export interface FileProjectRuntimeStoreOptions {
+  projectRoot: string;
+  filePath?: string;
+}
+
+function createEmptyState(): ProjectRuntimeState {
+  return {
+    schemaVersion: PROJECT_RUNTIME_SCHEMA_VERSION,
+    books: [],
+    chaptersByBookId: {},
+    jobs: [],
+    reports: [],
+    reportPathById: {}
+  };
+}
+
+function cloneBook(book: Book): Book {
+  return { ...book };
+}
+
+function cloneUpload(upload: BookUploadResultDto): BookUploadResultDto {
+  return { ...upload };
+}
+
+function cloneChapter(chapter: Chapter): Chapter {
+  return { ...chapter };
+}
+
+function cloneJob(job: ProjectRuntimeJobRecord): ProjectRuntimeJobRecord {
+  return {
+    ...job,
+    input: {
+      ...job.input,
+      templateIds: [...job.input.templateIds]
+    }
+  };
+}
+
+function cloneReport(report: ReportAsset): ReportAsset {
+  return { ...report };
+}
+
+function cloneState(state: ProjectRuntimeState): ProjectRuntimeState {
+  return {
+    schemaVersion: PROJECT_RUNTIME_SCHEMA_VERSION,
+    books: state.books.map((record) => ({
+      book: cloneBook(record.book),
+      upload: cloneUpload(record.upload)
+    })),
+    chaptersByBookId: Object.fromEntries(
+      Object.entries(state.chaptersByBookId).map(([bookId, chapters]) => [
+        bookId,
+        chapters.map(cloneChapter)
+      ])
+    ),
+    jobs: state.jobs.map(cloneJob),
+    reports: state.reports.map(cloneReport),
+    reportPathById: { ...state.reportPathById }
+  };
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isBook(value: unknown): value is Book {
+  return (
+    isPlainRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.projectId === "string" &&
+    typeof value.displayName === "string" &&
+    typeof value.sourceAssetId === "string" &&
+    typeof value.sourceTextPath === "string" &&
+    typeof value.chapterCount === "number" &&
+    typeof value.createdAt === "string"
+  );
+}
+
+function isUpload(value: unknown): value is BookUploadResultDto {
+  return (
+    isPlainRecord(value) &&
+    typeof value.bookId === "string" &&
+    typeof value.displayName === "string" &&
+    typeof value.sourceAssetId === "string" &&
+    typeof value.sourceTextPath === "string" &&
+    typeof value.fileName === "string" &&
+    typeof value.byteSize === "number" &&
+    typeof value.encoding === "string" &&
+    typeof value.chapterCount === "number"
+  );
+}
+
+function isChapter(value: unknown): value is Chapter {
+  return (
+    isPlainRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.bookId === "string" &&
+    typeof value.index === "number" &&
+    typeof value.title === "string" &&
+    typeof value.textPath === "string"
+  );
+}
+
+function isJobStatus(value: unknown): value is JobStatus {
+  return (
+    value === "created" ||
+    value === "running" ||
+    value === "pause_requested" ||
+    value === "paused" ||
+    value === "failed" ||
+    value === "completed" ||
+    value === "deleted"
+  );
+}
+
+function isCreateJobDto(value: unknown): value is CreateJobDto {
+  return (
+    isPlainRecord(value) &&
+    typeof value.bookId === "string" &&
+    Array.isArray(value.templateIds) &&
+    value.templateIds.every((templateId) => typeof templateId === "string") &&
+    typeof value.providerConfigId === "string" &&
+    typeof value.modelId === "string" &&
+    typeof value.singleRunChapterCount === "number" &&
+    typeof value.extractionChapterCount === "number" &&
+    typeof value.overlapChapterCount === "number" &&
+    typeof value.skipAlreadyExtracted === "boolean"
+  );
+}
+
+function isJob(value: unknown): value is ProjectRuntimeJobRecord {
+  return (
+    isPlainRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.bookId === "string" &&
+    isJobStatus(value.status) &&
+    typeof value.progressText === "string" &&
+    isCreateJobDto(value.input) &&
+    typeof value.createdAt === "string" &&
+    typeof value.updatedAt === "string"
+  );
+}
+
+function isReport(value: unknown): value is ReportAsset {
+  return (
+    isPlainRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.bookId === "string" &&
+    typeof value.fileName === "string" &&
+    typeof value.displayName === "string" &&
+    typeof value.relativePath === "string" &&
+    typeof value.byteSize === "number" &&
+    typeof value.createdAt === "string" &&
+    typeof value.updatedAt === "string"
+  );
+}
+
+function normalizeInterruptedJob(job: ProjectRuntimeJobRecord): ProjectRuntimeJobRecord {
+  if (job.status !== "running" && job.status !== "pause_requested") {
+    return job;
+  }
+
+  return {
+    ...job,
+    status: "paused",
+    failureReason: undefined
+  };
+}
+
+function normalizeState(value: unknown): { changed: boolean; state: ProjectRuntimeState } {
+  if (!isPlainRecord(value)) {
+    return { changed: false, state: createEmptyState() };
+  }
+
+  const books = Array.isArray(value.books)
+    ? value.books.filter(
+        (record): record is ProjectRuntimeBookRecord =>
+          isPlainRecord(record) && isBook(record.book) && isUpload(record.upload)
+      )
+    : [];
+  const chaptersByBookId = isPlainRecord(value.chaptersByBookId)
+    ? Object.fromEntries(
+        Object.entries(value.chaptersByBookId)
+          .filter((entry): entry is [string, Chapter[]] =>
+            Array.isArray(entry[1]) && entry[1].every(isChapter)
+          )
+          .map(([bookId, chapters]) => [bookId, chapters.map(cloneChapter)])
+      )
+    : {};
+  const sourceJobs = Array.isArray(value.jobs) ? value.jobs.filter(isJob) : [];
+  const jobs = sourceJobs.map(normalizeInterruptedJob);
+  const reports = Array.isArray(value.reports) ? value.reports.filter(isReport) : [];
+  const reportPathById = isPlainRecord(value.reportPathById)
+    ? Object.fromEntries(
+        Object.entries(value.reportPathById).filter(
+          (entry): entry is [string, string] => typeof entry[1] === "string"
+        )
+      )
+    : {};
+
+  return {
+    changed:
+      value.schemaVersion !== PROJECT_RUNTIME_SCHEMA_VERSION ||
+      jobs.some((job, index) => job.status !== sourceJobs[index]?.status),
+    state: {
+      schemaVersion: PROJECT_RUNTIME_SCHEMA_VERSION,
+      books: books.map((record) => ({
+        book: cloneBook(record.book),
+        upload: cloneUpload(record.upload)
+      })),
+      chaptersByBookId,
+      jobs,
+      reports: reports.map(cloneReport),
+      reportPathById
+    }
+  };
+}
+
+export function createFileProjectRuntimeStore(
+  options: FileProjectRuntimeStoreOptions
+): ProjectRuntimeStore {
+  const filePath = options.filePath ?? path.join(options.projectRoot, "state", "project-runtime.json");
+  let statePromise: Promise<ProjectRuntimeState> | null = null;
+
+  async function saveState(state: ProjectRuntimeState): Promise<void> {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, `${JSON.stringify(cloneState(state), null, 2)}\n`, "utf8");
+  }
+
+  async function loadState(): Promise<ProjectRuntimeState> {
+    if (statePromise) {
+      return statePromise;
+    }
+
+    statePromise = (async () => {
+      let raw = "";
+      try {
+        raw = await fs.readFile(filePath, "utf8");
+      } catch {
+        return createEmptyState();
+      }
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        return createEmptyState();
+      }
+
+      const normalized = normalizeState(parsed);
+      if (normalized.changed) {
+        try {
+          await saveState(normalized.state);
+        } catch {
+          // The in-memory recovery is still useful even if the best-effort rewrite fails.
+        }
+      }
+      return normalized.state;
+    })();
+
+    return statePromise;
+  }
+
+  async function mutate(mutator: (state: ProjectRuntimeState) => void): Promise<void> {
+    const state = await loadState();
+    mutator(state);
+    await saveState(state);
+  }
+
+  return {
+    async load() {
+      return cloneState(await loadState());
+    },
+
+    async saveUploadedBook(input) {
+      await mutate((state) => {
+        state.books = [
+          ...state.books.filter((record) => record.book.id !== input.book.id),
+          {
+            book: cloneBook(input.book),
+            upload: cloneUpload(input.upload)
+          }
+        ];
+        state.chaptersByBookId[input.book.id] = input.chapters.map(cloneChapter);
+      });
+    },
+
+    async saveJob(job) {
+      await mutate((state) => {
+        const nextJob = cloneJob(job);
+        state.jobs = [
+          ...state.jobs.filter((currentJob) => currentJob.id !== nextJob.id),
+          nextJob
+        ];
+      });
+    },
+
+    async deleteJob(jobId) {
+      await mutate((state) => {
+        state.jobs = state.jobs.filter((job) => job.id !== jobId);
+      });
+    },
+
+    async saveReport(input) {
+      await mutate((state) => {
+        const nextReport = cloneReport(input.report);
+        state.reports = [
+          ...state.reports.filter((report) => report.id !== nextReport.id),
+          nextReport
+        ];
+        state.reportPathById[nextReport.id] = input.path;
+      });
+    }
+  };
+}

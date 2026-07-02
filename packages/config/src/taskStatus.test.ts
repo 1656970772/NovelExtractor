@@ -6,6 +6,7 @@ import type { TaskAction } from "./schema";
 describe("task status config", () => {
   it("loads task statuses and actions from config", () => {
     expect(getTaskStatusConfig().running.allowedActions).toEqual(["pause"]);
+    expect(getTaskStatusConfig().paused.allowedActions).toEqual(["resume", "restart", "delete"]);
     expect(getTaskStatusConfig().failed.allowedActions).toEqual(["delete"]);
   });
 
@@ -16,6 +17,7 @@ describe("task status config", () => {
     expect(taskActions?.start.label).toBe("开始");
     expect(taskActions?.pause.label).toBe("暂停");
     expect(taskActions?.resume.label).toBe("继续");
+    expect(taskActions?.restart.label).toBe("重新开始");
     expect(taskActions?.delete.label).toBe("删除任务");
   });
 });

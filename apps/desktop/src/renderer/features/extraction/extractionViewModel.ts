@@ -215,6 +215,7 @@ export function getNextTaskStatusForAction(action: TaskAction): TaskStatus | nul
   switch (action) {
     case "start":
     case "resume":
+    case "restart":
       return "running";
     case "pause":
       return "paused";

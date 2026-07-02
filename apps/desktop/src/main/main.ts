@@ -2,6 +2,7 @@ import { app, BrowserWindow, Menu, dialog, ipcMain, safeStorage, shell } from "e
 import type { OpenDialogOptions } from "electron";
 import { getThemeTokens } from "@novel-extractor/config";
 import { join } from "node:path";
+import type { JobDto } from "../shared/ipcTypes";
 import { createAppPaths } from "./appPaths";
 import { createFileCredentialStore } from "./credentials";
 import {
@@ -53,6 +54,14 @@ function createMainWindow(): void {
   }
 
   void mainWindow.loadFile(join(__dirname, "../renderer/index.html"));
+}
+
+function notifyRendererJobUpdated(job: JobDto): void {
+  for (const browserWindow of BrowserWindow.getAllWindows()) {
+    if (!browserWindow.isDestroyed()) {
+      browserWindow.webContents.send("jobs:updated", job);
+    }
+  }
 }
 
 async function chooseProjectDirectory(): Promise<string | undefined> {
@@ -117,7 +126,8 @@ void app.whenReady().then(async () => {
       credentialStore,
       providerStore,
       workspaceRoot: appPaths.userDataDir,
-      projectsRoot: () => projectStorageDirectory
+      projectsRoot: () => projectStorageDirectory,
+      onJobUpdated: notifyRendererJobUpdated
     }),
     ...createProviderIpcHandlers({ credentialStore, providerStore }),
     ...createDesktopSettingsIpcHandlers({

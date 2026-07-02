@@ -7,6 +7,7 @@ import type {
   JobLogDto,
   JobStatus,
   ProjectDto,
+  ProjectRuntimeDto,
   ProviderKind,
   ProviderViewDto,
   ReportDto,
@@ -78,6 +79,7 @@ function createHandlers(): DesktopIpcHandlers {
       chapterCount: 1
     }),
     "books:listReports": async () => [],
+    "projectRuntime:get": async () => ({ books: [], jobs: [] }),
     "templates:list": async () => ({ templates: [template] }),
     "templates:save": async (input) => ({
       ...template,
@@ -98,6 +100,7 @@ function createHandlers(): DesktopIpcHandlers {
     "jobs:start": async () => undefined,
     "jobs:pause": async () => undefined,
     "jobs:resume": async () => undefined,
+    "jobs:restart": async () => undefined,
     "jobs:delete": async () => undefined,
     "jobs:readLog": async (input) => ({
       jobId: input.jobId,
@@ -133,6 +136,7 @@ describe("desktop IPC contract", () => {
       "providers:list",
       "books:uploadTxt",
       "books:listReports",
+      "projectRuntime:get",
       "templates:list",
       "templates:save",
       "templates:delete",
@@ -142,6 +146,7 @@ describe("desktop IPC contract", () => {
       "jobs:start",
       "jobs:pause",
       "jobs:resume",
+      "jobs:restart",
       "jobs:delete",
       "jobs:readLog",
       "reports:preview"
@@ -253,7 +258,14 @@ describe("desktop IPC contract", () => {
       overlapChapterCount: number;
       skipAlreadyExtracted: boolean;
     }>();
-    expectTypeOf<JobDto>().toMatchTypeOf<{ status: JobStatus; allowedActions: Array<"start" | "pause" | "resume" | "delete"> }>();
+    expectTypeOf<JobDto>().toMatchTypeOf<{
+      status: JobStatus;
+      allowedActions: Array<"start" | "pause" | "resume" | "restart" | "delete">;
+    }>();
+    expectTypeOf<ProjectRuntimeDto>().toMatchTypeOf<{
+      books: BookUploadResultDto[];
+      jobs: JobDto[];
+    }>();
     expectTypeOf<JobLogDto>().toMatchTypeOf<{ jobId: string; logFilePath?: string; content: string }>();
     expectTypeOf<DeleteJobDto>().toMatchTypeOf<{ jobId: string; confirm: true }>();
   });

@@ -521,6 +521,173 @@ describe("P0 desktop IPC handlers", () => {
     }
   });
 
+  it("loads persisted project runtime after handlers are recreated", async () => {
+    const contract = createIpcContract();
+    const handlers = createHandlers();
+    const book = await contract.invoke(handlers, "books:uploadTxt", {
+      projectId: "project-a",
+      filePath: utf8FixturePath,
+      displayName: "凡人修仙传.txt"
+    });
+    const job = await contract.invoke(handlers, "jobs:create", {
+      bookId: book.bookId,
+      templateIds: ["pill-analysis"],
+      providerConfigId: "provider-1",
+      modelId: "mock-model",
+      singleRunChapterCount: 2,
+      extractionChapterCount: 2,
+      overlapChapterCount: 1,
+      skipAlreadyExtracted: true
+    });
+
+    const restartedHandlers = createHandlers();
+    const runtime = await contract.invoke(restartedHandlers, "projectRuntime:get", {
+      projectId: "project-a"
+    });
+
+    expect(runtime.books).toEqual([
+      expect.objectContaining({
+        bookId: book.bookId,
+        displayName: "凡人修仙传.txt",
+        fileName: path.basename(utf8FixturePath),
+        chapterCount: book.chapterCount
+      })
+    ]);
+    expect(runtime.jobs).toEqual([
+      expect.objectContaining({
+        id: job.id,
+        bookId: book.bookId,
+        status: "created",
+        progressText: "进度：0/1"
+      })
+    ]);
+  });
+
+  it("recovers running persisted jobs as paused and can resume them", async () => {
+    const mockServer = await startMockOpenAiServer({
+      expectedApiKey: "sk-resume-persisted",
+      respond: () => ({
+        body: createChatCompletionResponse({
+          content: "NO_UPDATE"
+        })
+      })
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-resume-persisted");
+    const providerStore = createProviderStore(
+      createProviderConfig({
+        apiKeyRef,
+        baseUrl: mockServer.baseUrl
+      })
+    );
+    const handlers = createHandlers({ credentialStore, providerStore });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: utf8FixturePath,
+        displayName: "凡人修仙传.txt"
+      });
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 2,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      });
+      const runtimePath = path.join(tempRoot, "projects", "project-a", "state", "project-runtime.json");
+      const rawRuntime = JSON.parse(await fs.readFile(runtimePath, "utf8")) as { jobs: Array<{ id: string; status: string }> };
+      rawRuntime.jobs = rawRuntime.jobs.map((storedJob) =>
+        storedJob.id === job.id ? { ...storedJob, status: "running" } : storedJob
+      );
+      await fs.writeFile(runtimePath, `${JSON.stringify(rawRuntime, null, 2)}\n`, "utf8");
+
+      const restartedHandlers = createHandlers({ credentialStore, providerStore });
+      const runtime = await contract.invoke(restartedHandlers, "projectRuntime:get", {
+        projectId: "project-a"
+      });
+      expect(runtime.jobs).toEqual([
+        expect.objectContaining({
+          id: job.id,
+          status: "paused",
+          allowedActions: ["resume", "restart", "delete"]
+        })
+      ]);
+
+      const resumedJob = await contract.invoke(restartedHandlers, "jobs:resume", { jobId: job.id });
+      expect(resumedJob).toMatchObject({
+        id: job.id,
+        status: "completed",
+        progressText: "进度：1/1"
+      });
+      expect(mockServer.requests).toHaveLength(1);
+    } finally {
+      await mockServer.close();
+    }
+  });
+
+  it("restarts paused jobs without skipping already extracted coverage", async () => {
+    const mockServer = await startMockOpenAiServer({
+      expectedApiKey: "sk-restart-persisted",
+      respond: () => ({
+        body: createChatCompletionResponse({
+          content: "NO_UPDATE"
+        })
+      })
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-restart-persisted");
+    const providerStore = createProviderStore(
+      createProviderConfig({
+        apiKeyRef,
+        baseUrl: mockServer.baseUrl
+      })
+    );
+    const handlers = createHandlers({ credentialStore, providerStore });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: utf8FixturePath,
+        displayName: "凡人修仙传.txt"
+      });
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 2,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      });
+      await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      expect(mockServer.requests).toHaveLength(1);
+
+      const runtimePath = path.join(tempRoot, "projects", "project-a", "state", "project-runtime.json");
+      const rawRuntime = JSON.parse(await fs.readFile(runtimePath, "utf8")) as { jobs: Array<{ id: string; status: string }> };
+      rawRuntime.jobs = rawRuntime.jobs.map((storedJob) =>
+        storedJob.id === job.id ? { ...storedJob, status: "paused" } : storedJob
+      );
+      await fs.writeFile(runtimePath, `${JSON.stringify(rawRuntime, null, 2)}\n`, "utf8");
+
+      const restartedHandlers = createHandlers({ credentialStore, providerStore });
+      await contract.invoke(restartedHandlers, "projectRuntime:get", { projectId: "project-a" });
+      const restartedJob = await contract.invoke(restartedHandlers, "jobs:restart", { jobId: job.id });
+
+      expect(restartedJob).toMatchObject({
+        id: job.id,
+        status: "completed"
+      });
+      expect(mockServer.requests).toHaveLength(2);
+    } finally {
+      await mockServer.close();
+    }
+  });
+
   it("uploads UTF-8 books, writes template reports through tool loop, and previews sanitized markdown reports", async () => {
     const mockServer = await startMockOpenAiServer({
       respond: ({ body }) => {
@@ -2518,8 +2685,12 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-usage-cache");
+    const pushedJobs: JobDto[] = [];
     const handlers = createHandlers({
       credentialStore,
+      onJobUpdated: (job: JobDto) => {
+        pushedJobs.push(job);
+      },
       providerStore: createProviderStore(
         createProviderConfig({
           apiKeyRef,
@@ -2555,6 +2726,23 @@ describe("P0 desktop IPC handlers", () => {
         progressText: "进度：4/4",
         tokenText: "Token 400 / 缓存命中率 75.00%"
       });
+      expect(pushedJobs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: job.id,
+            status: "running",
+            progressText: "进度：1/4",
+            tokenText: "Token 100 / 缓存命中率 75.00%",
+            logFilePath: expect.stringContaining("runs/job-")
+          }),
+          expect.objectContaining({
+            id: job.id,
+            status: "completed",
+            progressText: "进度：4/4",
+            tokenText: "Token 400 / 缓存命中率 75.00%"
+          })
+        ])
+      );
     } finally {
       await mockServer.close();
     }

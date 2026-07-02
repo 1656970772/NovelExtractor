@@ -1,4 +1,7 @@
-import type { ProviderKind as ConfigProviderKind } from "@novel-extractor/config";
+import type {
+  ProviderKind as ConfigProviderKind,
+  TaskAction as ConfigTaskAction
+} from "@novel-extractor/config";
 import type { JobStatus as DomainJobStatus } from "@novel-extractor/domain";
 
 export type ProviderKind = ConfigProviderKind;
@@ -14,6 +17,7 @@ export const DESKTOP_IPC_CHANNELS = [
   "providers:list",
   "books:uploadTxt",
   "books:listReports",
+  "projectRuntime:get",
   "templates:list",
   "templates:save",
   "templates:delete",
@@ -23,12 +27,17 @@ export const DESKTOP_IPC_CHANNELS = [
   "jobs:start",
   "jobs:pause",
   "jobs:resume",
+  "jobs:restart",
   "jobs:delete",
   "jobs:readLog",
   "reports:preview"
 ] as const;
 
 export type DesktopIpcChannel = (typeof DESKTOP_IPC_CHANNELS)[number];
+
+export const DESKTOP_IPC_EVENT_CHANNELS = ["jobs:updated"] as const;
+
+export type DesktopIpcEventChannel = (typeof DESKTOP_IPC_EVENT_CHANNELS)[number];
 
 export interface ProjectDto {
   id: string;
@@ -163,9 +172,14 @@ export interface JobDto {
   tokenText?: string;
   failureReason?: string;
   logFilePath?: string;
-  allowedActions: Array<"start" | "pause" | "resume" | "delete">;
+  allowedActions: ConfigTaskAction[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ProjectRuntimeDto {
+  books: BookUploadResultDto[];
+  jobs: JobDto[];
 }
 
 export interface JobLogDto {
@@ -189,6 +203,7 @@ export interface DesktopIpcRequestMap {
   "providers:list": undefined;
   "books:uploadTxt": UploadTxtDto;
   "books:listReports": { bookId: string };
+  "projectRuntime:get": { projectId: string };
   "templates:list": ListTemplatesDto;
   "templates:save": SaveTemplateDto;
   "templates:delete": DeleteTemplateDto;
@@ -198,6 +213,7 @@ export interface DesktopIpcRequestMap {
   "jobs:start": { jobId: string };
   "jobs:pause": { jobId: string };
   "jobs:resume": { jobId: string };
+  "jobs:restart": { jobId: string };
   "jobs:delete": DeleteJobDto;
   "jobs:readLog": { jobId: string };
   "reports:preview": { reportId: string };
@@ -213,6 +229,7 @@ export interface DesktopIpcResponseMap {
   "providers:list": ProviderViewDto[];
   "books:uploadTxt": BookUploadResultDto;
   "books:listReports": ReportDto[];
+  "projectRuntime:get": ProjectRuntimeDto;
   "templates:list": TemplateListDto;
   "templates:save": TemplateDto;
   "templates:delete": void;
@@ -222,9 +239,14 @@ export interface DesktopIpcResponseMap {
   "jobs:start": JobDto | void;
   "jobs:pause": JobDto | void;
   "jobs:resume": JobDto | void;
+  "jobs:restart": JobDto | void;
   "jobs:delete": void;
   "jobs:readLog": JobLogDto;
   "reports:preview": SafeMarkdownPreviewDto;
+}
+
+export interface DesktopIpcEventMap {
+  "jobs:updated": JobDto;
 }
 
 export type DesktopIpcRequest<TChannel extends DesktopIpcChannel> =
@@ -232,3 +254,6 @@ export type DesktopIpcRequest<TChannel extends DesktopIpcChannel> =
 
 export type DesktopIpcResponse<TChannel extends DesktopIpcChannel> =
   DesktopIpcResponseMap[TChannel];
+
+export type DesktopIpcEvent<TChannel extends DesktopIpcEventChannel> =
+  DesktopIpcEventMap[TChannel];

@@ -244,6 +244,25 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
     }
   }
 
+  async function refreshProjectRuntime(projectId = project?.id): Promise<void> {
+    const api = window.novelExtractor;
+    if (!projectId || !api?.getProjectRuntime) {
+      return;
+    }
+
+    try {
+      const runtime = await api.getProjectRuntime({ projectId });
+      setBooks(runtime.books.map(mapUploadResultToBook));
+      setJobs(
+        runtime.jobs
+          .map(mapJobDtoToExtractionJob)
+          .filter((job): job is ExtractionJob => Boolean(job))
+      );
+    } catch (error) {
+      setExtractionError(getErrorMessage(error, "读取项目运行状态失败"));
+    }
+  }
+
   useEffect(() => {
     if (!project) {
       return;
@@ -251,6 +270,7 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
 
     void refreshProviders();
     void refreshTemplates(project.id);
+    void refreshProjectRuntime(project.id);
   }, [project]);
 
   useEffect(() => {
@@ -259,6 +279,26 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
     }
 
     void refreshProjects();
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.novelExtractor?.onJobUpdated?.((jobDto) => {
+      const updatedJob = mapJobDtoToExtractionJob(jobDto);
+
+      if (!updatedJob) {
+        return;
+      }
+
+      setJobs((currentJobs) =>
+        currentJobs.some((job) => job.id === updatedJob.id)
+          ? currentJobs.map((job) => (job.id === updatedJob.id ? updatedJob : job))
+          : currentJobs
+      );
+    });
+
+    return () => {
+      unsubscribe?.();
+    };
   }, []);
 
   async function createProject(displayName: string): Promise<ProjectSummary> {
@@ -508,6 +548,9 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
           break;
         case "resume":
           updatedJob = await api.resumeJob({ jobId });
+          break;
+        case "restart":
+          updatedJob = await api.restartJob({ jobId });
           break;
         case "delete":
           await api.deleteJob({ jobId, confirm: true });

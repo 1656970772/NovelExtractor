@@ -46,10 +46,12 @@ function installDesktopApiMock() {
     deleteTemplate: vi.fn(),
     getTemplateSelection: vi.fn().mockResolvedValue({ projectId: "project-a", templateIds: ["pill-analysis"] }),
     saveTemplateSelection: vi.fn(),
+    getProjectRuntime: vi.fn().mockResolvedValue({ books: [], jobs: [] }),
     createJob: vi.fn(),
     startJob: vi.fn(),
     pauseJob: vi.fn(),
     resumeJob: vi.fn(),
+    restartJob: vi.fn(),
     deleteJob: vi.fn(),
     readJobLog: vi.fn(),
     onJobUpdated: vi.fn()
@@ -379,6 +381,130 @@ describe("desktop workbench shell", () => {
 
     expect(api.startJob).toHaveBeenCalledWith({ jobId: "job-1" });
     expect(await screen.findByText("运行中")).toBeInTheDocument();
+  });
+
+  it("loads persisted project runtime and routes paused job resume and restart actions", async () => {
+    const user = userEvent.setup();
+    const api = installDesktopApiMock();
+    api.listProviders.mockResolvedValue([
+      {
+        id: "provider-1",
+        presetId: "deepseek",
+        displayName: "DeepSeek",
+        kind: "openai-compatible",
+        baseUrl: "https://api.deepseek.com",
+        models: [{ id: "model-a", displayName: "模型 A", enabled: true, isDefault: true }],
+        hasApiKey: true,
+        enabled: true
+      }
+    ]);
+    api.getProjectRuntime.mockResolvedValue({
+      books: [
+        {
+          bookId: "book-1",
+          displayName: "凡人修仙传",
+          sourceAssetId: "asset-1",
+          sourceTextPath: "assets/books/book-1/source/original.txt",
+          fileName: "凡人修仙传.txt",
+          byteSize: 2048,
+          encoding: "utf-8",
+          chapterCount: 3
+        }
+      ],
+      jobs: [
+        {
+          id: "job-1",
+          bookId: "book-1",
+          status: "paused",
+          progressText: "进度：1/3",
+          tokenText: "Token 100 / 缓存命中率 75.00%",
+          logFilePath: "runs/job-1/logs/live.txt",
+          allowedActions: ["resume", "restart", "delete"],
+          createdAt: "2026-06-27T00:00:00.000Z",
+          updatedAt: "2026-06-27T00:01:00.000Z"
+        }
+      ]
+    });
+    api.resumeJob.mockResolvedValue({
+      id: "job-1",
+      bookId: "book-1",
+      status: "running",
+      progressText: "进度：1/3",
+      tokenText: "Token 100 / 缓存命中率 75.00%",
+      logFilePath: "runs/job-1/logs/live.txt",
+      allowedActions: ["pause"],
+      createdAt: "2026-06-27T00:00:00.000Z",
+      updatedAt: "2026-06-27T00:02:00.000Z"
+    });
+    api.restartJob.mockResolvedValue({
+      id: "job-1",
+      bookId: "book-1",
+      status: "running",
+      progressText: "正在准备运行窗口",
+      tokenText: "Token 0 / 缓存命中率 0.00%",
+      logFilePath: "runs/job-1/logs/restart.txt",
+      allowedActions: ["pause"],
+      createdAt: "2026-06-27T00:00:00.000Z",
+      updatedAt: "2026-06-27T00:03:00.000Z"
+    });
+
+    render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
+
+    await user.click(screen.getByRole("button", { name: "功能" }));
+    await user.click(
+      within(screen.getByRole("navigation", { name: "功能入口" })).getByRole("button", {
+        name: "小说提取"
+      })
+    );
+
+    expect(await screen.findByText("凡人修仙传.txt")).toBeInTheDocument();
+    expect(screen.getByText("已暂停")).toBeInTheDocument();
+    expect(screen.getByText("进度：1/3")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "继续" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重新开始" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "继续" }));
+    expect(api.resumeJob).toHaveBeenCalledWith({ jobId: "job-1" });
+
+    api.resumeJob.mockClear();
+    api.getProjectRuntime.mockResolvedValueOnce({
+      books: [
+        {
+          bookId: "book-1",
+          displayName: "凡人修仙传",
+          sourceAssetId: "asset-1",
+          sourceTextPath: "assets/books/book-1/source/original.txt",
+          fileName: "凡人修仙传.txt",
+          byteSize: 2048,
+          encoding: "utf-8",
+          chapterCount: 3
+        }
+      ],
+      jobs: [
+        {
+          id: "job-1",
+          bookId: "book-1",
+          status: "paused",
+          progressText: "进度：1/3",
+          tokenText: "Token 100 / 缓存命中率 75.00%",
+          logFilePath: "runs/job-1/logs/live.txt",
+          allowedActions: ["resume", "restart", "delete"],
+          createdAt: "2026-06-27T00:00:00.000Z",
+          updatedAt: "2026-06-27T00:01:00.000Z"
+        }
+      ]
+    });
+
+    cleanup();
+    render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
+    await user.click(screen.getByRole("button", { name: "功能" }));
+    await user.click(
+      within(screen.getByRole("navigation", { name: "功能入口" })).getByRole("button", {
+        name: "小说提取"
+      })
+    );
+    await user.click(await screen.findByRole("button", { name: "重新开始" }));
+    expect(api.restartJob).toHaveBeenCalledWith({ jobId: "job-1" });
   });
 
   it("refreshes a long-running job from pushed desktop snapshots before start resolves", async () => {

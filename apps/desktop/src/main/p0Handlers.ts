@@ -25,6 +25,12 @@ import type { FetchLike } from "@novel-extractor/llm";
 import { renderSafeMarkdown } from "@novel-extractor/markdown/preview";
 import { createMemoryCredentialStore, type MemoryCredentialStore } from "./credentials";
 import type { DesktopIpcHandlers } from "./ipc";
+import {
+  createFileProjectRuntimeStore,
+  type ProjectRuntimeJobRecord,
+  type ProjectRuntimeState,
+  type ProjectRuntimeStore
+} from "./projectRuntimeStore";
 import { createFileProjectStore, type MainProjectStore } from "./projectStore";
 import { createMemoryProviderStore, type MainProviderStore } from "./providerStore";
 import { createTaskTextLogger, type TaskTextLogger } from "./taskTextLogger";
@@ -32,6 +38,7 @@ import { createWindowRunService, type WindowRunArtifacts } from "./windowRunServ
 import type {
   CreateJobDto,
   JobDto,
+  ProjectRuntimeDto,
   ReportDto,
   SaveTemplateDto,
   TemplateDto,
@@ -44,6 +51,7 @@ type P0Handlers = Pick<
   | "project:list"
   | "books:uploadTxt"
   | "books:listReports"
+  | "projectRuntime:get"
   | "templates:list"
   | "templates:save"
   | "templates:delete"
@@ -53,23 +61,13 @@ type P0Handlers = Pick<
   | "jobs:start"
   | "jobs:pause"
   | "jobs:resume"
+  | "jobs:restart"
   | "jobs:delete"
   | "jobs:readLog"
   | "reports:preview"
 >;
 
-interface P0JobRecord {
-  id: string;
-  bookId: string;
-  status: JobStatus;
-  progressText: string;
-  tokenText?: string;
-  failureReason?: string;
-  logFilePath?: string;
-  input: CreateJobDto;
-  createdAt: string;
-  updatedAt: string;
-}
+type P0JobRecord = ProjectRuntimeJobRecord;
 
 interface TemplateStoreState {
   templates: TemplateDto[];
@@ -91,8 +89,10 @@ export interface P0IpcHandlersOptions {
   idGenerator?: IdGenerator;
   projectStore?: MainProjectStore;
   providerStore?: MainProviderStore;
+  projectRuntimeStoreFactory?: (project: Project) => ProjectRuntimeStore;
   credentialStore?: MemoryCredentialStore;
   fetch?: FetchLike;
+  onJobUpdated?: (job: JobDto) => void;
 }
 
 const TASK_STATUS_CONFIG = getTaskStatusConfig();
@@ -242,6 +242,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
   const activeJobRuns = new Map<string, Promise<JobDto>>();
   const reportsById = new Map<string, ReportAsset>();
   const reportPathById = new Map<string, string>();
+  const projectRuntimeStoresByRoot = new Map<string, ProjectRuntimeStore>();
   const providerStore = options.providerStore ?? createMemoryProviderStore();
   const credentialStore = options.credentialStore ?? createMemoryCredentialStore();
   const projectStore =
@@ -265,6 +266,50 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
 
   async function ensureProject(projectId: string): Promise<Project> {
     return projectStore.ensureProject(projectId);
+  }
+
+  function getProjectRuntimeStore(project: Project): ProjectRuntimeStore {
+    const storeKey = path.resolve(project.rootPath);
+    const existingStore = projectRuntimeStoresByRoot.get(storeKey);
+    if (existingStore) {
+      return existingStore;
+    }
+
+    const store =
+      options.projectRuntimeStoreFactory?.(project) ??
+      createFileProjectRuntimeStore({ projectRoot: project.rootPath });
+    projectRuntimeStoresByRoot.set(storeKey, store);
+    return store;
+  }
+
+  function hydrateProjectRuntimeState(state: ProjectRuntimeState): void {
+    for (const { book } of state.books) {
+      booksById.set(book.id, book);
+      chaptersByBookId.set(book.id, state.chaptersByBookId[book.id] ?? []);
+    }
+
+    for (const job of state.jobs) {
+      jobsById.set(job.id, job);
+    }
+
+    for (const report of state.reports) {
+      reportsById.set(report.id, report);
+      const reportPath = state.reportPathById[report.id];
+      if (reportPath) {
+        reportPathById.set(report.id, reportPath);
+      }
+    }
+  }
+
+  async function loadProjectRuntime(projectId: string): Promise<ProjectRuntimeDto> {
+    const project = await ensureProject(projectId);
+    const state = await getProjectRuntimeStore(project).load();
+    hydrateProjectRuntimeState(state);
+
+    return {
+      books: state.books.map((record) => record.upload),
+      jobs: state.jobs.filter((job) => job.status !== "deleted").map(toJobDto)
+    };
   }
 
   function createUniqueTemplateId(usedTemplateIds: Set<string>): string {
@@ -693,6 +738,14 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     };
   }
 
+  function notifyJobUpdated(job: P0JobRecord): void {
+    try {
+      options.onJobUpdated?.(toJobDto(job));
+    } catch {
+      // Renderer notification must not fail the underlying extraction run.
+    }
+  }
+
   function buildTaskInfo(job: P0JobRecord, book: Book): string {
     return [
       `任务 ${job.id}`,
@@ -733,6 +786,24 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       }
       throw error;
     }
+  }
+
+  async function persistJob(job: P0JobRecord): Promise<void> {
+    const book = requireBook(job.bookId);
+    const project = await ensureProject(book.projectId);
+    await getProjectRuntimeStore(project).saveJob(job);
+  }
+
+  async function deletePersistedJob(job: P0JobRecord): Promise<void> {
+    const book = requireBook(job.bookId);
+    const project = await ensureProject(book.projectId);
+    await getProjectRuntimeStore(project).deleteJob(job.id);
+  }
+
+  async function persistReport(report: ReportAsset, reportPath: string): Promise<void> {
+    const book = requireBook(report.bookId);
+    const project = await ensureProject(book.projectId);
+    await getProjectRuntimeStore(project).saveReport({ report, path: reportPath });
   }
 
   async function hasRunDirectory(projectRoot: string, jobId: string): Promise<boolean> {
@@ -855,9 +926,34 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     };
   }
 
-  async function runModelBackedJob(job: P0JobRecord): Promise<JobDto> {
+  interface RunModelBackedJobOptions {
+    skipAlreadyExtracted?: boolean;
+  }
+
+  function withRunOptions(
+    job: P0JobRecord,
+    runOptions: RunModelBackedJobOptions | undefined
+  ): P0JobRecord {
+    if (runOptions?.skipAlreadyExtracted === undefined) {
+      return job;
+    }
+
+    return {
+      ...job,
+      input: {
+        ...job.input,
+        templateIds: [...job.input.templateIds],
+        skipAlreadyExtracted: runOptions.skipAlreadyExtracted
+      }
+    };
+  }
+
+  async function runModelBackedJob(
+    job: P0JobRecord,
+    runOptions?: RunModelBackedJobOptions
+  ): Promise<JobDto> {
     const taskLogger = await createTaskLoggerForJob(job);
-    let runningJob = updateJob(job, {
+    let runningJob = await updateJob(job, {
       status: "running",
       progressText: "正在准备运行窗口",
       tokenText: formatTokenText(null),
@@ -866,7 +962,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     });
 
     try {
-      const artifacts = await preparePreRunArtifacts(runningJob);
+      const artifacts = await preparePreRunArtifacts(withRunOptions(runningJob, runOptions));
       await taskLogger.append(["上下文", "任务"], {
         任务ID: runningJob.id,
         书籍ID: artifacts.book.id,
@@ -881,7 +977,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
         规则快照: artifacts.rulesSnapshotPath,
         报告目录: ["reports", artifacts.book.id].join("/")
       });
-      runningJob = updateJob(runningJob, {
+      runningJob = await updateJob(runningJob, {
         progressText: `进度：0/${artifacts.runtimeWindowManifest.windows.length}`
       });
 
@@ -897,37 +993,38 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
         idGenerator,
         async onRuntimeState(state) {
           const currentJob = requireJob(state.jobId);
-          updateJob(currentJob, toJobPatchFromRuntimeState(state));
+          await updateJob(currentJob, toJobPatchFromRuntimeState(state));
         },
         providerStore,
         taskLogger,
-        registerReport({ path: reportPath, report }) {
+        async registerReport({ path: reportPath, report }) {
           reportsById.set(report.id, report);
           reportPathById.set(report.id, reportPath);
+          await persistReport(report, reportPath);
         }
       });
       const result = await windowRunService.runJobWindows({
         artifacts,
-        job: runningJob
+        job: withRunOptions(runningJob, runOptions)
       });
 
       if (!result.ok) {
         const latestJob = requireJob(runningJob.id);
-        return toJobDto(
+        const failedJob =
           latestJob.status === "failed"
             ? latestJob
-            : updateJob(latestJob, {
+            : await updateJob(latestJob, {
                 status: "failed",
                 failureReason: getRuntimeErrorReason(result.error)
-              })
-        );
+              });
+        return toJobDto(failedJob);
       }
 
       return toJobDto(requireJob(runningJob.id));
     } catch (error) {
       await taskLogger.append(["错误", "任务"], getFailureReason(error));
       return toJobDto(
-        updateJob(runningJob, {
+        await updateJob(runningJob, {
           status: "failed",
           progressText: "任务失败",
           failureReason: getFailureReason(error)
@@ -936,26 +1033,34 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     }
   }
 
-  function runOrReuseModelBackedJob(job: P0JobRecord): Promise<JobDto> {
+  function runOrReuseModelBackedJob(
+    job: P0JobRecord,
+    runOptions?: RunModelBackedJobOptions
+  ): Promise<JobDto> {
     const activeRun = activeJobRuns.get(job.id);
     if (activeRun) {
       return activeRun;
     }
 
-    const runPromise = runModelBackedJob(job).finally(() => {
+    const runPromise = runModelBackedJob(job, runOptions).finally(() => {
       activeJobRuns.delete(job.id);
     });
     activeJobRuns.set(job.id, runPromise);
     return runPromise;
   }
 
-  function updateJob(job: P0JobRecord, patch: Partial<P0JobRecord>): P0JobRecord {
+  async function updateJob(
+    job: P0JobRecord,
+    patch: Partial<P0JobRecord>
+  ): Promise<P0JobRecord> {
     const nextJob = {
       ...job,
       ...patch,
       updatedAt: clock.now()
     };
     jobsById.set(nextJob.id, nextJob);
+    await persistJob(nextJob);
+    notifyJobUpdated(nextJob);
     return nextJob;
   }
 
@@ -987,7 +1092,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
         clock,
         idGenerator
       });
-      return {
+      const result = {
         bookId: upload.book.id,
         displayName: upload.book.displayName,
         sourceAssetId: upload.book.sourceAssetId,
@@ -997,12 +1102,19 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
         encoding: upload.encoding,
         chapterCount: upload.book.chapterCount
       };
+      await getProjectRuntimeStore(project).saveUploadedBook({
+        book: upload.book,
+        chapters: upload.chapters,
+        upload: result
+      });
+      return result;
     },
     "books:listReports": async (input) =>
       [...reportsById.values()]
         .filter((report) => report.bookId === input.bookId)
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
         .map(toReportDto),
+    "projectRuntime:get": async (input) => loadProjectRuntime(input.projectId),
     "templates:list": async (input) => ({
       templates: await listTemplatesForProject(input.projectId)
     }),
@@ -1076,6 +1188,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
         updatedAt: now
       };
       jobsById.set(job.id, job);
+      await persistJob(job);
       return toJobDto(job);
     },
     "jobs:start": async (input) => {
@@ -1084,17 +1197,25 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     },
     "jobs:pause": async (input) => {
       const job = requireJob(input.jobId);
-      return toJobDto(updateJob(job, { status: "paused", progressText: "已暂停" }));
+      return toJobDto(await updateJob(job, { status: "paused", progressText: "已暂停" }));
     },
     "jobs:resume": async (input) => {
       const job = requireJob(input.jobId);
       return runOrReuseModelBackedJob(job);
     },
+    "jobs:restart": async (input) => {
+      const job = requireJob(input.jobId);
+      return runOrReuseModelBackedJob(job, { skipAlreadyExtracted: false });
+    },
     "jobs:delete": async (input) => {
       if (!input.confirm) {
         throw new Error("Delete confirmation is required");
       }
+      const job = jobsById.get(input.jobId);
       jobsById.delete(input.jobId);
+      if (job) {
+        await deletePersistedJob(job);
+      }
     },
     "jobs:readLog": async (input) => {
       const job = requireJob(input.jobId);

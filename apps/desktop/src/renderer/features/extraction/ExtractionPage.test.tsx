@@ -339,7 +339,7 @@ describe("ExtractionPage", () => {
     expect(screen.queryByRole("button", { name: "继续" })).not.toBeInTheDocument();
   });
 
-  it("shows continue when a task is paused", () => {
+  it("shows continue and restart when a task is paused", () => {
     render(
       <ExtractionPage
         models={[modelForTest]}
@@ -350,6 +350,7 @@ describe("ExtractionPage", () => {
     );
 
     expect(screen.getByRole("button", { name: "继续" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重新开始" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "暂停" })).not.toBeInTheDocument();
   });
 

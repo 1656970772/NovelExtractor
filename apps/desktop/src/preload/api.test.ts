@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { DesktopIpcChannel } from "../shared/ipcTypes";
+import type { DesktopIpcChannel, JobDto } from "../shared/ipcTypes";
 import { createNovelExtractorDesktopApi } from "./api";
 
 describe("preload desktop API", () => {
@@ -47,6 +47,8 @@ describe("preload desktop API", () => {
     await api.listProviders();
     await api.uploadTxt({ projectId: "project-1", filePath: "E:\\books\\novel.txt" });
     await api.listReports({ bookId: "book-1" });
+    await api.previewReport({ reportId: "report-1" });
+    await api.getProjectRuntime({ projectId: "project-1" });
     await api.listTemplates({ projectId: "project-1" });
     await api.saveTemplate({
       projectId: "project-1",
@@ -71,9 +73,9 @@ describe("preload desktop API", () => {
     await api.startJob({ jobId: "job-1" });
     await api.pauseJob({ jobId: "job-1" });
     await api.resumeJob({ jobId: "job-1" });
+    await api.restartJob({ jobId: "job-1" });
     await api.deleteJob({ jobId: "job-1", confirm: true });
     await api.readJobLog({ jobId: "job-1" });
-    await api.previewReport({ reportId: "report-1" });
 
     expect(calls.map((call) => call.channel)).toEqual([
       "project:create",
@@ -85,6 +87,8 @@ describe("preload desktop API", () => {
       "providers:list",
       "books:uploadTxt",
       "books:listReports",
+      "reports:preview",
+      "projectRuntime:get",
       "templates:list",
       "templates:save",
       "templates:delete",
@@ -94,11 +98,11 @@ describe("preload desktop API", () => {
       "jobs:start",
       "jobs:pause",
       "jobs:resume",
+      "jobs:restart",
       "jobs:delete",
-      "jobs:readLog",
-      "reports:preview"
+      "jobs:readLog"
     ]);
-    expect(invoke).toHaveBeenCalledTimes(21);
+    expect(invoke).toHaveBeenCalledTimes(23);
   });
 
   it("does not expose raw invoke or the raw Electron renderer bridge", () => {
@@ -116,6 +120,7 @@ describe("preload desktop API", () => {
       "uploadTxt",
       "listReports",
       "previewReport",
+      "getProjectRuntime",
       "listTemplates",
       "saveTemplate",
       "deleteTemplate",
@@ -125,8 +130,10 @@ describe("preload desktop API", () => {
       "startJob",
       "pauseJob",
       "resumeJob",
+      "restartJob",
       "deleteJob",
-      "readJobLog"
+      "readJobLog",
+      "onJobUpdated"
     ]);
     expect(api).not.toHaveProperty("invoke");
     expect(api).not.toHaveProperty(rawIpcRendererName);
@@ -136,11 +143,13 @@ describe("preload desktop API", () => {
     vi.resetModules();
     const exposeInMainWorld = vi.fn();
     const invoke = vi.fn(async () => []);
+    const on = vi.fn();
+    const removeListener = vi.fn();
     const rawIpcRendererName = "ipc" + "Renderer";
 
     vi.doMock("electron", () => ({
       contextBridge: { exposeInMainWorld },
-      [rawIpcRendererName]: { invoke }
+      [rawIpcRendererName]: { invoke, on, removeListener }
     }));
 
     await import("./index");
@@ -155,5 +164,26 @@ describe("preload desktop API", () => {
     const listProjects = api.listProjects as () => Promise<unknown>;
     await listProjects();
     expect(invoke).toHaveBeenCalledWith("project:list", undefined);
+
+    const pushedJob: JobDto = {
+      id: "job-1",
+      bookId: "book-1",
+      status: "running",
+      progressText: "进度：1/3",
+      allowedActions: ["pause"],
+      createdAt: "2026-06-27T00:00:00.000Z",
+      updatedAt: "2026-06-27T00:01:00.000Z"
+    };
+    const onJobUpdated = api.onJobUpdated as (handler: (job: JobDto) => void) => () => void;
+    const handler = vi.fn();
+    const unsubscribe = onJobUpdated(handler);
+    const listener = on.mock.calls[0]?.[1] as (event: unknown, payload: JobDto) => void;
+
+    expect(on).toHaveBeenCalledWith("jobs:updated", expect.any(Function));
+    listener({}, pushedJob);
+    expect(handler).toHaveBeenCalledWith(pushedJob);
+
+    unsubscribe();
+    expect(removeListener).toHaveBeenCalledWith("jobs:updated", listener);
   });
 });

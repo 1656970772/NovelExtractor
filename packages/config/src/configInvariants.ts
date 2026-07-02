@@ -17,8 +17,14 @@ export class ConfigInvariantError extends Error {
   }
 }
 
-const ALLOWED_TASK_ACTIONS = new Set<TaskAction>(["start", "pause", "resume", "delete"]);
-const REQUIRED_TASK_ACTIONS: TaskAction[] = ["start", "pause", "resume", "delete"];
+const ALLOWED_TASK_ACTIONS = new Set<TaskAction>([
+  "start",
+  "pause",
+  "resume",
+  "restart",
+  "delete"
+]);
+const REQUIRED_TASK_ACTIONS: TaskAction[] = ["start", "pause", "resume", "restart", "delete"];
 const ALLOWED_FALLBACK_STRATEGIES = new Set(["none", "semanticRuleFilter", "matchAll"]);
 const ALLOWED_FALLBACK_SOURCES = new Set(["runtimePolicySnapshot", "rulesSnapshot"]);
 const ALLOWED_FALLBACK_NO_MATCH_ACTIONS = new Set(["no-update", "blocked_for_user"]);
