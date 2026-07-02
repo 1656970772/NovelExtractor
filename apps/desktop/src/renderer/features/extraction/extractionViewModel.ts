@@ -33,6 +33,7 @@ export interface ExtractionJob {
   tokenText?: string;
   failureReason?: string;
   logFilePath?: string;
+  createdAt?: string;
 }
 
 export interface ExtractionFormState {
@@ -207,8 +208,30 @@ export function mapJobDtoToExtractionJob(job: JobDto): ExtractionJob | null {
     progressText: job.progressText,
     tokenText: job.tokenText,
     failureReason: job.failureReason,
-    logFilePath: job.logFilePath
+    logFilePath: job.logFilePath,
+    createdAt: job.createdAt
   };
+}
+
+function toSortableCreatedAt(job: ExtractionJob): number {
+  if (!job.createdAt) {
+    return Number.NEGATIVE_INFINITY;
+  }
+
+  const timestamp = Date.parse(job.createdAt);
+  return Number.isNaN(timestamp) ? Number.NEGATIVE_INFINITY : timestamp;
+}
+
+export function sortExtractionJobsByCreatedAtDesc(
+  jobs: readonly ExtractionJob[]
+): ExtractionJob[] {
+  return jobs
+    .map((job, index) => ({ job, index }))
+    .sort((left, right) => {
+      const createdAtDifference = toSortableCreatedAt(right.job) - toSortableCreatedAt(left.job);
+      return createdAtDifference || left.index - right.index;
+    })
+    .map(({ job }) => job);
 }
 
 export function getNextTaskStatusForAction(action: TaskAction): TaskStatus | null {

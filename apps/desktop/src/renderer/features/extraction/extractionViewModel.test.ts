@@ -4,7 +4,8 @@ import {
   buildCreateJobDto,
   createExtractionFormState,
   formatByteSize,
-  mapJobDtoToExtractionJob
+  mapJobDtoToExtractionJob,
+  sortExtractionJobsByCreatedAtDesc
 } from "./extractionViewModel";
 
 const book: BookUploadResultDto = {
@@ -146,7 +147,26 @@ describe("extractionViewModel", () => {
       status: "pending",
       progressText: "进度：0/3",
       tokenText: "Token 0 / 缓存命中率 0.00%",
-      logFilePath: "runs/job-1/logs/20260630-153012.txt"
+      logFilePath: "runs/job-1/logs/20260630-153012.txt",
+      createdAt: "2026-06-27T00:00:00.000Z"
     });
+  });
+
+  it("sorts extraction jobs by creation time with undated jobs kept last", () => {
+    const sortedJobs = sortExtractionJobsByCreatedAtDesc([
+      { id: "undated-a", status: "pending" },
+      { id: "old", status: "completed", createdAt: "2026-06-27T09:00:00.000Z" },
+      { id: "new", status: "failed", createdAt: "2026-07-02T09:00:00.000Z" },
+      { id: "undated-b", status: "running" },
+      { id: "middle", status: "running", createdAt: "2026-06-30T09:00:00.000Z" }
+    ]);
+
+    expect(sortedJobs.map((job) => job.id)).toEqual([
+      "new",
+      "middle",
+      "old",
+      "undated-a",
+      "undated-b"
+    ]);
   });
 });

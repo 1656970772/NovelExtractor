@@ -7,7 +7,7 @@ describe("task status config", () => {
   it("loads task statuses and actions from config", () => {
     expect(getTaskStatusConfig().running.allowedActions).toEqual(["pause"]);
     expect(getTaskStatusConfig().paused.allowedActions).toEqual(["resume", "restart", "delete"]);
-    expect(getTaskStatusConfig().failed.allowedActions).toEqual(["delete"]);
+    expect(getTaskStatusConfig().failed.allowedActions).toEqual(["resume", "restart", "delete"]);
   });
 
   it("keeps task action labels in config instead of renderer status branches", () => {

@@ -278,7 +278,7 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
     },
     failed: {
       label: "失败",
-      allowedActions: ["delete"]
+      allowedActions: ["resume", "restart", "delete"]
     }
   },
   assetTypes: [

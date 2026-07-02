@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { TaskAction } from "@novel-extractor/config";
 import { getTaskActionConfig, getTaskStatusConfig } from "@novel-extractor/config";
 import { JobLogPanel } from "./JobLogPanel";
-import type { ExtractionJob } from "./extractionViewModel";
+import { sortExtractionJobsByCreatedAtDesc, type ExtractionJob } from "./extractionViewModel";
 
 export interface JobListProps {
   jobs: readonly ExtractionJob[];
@@ -17,6 +17,7 @@ const TASK_ACTION_CONFIG = getTaskActionConfig();
 
 export function JobList({ jobs, onDeleteJob, onJobAction, onOpenJobLog, onReadJobLog }: JobListProps) {
   const [deleteCandidate, setDeleteCandidate] = useState<ExtractionJob | null>(null);
+  const sortedJobs = sortExtractionJobsByCreatedAtDesc(jobs);
 
   function runAction(job: ExtractionJob, action: TaskAction): void {
     if (action === "delete") {
@@ -55,7 +56,7 @@ export function JobList({ jobs, onDeleteJob, onJobAction, onOpenJobLog, onReadJo
         <p className="empty-text">暂无提取任务</p>
       ) : (
         <ul className="job-list">
-          {jobs.map((job) => {
+          {sortedJobs.map((job) => {
             const statusConfig = STATUS_CONFIG[job.status];
             return (
               <li className="job-row" key={job.id}>

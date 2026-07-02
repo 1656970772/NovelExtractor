@@ -3620,7 +3620,7 @@ describe("P0 desktop IPC handlers", () => {
         id: job.id,
         status: "failed",
         progressText: "进度：0/1",
-        allowedActions: ["delete"]
+        allowedActions: ["resume", "restart", "delete"]
       });
       expect(failedJob?.failureReason).toContain("write_file");
       expect(reports).toEqual([]);
@@ -3691,7 +3691,7 @@ describe("P0 desktop IPC handlers", () => {
         id: job.id,
         status: "failed",
         progressText: "进度：0/2",
-        allowedActions: ["delete"]
+        allowedActions: ["resume", "restart", "delete"]
       });
       expect(failedJob?.failureReason).toContain("窗口 1/2");
       expect(failedJob?.failureReason).not.toContain("sk-p0-mock");
@@ -5774,7 +5774,7 @@ describe("P0 desktop IPC handlers", () => {
           id: job.id,
           status: "failed",
           progressText: "进度：1/2",
-          allowedActions: ["delete"]
+          allowedActions: ["resume", "restart", "delete"]
         });
         expect(failedJob?.failureReason).toContain("read_file");
         expect(failedJob?.failureReason).toContain("grep");
@@ -5855,7 +5855,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(failedJob).toMatchObject({
         id: job.id,
         status: "failed",
-        allowedActions: ["delete"]
+        allowedActions: ["resume", "restart", "delete"]
       });
       expect(existsSync(leakedReportPath)).toBe(false);
       expect(reports).toEqual([]);
@@ -5931,7 +5931,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(failedJob).toMatchObject({
         id: job.id,
         status: "failed",
-        allowedActions: ["delete"]
+        allowedActions: ["resume", "restart", "delete"]
       });
       expect(failedJob?.failureReason).toContain("材料分析.md");
       expect(failedJob?.failureReason).toContain("选中模板");
@@ -6154,7 +6154,7 @@ describe("P0 desktop IPC handlers", () => {
         id: job.id,
         status: "failed",
         progressText: "进度：1/3",
-        allowedActions: ["delete"]
+        allowedActions: ["resume", "restart", "delete"]
       });
       expect(failedJob?.failureReason).toContain("窗口 2");
       expect(failedJob?.failureReason).toContain("HTTP 500");
@@ -7232,7 +7232,7 @@ describe("P0 desktop IPC handlers", () => {
     expect(failedJob).toMatchObject({
       id: job.id,
       status: "failed",
-      allowedActions: ["delete"]
+      allowedActions: ["resume", "restart", "delete"]
     });
     expect(failedJob.failureReason).toBeTruthy();
     expect(JSON.stringify(failedJob)).not.toContain("sk-p0-mock");
@@ -7283,7 +7283,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(failedJob).toMatchObject({
         id: job.id,
         status: "failed",
-        allowedActions: ["delete"]
+        allowedActions: ["resume", "restart", "delete"]
       });
       expect(failedJob.failureReason).toContain("HTTP 400");
       await expect(contract.invoke(handlers, "books:listReports", { bookId: book.bookId })).resolves.toEqual([]);

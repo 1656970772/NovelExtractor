@@ -354,7 +354,7 @@ describe("ExtractionPage", () => {
     expect(screen.queryByRole("button", { name: "暂停" })).not.toBeInTheDocument();
   });
 
-  it("shows failure reason and delete entry when a task failed", () => {
+  it("shows failure reason and retry entries when a task failed", () => {
     render(
       <ExtractionPage
         models={[modelForTest]}
@@ -365,7 +365,47 @@ describe("ExtractionPage", () => {
     );
 
     expect(screen.getByText("模型返回格式无效")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "继续" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重新开始" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "删除任务" })).toBeInTheDocument();
+  });
+
+  it("orders task rows by creation time with the newest task first", () => {
+    render(
+      <ExtractionPage
+        models={[modelForTest]}
+        books={[]}
+        jobs={[
+          {
+            id: "job-old",
+            status: "completed",
+            progressText: "旧任务",
+            createdAt: "2026-06-27T09:00:00.000Z"
+          },
+          {
+            id: "job-new",
+            status: "failed",
+            progressText: "新任务",
+            failureReason: "最新失败",
+            createdAt: "2026-07-02T09:00:00.000Z"
+          },
+          {
+            id: "job-middle",
+            status: "running",
+            progressText: "中间任务",
+            createdAt: "2026-06-30T09:00:00.000Z"
+          }
+        ]}
+        state="ready"
+      />
+    );
+
+    const jobPanel = screen.getByRole("region", { name: "提取任务" });
+    const rows = within(jobPanel).getAllByRole("listitem");
+
+    expect(rows[0]).toHaveTextContent("新任务");
+    expect(rows[1]).toHaveTextContent("中间任务");
+    expect(rows[2]).toHaveTextContent("旧任务");
   });
 
   it("shows start when a task is pending", () => {
@@ -389,12 +429,13 @@ describe("ExtractionPage", () => {
         running: { label: "运行中", allowedActions: ["pause"] },
         paused: { label: "已暂停", allowedActions: ["resume"] },
         completed: { label: "已完成", allowedActions: ["delete"] },
-        failed: { label: "失败", allowedActions: ["delete"] }
+        failed: { label: "失败", allowedActions: ["resume", "restart", "delete"] }
       }),
       getTaskActionConfig: () => ({
         start: { label: "配置开始" },
         pause: { label: "配置暂停" },
         resume: { label: "配置继续" },
+        restart: { label: "配置重试" },
         delete: { label: "配置删除" }
       }),
       getBuiltInTemplates: () => [
@@ -428,7 +469,8 @@ describe("ExtractionPage", () => {
     );
 
     expect(screen.getByRole("button", { name: "配置暂停" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "配置继续" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "配置继续" })).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "配置重试" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "配置删除" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "配置开始" })).toBeInTheDocument();
   });
@@ -454,6 +496,31 @@ describe("ExtractionPage", () => {
 
     expect(onJobAction).toHaveBeenNthCalledWith(1, "job-running", "pause");
     expect(onJobAction).toHaveBeenNthCalledWith(2, "job-paused", "resume");
+  });
+
+  it("routes failed task continue and restart actions", async () => {
+    const user = userEvent.setup();
+    const onJobAction = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ExtractionPage
+        models={[modelForTest]}
+        books={[uploadedBookForTest]}
+        jobs={[
+          { id: "job-failed", status: "failed", progressText: "窗口 7/10", failureReason: "窗口执行失败" }
+        ]}
+        state="ready"
+        onJobAction={onJobAction}
+      />
+    );
+
+    const failedRow = screen.getByText("窗口执行失败").closest("li");
+    expect(failedRow).toBeInstanceOf(HTMLElement);
+
+    await user.click(within(failedRow as HTMLElement).getByRole("button", { name: "继续" }));
+    await user.click(within(failedRow as HTMLElement).getByRole("button", { name: "重新开始" }));
+
+    expect(onJobAction).toHaveBeenNthCalledWith(1, "job-failed", "resume");
+    expect(onJobAction).toHaveBeenNthCalledWith(2, "job-failed", "restart");
   });
 
   it("confirms deletion without claiming shared report files are deleted", async () => {
