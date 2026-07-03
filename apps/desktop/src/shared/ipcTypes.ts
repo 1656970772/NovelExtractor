@@ -31,6 +31,10 @@ export const DESKTOP_IPC_CHANNELS = [
   "jobs:delete",
   "jobs:readLog",
   "jobs:openLog",
+  "jobs:openOutputDirectory",
+  "window:minimize",
+  "window:toggleMaximize",
+  "window:close",
   "reports:preview"
 ] as const;
 
@@ -165,11 +169,40 @@ export interface CreateJobDto {
   skipAlreadyExtracted: boolean;
 }
 
+export interface JobProgressDto {
+  completedWindowCount: number;
+  totalWindowCount: number;
+  percent: number;
+}
+
+export interface JobTimingDto {
+  startedAt?: string;
+  completedAt?: string;
+  elapsedMs?: number;
+  estimatedRemainingMs?: number;
+  estimateState: "unknown" | "calculating" | "available" | "frozen";
+}
+
+export interface JobOutputDto {
+  outputDirectoryLabel?: string;
+  canOpenOutputDirectory: boolean;
+}
+
+export interface InputSummaryDto {
+  bookDisplayName: string;
+  templateNames: string[];
+  modelId: string;
+}
+
 export interface JobDto {
   id: string;
   bookId: string;
   status: JobStatus;
   progressText: string;
+  progress?: JobProgressDto;
+  timing?: JobTimingDto;
+  output?: JobOutputDto;
+  inputSummary?: InputSummaryDto;
   tokenText?: string;
   failureReason?: string;
   logFilePath?: string;
@@ -190,6 +223,10 @@ export interface JobLogDto {
 }
 
 export interface OpenJobLogDto {
+  jobId: string;
+}
+
+export interface OpenJobOutputDirectoryDto {
   jobId: string;
 }
 
@@ -222,6 +259,10 @@ export interface DesktopIpcRequestMap {
   "jobs:delete": DeleteJobDto;
   "jobs:readLog": { jobId: string };
   "jobs:openLog": OpenJobLogDto;
+  "jobs:openOutputDirectory": OpenJobOutputDirectoryDto;
+  "window:minimize": undefined;
+  "window:toggleMaximize": undefined;
+  "window:close": undefined;
   "reports:preview": { reportId: string };
 }
 
@@ -249,6 +290,10 @@ export interface DesktopIpcResponseMap {
   "jobs:delete": void;
   "jobs:readLog": JobLogDto;
   "jobs:openLog": void;
+  "jobs:openOutputDirectory": void;
+  "window:minimize": void;
+  "window:toggleMaximize": void;
+  "window:close": void;
   "reports:preview": SafeMarkdownPreviewDto;
 }
 

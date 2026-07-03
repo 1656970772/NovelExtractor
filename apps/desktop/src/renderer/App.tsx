@@ -27,8 +27,9 @@ import {
 } from "./features/extraction/extractionViewModel";
 import { GraphPlaceholderPage } from "./features/graph/GraphPlaceholderPage";
 import { WorkbenchNav, type WorkbenchPage } from "./features/navigation/WorkbenchNav";
+import { WorkbenchStatusBar } from "./features/navigation/WorkbenchStatusBar";
+import { WindowTitleBar } from "./features/navigation/WindowTitleBar";
 import { ProviderConfigModal } from "./features/providers/ProviderConfigModal";
-import { UserMenu } from "./features/providers/UserMenu";
 import {
   StorageSettingsModal,
   type SettingsLoadState,
@@ -181,6 +182,18 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
   function openSettings(): void {
     setSettingsModalOpen(true);
     void refreshSettings();
+  }
+
+  function minimizeWindow(): void {
+    void window.novelExtractor?.minimizeWindow?.();
+  }
+
+  function toggleMaximizeWindow(): void {
+    void window.novelExtractor?.toggleMaximizeWindow?.();
+  }
+
+  function closeWindow(): void {
+    void window.novelExtractor?.closeWindow?.();
   }
 
   async function chooseProjectDirectory(): Promise<string | undefined> {
@@ -613,6 +626,22 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
     }
   }
 
+  async function openJobOutputDirectory(jobId: string): Promise<void> {
+    const api = window.novelExtractor;
+    if (!api?.openJobOutputDirectory) {
+      setExtractionError("输出目录打开入口尚未就绪。");
+      return;
+    }
+
+    setExtractionError(undefined);
+
+    try {
+      await api.openJobOutputDirectory({ jobId });
+    } catch (error) {
+      setExtractionError(getErrorMessage(error, "打开输出目录失败"));
+    }
+  }
+
   async function deleteJob(jobId: string): Promise<void> {
     await runJobAction(jobId, "delete");
   }
@@ -634,30 +663,37 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
 
   if (!project) {
     return (
-      <main className="project-gate-shell" data-testid="desktop-shell">
-        <ProjectGate
-          errorMessage={projectError}
-          projects={projects}
-          state={projectState}
-          onCreateProject={createProject}
-          onSelectProject={setProject}
+      <div className="project-gate-shell" data-testid="desktop-shell">
+        <WindowTitleBar
+          onClose={closeWindow}
+          onMinimize={minimizeWindow}
+          onToggleMaximize={toggleMaximizeWindow}
         />
-      </main>
+        <main className="project-gate-main">
+          <ProjectGate
+            errorMessage={projectError}
+            projects={projects}
+            state={projectState}
+            onCreateProject={createProject}
+            onSelectProject={setProject}
+          />
+        </main>
+      </div>
     );
   }
 
   return (
     <div className="workbench-shell" data-testid="desktop-shell">
+      <WindowTitleBar
+        onClose={closeWindow}
+        onMinimize={minimizeWindow}
+        onToggleMaximize={toggleMaximizeWindow}
+      />
       <WorkbenchNav
         activePage={activePage}
-        projectName={project.displayName}
         onPageChange={setActivePage}
+        onOpenProviderConfig={() => setProviderModalOpen(true)}
         onOpenSettings={openSettings}
-        userMenu={
-          <UserMenu
-            onOpenProviderConfig={() => setProviderModalOpen(true)}
-          />
-        }
       />
       <main className="workbench-main" aria-label="工作台内容">
         {activePage === "assets" ? (
@@ -693,6 +729,7 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
             onDeleteJob={deleteJob}
             onJobAction={runJobAction}
             onOpenJobLog={openJobLog}
+            onOpenOutputDirectory={openJobOutputDirectory}
             onReadJobLog={readJobLog}
             onTemplateSelectionChange={(templateIds) => {
               void saveTemplateSelection(templateIds);
@@ -707,6 +744,7 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
         ) : null}
         {activePage === "graph" ? <GraphPlaceholderPage state="ready" /> : null}
       </main>
+      <WorkbenchStatusBar />
       <ProviderConfigModal
         open={isProviderModalOpen}
         providerError={providerError}

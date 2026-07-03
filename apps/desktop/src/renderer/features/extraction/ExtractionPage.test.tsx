@@ -50,7 +50,83 @@ const projectTemplateForTest: TemplateDto = {
 };
 
 describe("ExtractionPage", () => {
-  it("accepts only txt uploads and shows uploaded book metadata", async () => {
+  it("omits legacy daily summary cards from the extraction page", () => {
+    const { container } = render(
+      <ExtractionPage
+        models={[modelForTest]}
+        books={[]}
+        jobs={[
+          { id: "job-running", status: "running", progressText: "运行中" },
+          { id: "job-completed", status: "completed", progressText: "已完成" },
+          { id: "job-failed", status: "failed", progressText: "失败" }
+        ]}
+        state="ready"
+      />
+    );
+
+    const summaryCards = Array.from(container.querySelectorAll(".summary-card"));
+
+    expect(screen.queryByText("今日任务")).not.toBeInTheDocument();
+    expect(summaryCards).toHaveLength(0);
+    expect(
+      summaryCards.some((card) =>
+        ["进行中", "已完成", "失败"].some((label) => card.textContent?.includes(label))
+      )
+    ).toBe(false);
+  });
+
+  it("renders novel upload before template upload and keeps their regions distinct", () => {
+    const { container } = render(
+      <ExtractionPage
+        projectId="project-a"
+        models={[modelForTest]}
+        books={[]}
+        jobs={[]}
+        state="ready"
+        onSaveTemplate={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+
+    const novelUploadPanel = screen.getByRole("region", { name: "上传小说" });
+    const templateUploadPanel = screen.getByRole("region", { name: "上传模板" });
+    const dropZone = within(novelUploadPanel).getByRole("button", { name: "拖拽上传小说原文" });
+
+    expect(dropZone).toHaveClass("novel-upload__zone");
+    expect(container.querySelector(".extraction-layout")).toBeInTheDocument();
+    expect(novelUploadPanel.compareDocumentPosition(templateUploadPanel) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
+  });
+
+  it("groups extraction parameters without disabling key inputs", () => {
+    render(
+      <ExtractionPage
+        models={[modelForTest]}
+        books={[uploadedBookForTest]}
+        jobs={[]}
+        state="ready"
+        templates={[globalTemplateForTest, projectTemplateForTest]}
+        selectedTemplateIds={[globalTemplateForTest.id]}
+        onOpenTemplateManager={vi.fn()}
+      />
+    );
+
+    const parametersPanel = screen.getByRole("region", { name: "提取参数" });
+    const ruleGroup = within(parametersPanel).getByRole("group", { name: "提取规则" });
+    const chapterGroup = within(parametersPanel).getByRole("group", { name: "章节识别" });
+    const duplicateFilterGroup = within(parametersPanel).getByRole("group", { name: "重复章节过滤" });
+    const modelGroup = within(parametersPanel).getByRole("group", { name: "模型设置" });
+
+    expect(within(ruleGroup).getByLabelText("书籍")).toBeEnabled();
+    expect(within(ruleGroup).getByRole("button", { name: /选择模板/ })).toBeEnabled();
+    expect(within(chapterGroup).getByRole("spinbutton", { name: "单次运行章节数" })).toBeEnabled();
+    expect(within(chapterGroup).getByRole("spinbutton", { name: "提取章节窗口" })).toBeEnabled();
+    expect(within(chapterGroup).getByRole("spinbutton", { name: "重叠章节数" })).toBeEnabled();
+    expect(within(duplicateFilterGroup).getByRole("checkbox", { name: "跳过已提取章节" })).toBeEnabled();
+    expect(within(modelGroup).getByLabelText("模型")).toBeEnabled();
+  });
+
+  it("accepts txt and markdown uploads and shows uploaded book metadata", async () => {
     const user = userEvent.setup();
     const onUploadTxt = vi.fn().mockResolvedValue(undefined);
     const { rerender } = render(
@@ -63,11 +139,11 @@ describe("ExtractionPage", () => {
       />
     );
 
-    const file = new File(["第一章 初入仙途"], "凡人修仙传.txt", { type: "text/plain" });
-    const fileInput = screen.getByLabelText("选择 .txt 文件");
+    const file = createMockFile("markdown.md", "text/markdown", "# 第一章");
+    const fileInput = screen.getByLabelText("选择小说文件");
     const dropZone = screen.getByRole("button", { name: "拖拽上传小说原文" });
 
-    expect(fileInput).toHaveAttribute("accept", ".txt,text/plain");
+    expect(fileInput).toHaveAttribute("accept", ".txt,.md,text/plain,text/markdown");
     expect(fileInput).not.toHaveAttribute("multiple");
 
     await user.upload(fileInput, file);
@@ -96,6 +172,28 @@ describe("ExtractionPage", () => {
     expect(screen.getByText("2 KB")).toBeInTheDocument();
     expect(screen.getByText("utf-8")).toBeInTheDocument();
     expect(screen.getByText("章节数 3")).toBeInTheDocument();
+  });
+
+  it("rejects unsupported source files before sending upload request", async () => {
+    const onUploadTxt = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ExtractionPage
+        models={[modelForTest]}
+        books={[]}
+        jobs={[]}
+        state="ready"
+        onUploadTxt={onUploadTxt}
+      />
+    );
+
+    fireEvent.drop(screen.getByRole("button", { name: "拖拽上传小说原文" }), {
+      dataTransfer: {
+        files: [createMockFile("book.epub", "application/epub+zip", "data")]
+      }
+    });
+
+    expect(onUploadTxt).not.toHaveBeenCalled();
+    expect(screen.getByText("仅支持 .txt 或 .md 小说文件")).toBeInTheDocument();
   });
 
   it("rejects dropping more than one novel file at a time", () => {
@@ -305,6 +403,225 @@ describe("ExtractionPage", () => {
     expect(onOpenProviderConfig).toHaveBeenCalledTimes(1);
   });
 
+  it("renders queue filter buttons with counts and excludes bulk clear completed", async () => {
+    const user = userEvent.setup();
+    const onJobAction = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ExtractionPage
+        models={[modelForTest]}
+        books={[]}
+        jobs={[
+          {
+            id: "job-running",
+            status: "running",
+            progressText: "运行窗口",
+            createdAt: "2026-07-02T10:00:00.000Z"
+          },
+          {
+            id: "job-paused",
+            status: "paused",
+            progressText: "暂停窗口",
+            createdAt: "2026-07-02T09:00:00.000Z"
+          },
+          {
+            id: "job-failed",
+            status: "failed",
+            progressText: "失败窗口",
+            failureReason: "失败原因",
+            createdAt: "2026-07-02T08:00:00.000Z"
+          },
+          {
+            id: "job-completed",
+            status: "completed",
+            progressText: "完成窗口",
+            createdAt: "2026-07-02T07:00:00.000Z"
+          },
+          {
+            id: "job-pending",
+            status: "pending",
+            progressText: "等待队列",
+            createdAt: "2026-07-02T06:00:00.000Z"
+          }
+        ]}
+        state="ready"
+        onJobAction={onJobAction}
+      />
+    );
+
+    const jobPanel = screen.getByRole("region", { name: "提取任务" });
+    const filterGroup = within(jobPanel).getByRole("group", { name: "任务状态筛选" });
+
+    expect(within(filterGroup).getAllByRole("button").map((button) => button.textContent?.replace(/\s+/g, " ").trim())).toEqual([
+      "全部 5",
+      "进行中 1",
+      "暂停 1",
+      "失败 1",
+      "已完成 1"
+    ]);
+    expect(within(filterGroup).getByRole("button", { name: "全部 5" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(jobPanel).getByText("5 项")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "清空已完成" })).not.toBeInTheDocument();
+
+    await user.click(within(filterGroup).getByRole("button", { name: "暂停 1" }));
+
+    expect(within(filterGroup).getByRole("button", { name: "暂停 1" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(jobPanel).getByText("1 项")).toBeInTheDocument();
+    expect(within(jobPanel).getByText("暂停窗口")).toBeInTheDocument();
+    expect(within(jobPanel).queryByText("等待队列")).not.toBeInTheDocument();
+    expect(within(jobPanel).queryByText("运行窗口")).not.toBeInTheDocument();
+    expect(within(jobPanel).queryByText("失败窗口")).not.toBeInTheDocument();
+    expect(within(jobPanel).queryByText("完成窗口")).not.toBeInTheDocument();
+    expect(within(jobPanel).queryByRole("button", { name: "暂停" })).not.toBeInTheDocument();
+
+    await user.click(within(jobPanel).getByRole("button", { name: "继续" }));
+
+    expect(onJobAction).toHaveBeenCalledWith("job-paused", "resume");
+  });
+
+  it("renders advanced job cards with structured progress, timing, summary, and output action", async () => {
+    const user = userEvent.setup();
+    const onOpenOutputDirectory = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ExtractionPage
+        models={[modelForTest]}
+        books={[]}
+        jobs={[
+          {
+            id: "job-running",
+            status: "running",
+            progressText: "窗口 2/6",
+            progress: { completedWindowCount: 2, totalWindowCount: 5, percent: 40 },
+            timing: {
+              startedAt: "2026-07-02T11:00:00.000Z",
+              elapsedMs: 332_000,
+              estimatedRemainingMs: 478_000,
+              estimateState: "available"
+            },
+            inputSummary: {
+              bookDisplayName: "凡人修仙传",
+              templateNames: ["丹药分析", "人物关系"],
+              modelId: "deepseek-chat"
+            },
+            logFilePath: "runs/job-running/logs/live.txt",
+            createdAt: "2026-07-02T11:00:00.000Z"
+          },
+          {
+            id: "job-completed",
+            status: "completed",
+            progressText: "完成窗口",
+            progress: { completedWindowCount: 4, totalWindowCount: 4, percent: 100 },
+            timing: {
+              startedAt: "2026-07-02T10:00:00.000Z",
+              completedAt: "2026-07-02T10:12:48.000Z",
+              elapsedMs: 768_000,
+              estimateState: "unknown"
+            },
+            output: { outputDirectoryLabel: "凡人修仙传", canOpenOutputDirectory: true },
+            inputSummary: {
+              bookDisplayName: "已完成的书",
+              templateNames: ["世界观模板"],
+              modelId: "deepseek-reasoner"
+            },
+            createdAt: "2026-07-02T10:00:00.000Z"
+          }
+        ]}
+        state="ready"
+        onOpenOutputDirectory={onOpenOutputDirectory}
+      />
+    );
+
+    expect(screen.getByRole("heading", { name: "凡人修仙传" })).toBeInTheDocument();
+    expect(screen.getByText("模板：丹药分析、人物关系")).toBeInTheDocument();
+    expect(screen.getByText("模型：deepseek-chat")).toBeInTheDocument();
+    expect(screen.getByText("2 / 5")).toBeInTheDocument();
+    expect(screen.getByText("40%")).toBeInTheDocument();
+    expect(screen.getByText("已用时：00:05:32")).toBeInTheDocument();
+    expect(screen.getByText("预计剩余：00:07:58")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "已完成的书" })).toBeInTheDocument();
+    expect(screen.getByText("模板：世界观模板")).toBeInTheDocument();
+    expect(screen.getByText("模型：deepseek-reasoner")).toBeInTheDocument();
+    expect(screen.getByText("完成时间：2026-07-02 10:12:48")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "打开输出目录" }));
+
+    expect(onOpenOutputDirectory).toHaveBeenCalledWith("job-completed");
+  });
+
+  it("only renders output directory action for completed jobs", () => {
+    render(
+      <ExtractionPage
+        models={[modelForTest]}
+        books={[]}
+        jobs={[
+          {
+            id: "job-running-output",
+            status: "running",
+            progressText: "窗口 1/4",
+            output: { outputDirectoryLabel: "未完成输出", canOpenOutputDirectory: true },
+            createdAt: "2026-07-02T11:00:00.000Z"
+          }
+        ]}
+        state="ready"
+        onOpenOutputDirectory={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+
+    expect(screen.queryByRole("button", { name: "打开输出目录" })).not.toBeInTheDocument();
+  });
+
+  it("renders paused remaining time and failed reason with failure timestamp", () => {
+    render(
+      <ExtractionPage
+        models={[modelForTest]}
+        books={[]}
+        jobs={[
+          {
+            id: "job-paused",
+            status: "paused",
+            progressText: "窗口 1/4",
+            progress: { completedWindowCount: 1, totalWindowCount: 4, percent: 25 },
+            timing: {
+              elapsedMs: 180_000,
+              estimatedRemainingMs: 420_000,
+              estimateState: "frozen"
+            },
+            inputSummary: {
+              bookDisplayName: "暂停的书",
+              templateNames: [],
+              modelId: "model-paused"
+            },
+            createdAt: "2026-07-02T09:00:00.000Z"
+          },
+          {
+            id: "job-failed",
+            status: "failed",
+            progressText: "窗口 3/5",
+            failureReason: "模型返回格式无效",
+            timing: {
+              completedAt: "2026-07-02T09:40:30.000Z",
+              elapsedMs: 930_000,
+              estimateState: "unknown"
+            },
+            inputSummary: {
+              bookDisplayName: "失败的书",
+              templateNames: ["失败模板"],
+              modelId: "model-failed"
+            },
+            createdAt: "2026-07-02T09:20:00.000Z"
+          }
+        ]}
+        state="ready"
+      />
+    );
+
+    expect(screen.getByRole("heading", { name: "暂停的书" })).toBeInTheDocument();
+    expect(screen.getByText("模板：未选择模板")).toBeInTheDocument();
+    expect(screen.getByText("预计剩余：已暂停 00:07:00")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "失败的书" })).toBeInTheDocument();
+    expect(screen.getByText("模型返回格式无效")).toBeInTheDocument();
+    expect(screen.getByText("失败时间：2026-07-02 09:40:30")).toBeInTheDocument();
+  });
+
   it("shows upload and task loading states", () => {
     render(<ExtractionPage models={[]} books={[]} jobs={[]} state="loading" />);
 
@@ -370,7 +687,7 @@ describe("ExtractionPage", () => {
     expect(screen.getByRole("button", { name: "删除任务" })).toBeInTheDocument();
   });
 
-  it("orders task rows by creation time with the newest task first", () => {
+  it("orders task rows by creation time with the newest task first inside the active filter", () => {
     render(
       <ExtractionPage
         models={[modelForTest]}
@@ -378,7 +695,7 @@ describe("ExtractionPage", () => {
         jobs={[
           {
             id: "job-old",
-            status: "completed",
+            status: "failed",
             progressText: "旧任务",
             createdAt: "2026-06-27T09:00:00.000Z"
           },
@@ -391,9 +708,15 @@ describe("ExtractionPage", () => {
           },
           {
             id: "job-middle",
-            status: "running",
+            status: "failed",
             progressText: "中间任务",
             createdAt: "2026-06-30T09:00:00.000Z"
+          },
+          {
+            id: "job-running",
+            status: "running",
+            progressText: "运行任务",
+            createdAt: "2026-07-03T09:00:00.000Z"
           }
         ]}
         state="ready"
@@ -401,11 +724,14 @@ describe("ExtractionPage", () => {
     );
 
     const jobPanel = screen.getByRole("region", { name: "提取任务" });
+    const filterGroup = within(jobPanel).getByRole("group", { name: "任务状态筛选" });
+    fireEvent.click(within(filterGroup).getByRole("button", { name: "失败 3" }));
     const rows = within(jobPanel).getAllByRole("listitem");
 
     expect(rows[0]).toHaveTextContent("新任务");
     expect(rows[1]).toHaveTextContent("中间任务");
     expect(rows[2]).toHaveTextContent("旧任务");
+    expect(within(jobPanel).queryByText("运行任务")).not.toBeInTheDocument();
   });
 
   it("shows start when a task is pending", () => {
@@ -655,3 +981,7 @@ describe("ExtractionPage", () => {
     }
   });
 });
+
+function createMockFile(fileName: string, type: string, content: string): File {
+  return new File([content], fileName, { type });
+}

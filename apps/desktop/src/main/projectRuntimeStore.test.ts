@@ -84,7 +84,18 @@ describe("project runtime store", () => {
   it("persists uploaded books, chapters, jobs, and reports across store instances", async () => {
     const store = createFileProjectRuntimeStore({ projectRoot: tempRoot });
     const { book, chapters, upload } = createBookRecord();
-    const job = createRunningJob();
+    const job = {
+      ...createRunningJob(),
+      progress: {
+        completedWindowCount: 1,
+        totalWindowCount: 4
+      },
+      timing: {
+        startedAt: "2026-07-02T11:00:00.000Z",
+        estimatedRemainingMs: 180000,
+        estimateFrozenAt: "2026-07-02T11:20:00.000Z"
+      }
+    } as ProjectRuntimeJobRecord;
     const report: ReportAsset = {
       id: "report-1",
       bookId: "book-1",
@@ -114,10 +125,83 @@ describe("project runtime store", () => {
       progressText: "进度：1/4",
       tokenText: "Token 100 / 缓存命中率 75.00%"
     });
+    expect(state.jobs[0].progress).toEqual({
+      completedWindowCount: 1,
+      totalWindowCount: 4
+    });
+    expect(state.jobs[0].timing).toEqual({
+      startedAt: "2026-07-02T11:00:00.000Z",
+      estimatedRemainingMs: 180000,
+      estimateFrozenAt: "2026-07-02T11:20:00.000Z"
+    });
     expect(state.reports).toEqual([report]);
     expect(state.reportPathById).toEqual({
       "report-1": path.join(tempRoot, report.relativePath)
     });
+  });
+
+  it("deep clones optional structured job progress and timing records", async () => {
+    const store = createFileProjectRuntimeStore({ projectRoot: tempRoot });
+    const job = {
+      ...createRunningJob(),
+      progress: {
+        completedWindowCount: 1,
+        totalWindowCount: 4
+      },
+      timing: {
+        startedAt: "2026-07-02T11:00:00.000Z",
+        estimatedRemainingMs: 180000
+      }
+    } as ProjectRuntimeJobRecord;
+
+    await store.saveJob(job);
+    const firstLoad = await store.load();
+    firstLoad.jobs[0].progress!.completedWindowCount = 99;
+    firstLoad.jobs[0].timing!.estimatedRemainingMs = 1;
+
+    const secondLoad = await store.load();
+
+    expect(secondLoad.jobs[0].progress).toEqual({
+      completedWindowCount: 1,
+      totalWindowCount: 4
+    });
+    expect(secondLoad.jobs[0].timing).toEqual({
+      startedAt: "2026-07-02T11:00:00.000Z",
+      estimatedRemainingMs: 180000
+    });
+  });
+
+  it("keeps loading legacy jobs without structured progress or timing records", async () => {
+    const filePath = path.join(tempRoot, "state", "project-runtime.json");
+    const legacyJob = createRunningJob();
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(
+      filePath,
+      `${JSON.stringify(
+        {
+          schemaVersion: 1,
+          books: [],
+          chaptersByBookId: {},
+          jobs: [legacyJob],
+          reports: [],
+          reportPathById: {}
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+
+    const store = createFileProjectRuntimeStore({ projectRoot: tempRoot });
+    const state = await store.load();
+
+    expect(state.jobs).toHaveLength(1);
+    expect(state.jobs[0]).toMatchObject({
+      id: "job-1",
+      status: "paused"
+    });
+    expect(state.jobs[0].progress).toBeUndefined();
+    expect(state.jobs[0].timing).toBeUndefined();
   });
 
   it("returns an empty runtime state when the file is missing or corrupted", async () => {

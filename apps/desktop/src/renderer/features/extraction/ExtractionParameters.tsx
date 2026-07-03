@@ -62,131 +62,149 @@ export function ExtractionParameters({
         <span>{templates.length} 个模板</span>
       </div>
 
-      <label className="provider-form__field">
-        <span>书籍</span>
-        <select
-          disabled={books.length === 0 || isCreating}
-          onChange={(event) => {
-            onFormChange({ ...formState, bookId: event.currentTarget.value });
-          }}
-          value={formState.bookId}
-        >
-          {books.length === 0 ? <option value="">先上传小说</option> : null}
-          {books.map((book) => (
-            <option key={book.id} value={book.id}>
-              {book.displayName}
-            </option>
-          ))}
-        </select>
-      </label>
+      <div className="parameters-panel__groups">
+        <fieldset className="parameter-section">
+          <legend>提取规则</legend>
 
-      <TemplateSelector
-        disabled={isCreating}
-        selectedTemplateIds={formState.templateIds}
-        templates={templates}
-        onOpenTemplateManager={onOpenTemplateManager}
-        onSelectionChange={(templateIds) => {
-          onFormChange({
-            ...formState,
-            templateIds
-          });
-        }}
-      />
-
-      <div className="parameter-grid">
-        <label className="provider-form__field">
-          <span>单次运行章节数</span>
-          <input
-            min={1}
-            onChange={(event) => {
-              onFormChange({
-                ...formState,
-                singleRunChapterCount: updateNumber(event.currentTarget.value)
-              });
-            }}
-            type="number"
-            value={renderNumberValue(formState.singleRunChapterCount)}
-          />
-        </label>
-        <label className="provider-form__field">
-          <span>提取章节窗口</span>
-          <input
-            min={1}
-            onChange={(event) => {
-              onFormChange({
-                ...formState,
-                extractionChapterCount: updateNumber(event.currentTarget.value)
-              });
-            }}
-            type="number"
-            value={renderNumberValue(formState.extractionChapterCount)}
-          />
-        </label>
-        <label className="provider-form__field">
-          <span>重叠章节数</span>
-          <input
-            min={0}
-            onChange={(event) => {
-              onFormChange({
-                ...formState,
-                overlapChapterCount: updateNonNegativeNumber(event.currentTarget.value)
-              });
-            }}
-            type="number"
-            value={renderNumberValue(formState.overlapChapterCount)}
-          />
-        </label>
-      </div>
-
-      <div className="provider-form__toggles">
-        <label>
-          <input
-            checked={formState.skipAlreadyExtracted}
-            disabled={isCreating}
-            onChange={(event) => {
-              onFormChange({
-                ...formState,
-                skipAlreadyExtracted: event.currentTarget.checked
-              });
-            }}
-            type="checkbox"
-          />
-          <span>跳过已提取章节</span>
-        </label>
-      </div>
-
-      <label className="provider-form__field">
-        <span>模型</span>
-        <select
-          disabled={models.length === 0 || isCreating}
-          onChange={(event) => {
-            onFormChange({ ...formState, modelOptionId: event.currentTarget.value });
-          }}
-          value={formState.modelOptionId}
-        >
-          {models.length === 0 ? <option value="">未配置模型</option> : null}
-          {models.map((model) => (
-            <option key={model.id} value={model.id}>
-              {model.displayName}
-            </option>
-          ))}
-        </select>
-      </label>
-
-      {models.length === 0 ? (
-        <div className="empty-action">
-          <p className="empty-text">暂无可用模型</p>
-          {onOpenProviderConfig ? (
-            <button
-              className="button button--secondary"
-              onClick={onOpenProviderConfig}
-              type="button"
+          <label className="provider-form__field">
+            <span>书籍</span>
+            <select
+              disabled={books.length === 0 || isCreating}
+              onChange={(event) => {
+                onFormChange({ ...formState, bookId: event.currentTarget.value });
+              }}
+              value={formState.bookId}
             >
-              前往大模型配置
-            </button>
+              {books.length === 0 ? <option value="">先上传小说</option> : null}
+              {books.map((book) => (
+                <option key={book.id} value={book.id}>
+                  {book.displayName}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <TemplateSelector
+            disabled={isCreating}
+            selectedTemplateIds={formState.templateIds}
+            templates={templates}
+            onOpenTemplateManager={onOpenTemplateManager}
+            onSelectionChange={(templateIds) => {
+              onFormChange({
+                ...formState,
+                templateIds
+              });
+            }}
+          />
+        </fieldset>
+
+        <fieldset className="parameter-section">
+          <legend>章节识别</legend>
+
+          <div className="parameter-grid">
+            <label className="provider-form__field">
+              <span>单次运行章节数</span>
+              <input
+                min={1}
+                onChange={(event) => {
+                  onFormChange({
+                    ...formState,
+                    singleRunChapterCount: updateNumber(event.currentTarget.value)
+                  });
+                }}
+                type="number"
+                value={renderNumberValue(formState.singleRunChapterCount)}
+              />
+            </label>
+            <label className="provider-form__field">
+              <span>提取章节窗口</span>
+              <input
+                min={1}
+                onChange={(event) => {
+                  onFormChange({
+                    ...formState,
+                    extractionChapterCount: updateNumber(event.currentTarget.value)
+                  });
+                }}
+                type="number"
+                value={renderNumberValue(formState.extractionChapterCount)}
+              />
+            </label>
+            <label className="provider-form__field">
+              <span>重叠章节数</span>
+              <input
+                min={0}
+                onChange={(event) => {
+                  onFormChange({
+                    ...formState,
+                    overlapChapterCount: updateNonNegativeNumber(event.currentTarget.value)
+                  });
+                }}
+                type="number"
+                value={renderNumberValue(formState.overlapChapterCount)}
+              />
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset className="parameter-section">
+          <legend>重复章节过滤</legend>
+
+          <div className="provider-form__toggles parameter-section__toggles">
+            <label>
+              <input
+                checked={formState.skipAlreadyExtracted}
+                disabled={isCreating}
+                onChange={(event) => {
+                  onFormChange({
+                    ...formState,
+                    skipAlreadyExtracted: event.currentTarget.checked
+                  });
+                }}
+                type="checkbox"
+              />
+              <span>跳过已提取章节</span>
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset className="parameter-section">
+          <legend>模型设置</legend>
+
+          <label className="provider-form__field">
+            <span>模型</span>
+            <select
+              disabled={models.length === 0 || isCreating}
+              onChange={(event) => {
+                onFormChange({ ...formState, modelOptionId: event.currentTarget.value });
+              }}
+              value={formState.modelOptionId}
+            >
+              {models.length === 0 ? <option value="">未配置模型</option> : null}
+              {models.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.displayName}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {models.length === 0 ? (
+            <div className="empty-action">
+              <p className="empty-text">暂无可用模型</p>
+              {onOpenProviderConfig ? (
+                <button
+                  className="button button--secondary"
+                  onClick={onOpenProviderConfig}
+                  type="button"
+                >
+                  前往大模型配置
+                </button>
+              ) : null}
+            </div>
           ) : null}
-        </div>
-      ) : null}
+        </fieldset>
+      </div>
 
       {createError ? (
         <p className="form-error" role="alert">
@@ -195,7 +213,7 @@ export function ExtractionParameters({
       ) : null}
 
       <button
-        className="button button--primary"
+        className="button button--primary parameters-panel__submit"
         disabled={!canCreate}
         onClick={onCreateJob}
         type="button"

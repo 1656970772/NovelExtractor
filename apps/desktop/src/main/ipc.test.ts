@@ -108,6 +108,10 @@ function createHandlers(): DesktopIpcHandlers {
       content: "[2026-06-30 15:30:12][任务信息] 任务 job-1"
     }),
     "jobs:openLog": async () => undefined,
+    "jobs:openOutputDirectory": async () => undefined,
+    "window:minimize": async () => undefined,
+    "window:toggleMaximize": async () => undefined,
+    "window:close": async () => undefined,
     "reports:preview": async (input) => ({
       reportId: input.reportId,
       html: "<h1>preview</h1>",
@@ -151,6 +155,10 @@ describe("desktop IPC contract", () => {
       "jobs:delete",
       "jobs:readLog",
       "jobs:openLog",
+      "jobs:openOutputDirectory",
+      "window:minimize",
+      "window:toggleMaximize",
+      "window:close",
       "reports:preview"
     ]);
   });

@@ -16,11 +16,18 @@ interface ViewportSpec {
   height: number;
 }
 
+type WorkbenchContentPage = "小说提取" | "关系图谱";
+
 const viewports: ViewportSpec[] = [
   { name: "wide", width: 1440, height: 900 },
   { name: "laptop", width: 1366, height: 768 },
   { name: "narrow", width: 390, height: 844 }
 ];
+
+const workbenchRailLabels: Record<WorkbenchContentPage, "提取" | "关系图"> = {
+  小说提取: "提取",
+  关系图谱: "关系图"
+};
 
 function resolveElectronPath(): string {
   const desktopRequire = createRequire(path.join(desktopRoot, "package.json"));
@@ -55,24 +62,41 @@ async function closeDesktop(app: ElectronApplication, userDataRoot: string): Pro
   await fs.rm(userDataRoot, { force: true, recursive: true });
 }
 
-async function openFunction(page: Page, name: "小说提取" | "关系图谱"): Promise<void> {
-  await page.getByRole("button", { name: "功能" }).click();
-  await page.getByRole("navigation", { name: "功能入口" }).getByRole("button", { name }).click();
+function getWorkbenchRail(page: Page) {
+  return page.getByRole("navigation", { name: "工作台导航" });
+}
+
+async function openWorkbenchPage(page: Page, name: WorkbenchContentPage): Promise<void> {
+  await getWorkbenchRail(page).getByRole("button", { name: workbenchRailLabels[name] }).click();
 }
 
 async function openAssets(page: Page): Promise<void> {
-  await page.getByLabel("资产入口").getByRole("button", { name: "资产" }).click();
+  await getWorkbenchRail(page).getByRole("button", { name: "资源" }).click();
+}
+
+function getModelSelect(page: Page) {
+  return page
+    .getByRole("region", { name: "提取参数" })
+    .locator("label", { has: page.getByText("模型", { exact: true }) })
+    .locator("select");
+}
+
+function getJobsPanel(page: Page) {
+  return page.getByRole("region", { name: "提取任务" });
+}
+
+function getLatestJobCard(page: Page) {
+  return getJobsPanel(page).locator(".job-list > .job-card").first();
 }
 
 async function createProject(page: Page): Promise<void> {
   await page.getByRole("textbox", { name: "项目名称" }).fill("仙途资料");
   await page.getByRole("button", { name: "创建项目" }).click();
-  await expect(page.getByRole("button", { name: "用户菜单" })).toBeVisible();
+  await expect(getWorkbenchRail(page).getByRole("button", { name: "大模型配置" })).toBeVisible();
 }
 
 async function configureMockProvider(page: Page, baseUrl: string): Promise<void> {
-  await page.getByRole("button", { name: "用户菜单" }).click();
-  await page.getByRole("button", { name: "大模型配置" }).click();
+  await getWorkbenchRail(page).getByRole("button", { name: "大模型配置" }).click();
   await expect(page.getByRole("dialog", { name: "大模型配置" })).toBeVisible();
   await page.getByLabel("自定义 OpenAI-compatible").check();
   await page.getByLabel("配置名称").fill("Mock Provider");
@@ -85,19 +109,20 @@ async function configureMockProvider(page: Page, baseUrl: string): Promise<void>
 }
 
 async function runExtractionLoop(page: Page): Promise<void> {
-  await openFunction(page, "小说提取");
+  await openWorkbenchPage(page, "小说提取");
   await expect(page.getByRole("heading", { name: "小说提取" })).toBeVisible();
-  await expect(page.getByLabel("模型")).toHaveValue("provider-1:mock-model");
+  await expect(getModelSelect(page)).toHaveValue("provider-1:mock-model");
 
-  await page.getByLabel("选择 .txt 文件").setInputFiles(utf8FixturePath);
+  await page.getByLabel("选择小说文件").setInputFiles(utf8FixturePath);
   const uploadPanel = page.getByRole("region", { name: "上传小说" });
   await expect(uploadPanel.getByText("utf8-novel.txt").first()).toBeVisible();
   await expect(uploadPanel.getByText("章节数 3")).toBeVisible();
 
   await page.getByRole("button", { name: "创建任务" }).click();
-  await expect(page.getByText("待开始")).toBeVisible();
-  await page.getByRole("button", { name: "开始" }).click();
-  await expect(page.getByText("已完成", { exact: true })).toBeVisible();
+  const jobCard = getLatestJobCard(page);
+  await expect(jobCard.locator(".job-card__status")).toHaveText("待开始");
+  await jobCard.getByRole("button", { name: "开始" }).click();
+  await expect(jobCard.locator(".job-card__status")).toHaveText("已完成", { timeout: 60_000 });
 }
 
 async function previewReport(page: Page): Promise<void> {
@@ -136,56 +161,56 @@ async function assertWorkbenchLayout(page: Page): Promise<void> {
   expect(metrics.modalActionsVisible).toBe(true);
 }
 
-async function assertFunctionPanelLayout(page: Page, viewport: ViewportSpec): Promise<void> {
-  const metrics = await page.getByRole("navigation", { name: "功能入口" }).evaluate((node) => {
-    const panel = node.closest(".top-nav__function-panel");
-    const panelRect = panel?.getBoundingClientRect();
-    const cardRects = [...node.querySelectorAll(".top-nav__feature-card")].map((card) => {
-      const rect = card.getBoundingClientRect();
+async function assertWorkbenchRailLayout(page: Page): Promise<void> {
+  const metrics = await getWorkbenchRail(page).evaluate((node) => {
+    const railRect = node.getBoundingClientRect();
+    const buttonRects = [...node.querySelectorAll("button")].map((button) => {
+      const rect = button.getBoundingClientRect();
       return {
+        label: button.getAttribute("aria-label") ?? "",
         height: rect.height,
+        scrollHeight: button.scrollHeight,
+        scrollWidth: button.scrollWidth,
         width: rect.width
       };
     });
+    const utilityGroup = node.querySelector(".workbench-rail__utility-group");
+    const utilityRect = utilityGroup?.getBoundingClientRect();
 
     return {
-      cardRects,
-      panelHeight: panelRect?.height ?? 0,
-      panelWidth: panelRect?.width ?? 0
+      buttonRects,
+      labels: buttonRects.map((button) => button.label),
+      railWidth: railRect.width,
+      utilityGroupAtBottom:
+        !utilityRect || (utilityRect.bottom <= railRect.bottom + 1 && utilityRect.top > railRect.top)
     };
   });
 
-  expect(metrics.cardRects).toHaveLength(2);
-  if (viewport.width > 640) {
-    expect(metrics.panelWidth).toBeLessThanOrEqual(410);
-    for (const rect of metrics.cardRects) {
-      expect(rect.width).toBeLessThanOrEqual(170);
-      expect(rect.height).toBeLessThanOrEqual(140);
-    }
-  } else {
-    expect(metrics.panelWidth).toBeLessThanOrEqual(280);
-    for (const rect of metrics.cardRects) {
-      expect(rect.height).toBeLessThanOrEqual(140);
-    }
+  expect(metrics.labels).toEqual(["资源", "提取", "关系图", "大模型配置", "设置"]);
+  expect(metrics.railWidth).toBeLessThanOrEqual(66);
+  expect(metrics.utilityGroupAtBottom).toBe(true);
+  for (const rect of metrics.buttonRects) {
+    expect(rect.width).toBeLessThanOrEqual(42);
+    expect(rect.height).toBeLessThanOrEqual(42);
+    expect(rect.scrollWidth).toBeLessThanOrEqual(rect.width + 1);
+    expect(rect.scrollHeight).toBeLessThanOrEqual(rect.height + 1);
   }
-  expect(metrics.panelHeight).toBeLessThanOrEqual(viewport.width > 640 ? 190 : 330);
 }
 
 async function assertTemplateModalLayout(page: Page): Promise<void> {
-  const modelSelect = page.getByLabel("模型");
-  const modelTopBeforeOpen = await modelSelect.evaluate((node) => node.getBoundingClientRect().top);
+  const parametersRegion = page.getByRole("region", { name: "提取参数" });
+  const chooseTemplateButton = parametersRegion.getByRole("button", { name: /选择模板/ });
+  await chooseTemplateButton.scrollIntoViewIfNeeded();
+  const parametersTopBeforeOpen = await parametersRegion.evaluate((node) => node.getBoundingClientRect().top);
 
-  await page
-    .getByRole("region", { name: "提取参数" })
-    .getByRole("button", { name: /选择模板/ })
-    .click();
+  await chooseTemplateButton.click();
   const dialog = page.getByRole("dialog", { name: "模板选择与编辑" });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole("complementary", { name: "模板列表" })).toBeVisible();
   await expect(dialog.getByRole("region", { name: "模板预览编辑" })).toBeVisible();
   await expect(dialog.getByRole("textbox", { name: "模板正文" })).toBeVisible();
 
-  const modelTopAfterOpen = await modelSelect.evaluate((node) => node.getBoundingClientRect().top);
+  const parametersTopAfterOpen = await parametersRegion.evaluate((node) => node.getBoundingClientRect().top);
   const dialogRect = await dialog.evaluate((node) => {
     const dialogRect = node.getBoundingClientRect();
     return {
@@ -194,15 +219,23 @@ async function assertTemplateModalLayout(page: Page): Promise<void> {
       dialogWidth: dialogRect.width
     };
   });
+  const viewportHeight = await page.evaluate(() => window.innerHeight);
 
-  expect(Math.abs(modelTopAfterOpen - modelTopBeforeOpen)).toBeLessThanOrEqual(2);
-  expect(dialogRect.dialogTop).toBeLessThan(modelTopAfterOpen);
-  expect(dialogRect.dialogBottom).toBeGreaterThan(modelTopAfterOpen);
+  expect(Math.abs(parametersTopAfterOpen - parametersTopBeforeOpen)).toBeLessThanOrEqual(2);
+  expect(dialogRect.dialogTop).toBeGreaterThanOrEqual(0);
+  expect(dialogRect.dialogBottom).toBeLessThanOrEqual(viewportHeight + 1);
   expect(dialogRect.dialogWidth).toBeGreaterThan(320);
 }
 
 async function captureCheckedScreenshot(page: Page, fileName: string, viewport: ViewportSpec): Promise<void> {
   const outputPath = path.join(screenshotsRoot, fileName);
+  await page.evaluate(() => {
+    const activeElement = document.activeElement;
+    if (activeElement instanceof HTMLElement) {
+      activeElement.blur();
+    }
+  });
+  await page.mouse.move(Math.max(0, viewport.width - 20), Math.max(0, viewport.height - 20));
   const buffer = await page.screenshot({ path: outputPath });
   const stat = await fs.stat(outputPath);
   const pngWidth = buffer.readUInt32BE(16);
@@ -230,7 +263,7 @@ test("P0 desktop extraction loop", async () => {
     expect(mockServer.requests[0].body).toMatchObject({ model: "mock-model" });
     expect(JSON.stringify(mockServer.requests[0].body)).toContain("write_file");
     await previewReport(page);
-    await openFunction(page, "关系图谱");
+    await openWorkbenchPage(page, "关系图谱");
     await expect(page.getByRole("heading", { name: "关系图谱" })).toBeVisible();
     await expect(page.getByText("当前书籍暂无图谱资产")).toBeVisible();
   } finally {
@@ -258,16 +291,18 @@ test("P0 visual screenshots", async () => {
         await page.getByRole("button", { name: "关闭模板选择" }).click();
         await expect(page.getByRole("dialog", { name: "模板选择与编辑" })).toHaveCount(0);
 
-        await page.getByRole("button", { name: "功能" }).click();
-        const functionEntry = page.getByRole("navigation", { name: "功能入口" });
-        await expect(functionEntry.getByRole("button", { name: "小说提取" })).toBeVisible();
-        await expect(functionEntry.getByRole("button", { name: "关系图谱" })).toBeVisible();
-        await expect(functionEntry.getByRole("button", { name: "资产" })).toHaveCount(0);
-        await expect(functionEntry.locator(".top-nav__feature-image")).toHaveCount(2);
-        await assertFunctionPanelLayout(page, viewport);
+        const rail = getWorkbenchRail(page);
+        await expect(rail.getByRole("button", { name: "资源" })).toBeVisible();
+        await expect(rail.getByRole("button", { name: "提取" })).toBeVisible();
+        await expect(rail.getByRole("button", { name: "关系图" })).toBeVisible();
+        await expect(rail.getByRole("button", { name: "大模型配置" })).toBeVisible();
+        await expect(rail.getByRole("button", { name: "设置" })).toBeVisible();
+        await expect(page.getByRole("button", { name: "功能" })).toHaveCount(0);
+        await expect(page.getByRole("button", { name: "用户菜单" })).toHaveCount(0);
+        await assertWorkbenchRailLayout(page);
         await assertWorkbenchLayout(page);
-        await captureCheckedScreenshot(page, `${viewport.name}-function-panel.png`, viewport);
-        await functionEntry.getByRole("button", { name: "小说提取" }).click();
+        await captureCheckedScreenshot(page, `${viewport.name}-workbench-rail.png`, viewport);
+        await rail.getByRole("button", { name: "提取" }).click();
 
         await assertWorkbenchLayout(page);
         await captureCheckedScreenshot(page, `${viewport.name}-extraction.png`, viewport);
@@ -278,8 +313,7 @@ test("P0 visual screenshots", async () => {
         await assertWorkbenchLayout(page);
         await captureCheckedScreenshot(page, `${viewport.name}-assets.png`, viewport);
 
-        await page.getByRole("button", { name: "用户菜单" }).click();
-        await page.getByRole("button", { name: "大模型配置" }).click();
+        await getWorkbenchRail(page).getByRole("button", { name: "大模型配置" }).click();
         await assertWorkbenchLayout(page);
         await captureCheckedScreenshot(page, `${viewport.name}-provider-modal.png`, viewport);
       } finally {

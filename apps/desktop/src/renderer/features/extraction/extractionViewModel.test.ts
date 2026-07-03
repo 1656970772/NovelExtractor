@@ -134,6 +134,26 @@ describe("extractionViewModel", () => {
       bookId: "book-1",
       status: "created",
       progressText: "进度：0/3",
+      progress: {
+        completedWindowCount: 0,
+        totalWindowCount: 3,
+        percent: 0
+      },
+      timing: {
+        startedAt: "2026-06-27T00:00:00.000Z",
+        elapsedMs: 1200,
+        estimatedRemainingMs: 3600,
+        estimateState: "available"
+      },
+      output: {
+        outputDirectoryLabel: "凡人修仙传",
+        canOpenOutputDirectory: false
+      },
+      inputSummary: {
+        bookDisplayName: "凡人修仙传",
+        templateNames: ["丹药分析模板"],
+        modelId: "mock-model"
+      },
       tokenText: "Token 0 / 缓存命中率 0.00%",
       logFilePath: "runs/job-1/logs/20260630-153012.txt",
       allowedActions: ["start", "delete"],
@@ -146,6 +166,26 @@ describe("extractionViewModel", () => {
       bookId: "book-1",
       status: "pending",
       progressText: "进度：0/3",
+      progress: {
+        completedWindowCount: 0,
+        totalWindowCount: 3,
+        percent: 0
+      },
+      timing: {
+        startedAt: "2026-06-27T00:00:00.000Z",
+        elapsedMs: 1200,
+        estimatedRemainingMs: 3600,
+        estimateState: "available"
+      },
+      output: {
+        outputDirectoryLabel: "凡人修仙传",
+        canOpenOutputDirectory: false
+      },
+      inputSummary: {
+        bookDisplayName: "凡人修仙传",
+        templateNames: ["丹药分析模板"],
+        modelId: "mock-model"
+      },
       tokenText: "Token 0 / 缓存命中率 0.00%",
       logFilePath: "runs/job-1/logs/20260630-153012.txt",
       createdAt: "2026-06-27T00:00:00.000Z"

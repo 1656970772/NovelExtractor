@@ -175,8 +175,8 @@ describe("uploadBook", () => {
     await expect(pathExists(path.join(project.rootPath, "assets", "books", "book-1"))).resolves.toBe(false);
   });
 
-  it("rejects non-txt sources with a typed error and no side effects", async () => {
-    const { project, sourcePath } = await createProjectWithSource("novel.md", "第一章 起始\n正文");
+  it("rejects unsupported file extensions with a typed error and no side effects", async () => {
+    const { project, sourcePath } = await createProjectWithSource("novel.epub", "mock epub data");
     const repository = createFakeUploadedBookRepository();
 
     await expect(
@@ -198,6 +198,25 @@ describe("uploadBook", () => {
 
     expect(repository.savedUploads).toHaveLength(0);
     await expect(pathExists(path.join(project.rootPath, "assets", "books", "book-1"))).resolves.toBe(false);
+  });
+
+  it("accepts markdown sources as plain text and stores as original.txt", async () => {
+    const { project, sourcePath } = await createProjectWithSource("novel.md", "第一章 起始\n\n# Markdown 标记\n\n正文内容");
+    const repository = createFakeUploadedBookRepository();
+
+    const result = await uploadBook({
+      project,
+      sourcePath,
+      repository,
+      idGenerator: createSequentialIdGenerator(["book-md", "source-md", "chapter-md"])
+    });
+
+    const bookDisplayName = result.book.displayName;
+    expect(bookDisplayName).toBe("novel");
+    expect(result.sourceRelativePath).toBe("assets/books/book-md/source/original.txt");
+
+    const savedPath = path.join(project.rootPath, result.sourceRelativePath);
+    await expect(fs.readFile(savedPath, "utf8")).resolves.toContain("# Markdown 标记");
   });
 
   it("rejects asset layouts where source and chapter files resolve to the same destination", async () => {

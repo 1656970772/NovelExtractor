@@ -2,6 +2,10 @@ import { useState } from "react";
 import type { ChangeEvent, DragEvent } from "react";
 import { formatByteSize, type ExtractionBook } from "./extractionViewModel";
 
+const NOVEL_FILE_ACCEPT = ".txt,.md,text/plain,text/markdown";
+const SUPPORTED_NOVEL_FILE_EXTENSIONS = [".txt", ".md"] as const;
+const UNSUPPORTED_NOVEL_FILE_MESSAGE = "仅支持 .txt 或 .md 小说文件";
+
 export type UploadState = "idle" | "uploading" | "error";
 
 export interface UploadNovelPanelProps {
@@ -22,8 +26,8 @@ export function UploadNovelPanel({
   const isUploading = uploadState === "uploading";
 
   async function uploadFile(file: File): Promise<void> {
-    if (!file.name.toLowerCase().endsWith(".txt")) {
-      setLocalError("请选择 .txt 文件");
+    if (!isSupportedNovelFile(file)) {
+      setLocalError(UNSUPPORTED_NOVEL_FILE_MESSAGE);
       return;
     }
 
@@ -79,7 +83,7 @@ export function UploadNovelPanel({
     <section className="tool-panel upload-panel" aria-labelledby="upload-title">
       <div className="panel-heading">
         <h2 id="upload-title">上传小说</h2>
-        <span>.txt</span>
+        <span>.txt / .md</span>
       </div>
 
       <div
@@ -94,12 +98,18 @@ export function UploadNovelPanel({
         role="button"
         tabIndex={0}
       >
-        <span>拖拽 .txt 小说文件到这里</span>
+        <span className="novel-upload__icon" aria-hidden="true">
+          TXT
+        </span>
+        <span className="novel-upload__copy">
+          <strong>拖拽小说原文</strong>
+          <span>支持 .txt / .md，单次上传一本</span>
+        </span>
         <label className="button button--secondary button--compact template-modal__upload-picker">
           <span>选择小说文件</span>
           <input
-            accept=".txt,text/plain"
-            aria-label="选择 .txt 文件"
+            accept={NOVEL_FILE_ACCEPT}
+            aria-label="选择小说文件"
             disabled={isUploading}
             onChange={(event) => {
               void handleFileChange(event);
@@ -143,4 +153,9 @@ export function UploadNovelPanel({
       )}
     </section>
   );
+}
+
+function isSupportedNovelFile(file: File): boolean {
+  const lowerName = file.name.toLowerCase();
+  return SUPPORTED_NOVEL_FILE_EXTENSIONS.some((extension) => lowerName.endsWith(extension));
 }

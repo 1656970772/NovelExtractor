@@ -77,6 +77,10 @@ describe("preload desktop API", () => {
     await api.deleteJob({ jobId: "job-1", confirm: true });
     await api.readJobLog({ jobId: "job-1" });
     await api.openJobLog({ jobId: "job-1" });
+    await api.openJobOutputDirectory({ jobId: "job-1" });
+    await api.minimizeWindow();
+    await api.toggleMaximizeWindow();
+    await api.closeWindow();
 
     expect(calls.map((call) => call.channel)).toEqual([
       "project:create",
@@ -102,9 +106,13 @@ describe("preload desktop API", () => {
       "jobs:restart",
       "jobs:delete",
       "jobs:readLog",
-      "jobs:openLog"
+      "jobs:openLog",
+      "jobs:openOutputDirectory",
+      "window:minimize",
+      "window:toggleMaximize",
+      "window:close"
     ]);
-    expect(invoke).toHaveBeenCalledTimes(24);
+    expect(invoke).toHaveBeenCalledTimes(28);
   });
 
   it("opens the full job log through typed IPC", async () => {
@@ -114,6 +122,28 @@ describe("preload desktop API", () => {
     await api.openJobLog({ jobId: "job-1" });
 
     expect(invoke).toHaveBeenCalledWith("jobs:openLog", { jobId: "job-1" });
+  });
+
+  it("opens a job output directory through typed IPC", async () => {
+    const invoke = vi.fn().mockResolvedValue(undefined);
+    const api = createNovelExtractorDesktopApi(invoke);
+
+    await api.openJobOutputDirectory({ jobId: "job-1" });
+
+    expect(invoke).toHaveBeenCalledWith("jobs:openOutputDirectory", { jobId: "job-1" });
+  });
+
+  it("forwards window controls without payloads", async () => {
+    const invoke = vi.fn().mockResolvedValue(undefined);
+    const api = createNovelExtractorDesktopApi(invoke);
+
+    await api.minimizeWindow();
+    await api.toggleMaximizeWindow();
+    await api.closeWindow();
+
+    expect(invoke).toHaveBeenNthCalledWith(1, "window:minimize", undefined);
+    expect(invoke).toHaveBeenNthCalledWith(2, "window:toggleMaximize", undefined);
+    expect(invoke).toHaveBeenNthCalledWith(3, "window:close", undefined);
   });
 
   it("does not expose raw invoke or the raw Electron renderer bridge", () => {
@@ -145,6 +175,10 @@ describe("preload desktop API", () => {
       "deleteJob",
       "readJobLog",
       "openJobLog",
+      "openJobOutputDirectory",
+      "minimizeWindow",
+      "toggleMaximizeWindow",
+      "closeWindow",
       "onJobUpdated"
     ]);
     expect(api).not.toHaveProperty("invoke");

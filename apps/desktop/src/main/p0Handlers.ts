@@ -27,6 +27,8 @@ import { createMemoryCredentialStore, type MemoryCredentialStore } from "./crede
 import type { DesktopIpcHandlers } from "./ipc";
 import {
   createFileProjectRuntimeStore,
+  type ProjectRuntimeJobProgressRecord,
+  type ProjectRuntimeJobTimingRecord,
   type ProjectRuntimeJobRecord,
   type ProjectRuntimeState,
   type ProjectRuntimeStore
@@ -37,7 +39,10 @@ import { createTaskTextLogger, type TaskTextLogger } from "./taskTextLogger";
 import { createWindowRunService, type WindowRunArtifacts } from "./windowRunService";
 import type {
   CreateJobDto,
+  InputSummaryDto,
   JobDto,
+  JobProgressDto,
+  JobTimingDto,
   ProjectRuntimeDto,
   ReportDto,
   SaveTemplateDto,
@@ -65,6 +70,7 @@ type P0Handlers = Pick<
   | "jobs:delete"
   | "jobs:readLog"
   | "jobs:openLog"
+  | "jobs:openOutputDirectory"
   | "reports:preview"
 >;
 
@@ -208,18 +214,114 @@ function getAllowedActions(status: JobStatus): TaskAction[] {
   return taskStatus ? [...TASK_STATUS_CONFIG[taskStatus].allowedActions] : [];
 }
 
-function toJobDto(job: P0JobRecord): JobDto {
+function formatTokenText(
+  usage: Pick<TokenUsage, "totalTokens" | "cacheHitTokens" | "cacheMissTokens"> | null | undefined
+): string {
+  const cacheHitTokens = usage?.cacheHitTokens ?? 0;
+  const cacheMissTokens = usage?.cacheMissTokens ?? 0;
+  const cacheMeasuredTokens = cacheHitTokens + cacheMissTokens;
+  const cacheHitRate = cacheMeasuredTokens > 0 ? (cacheHitTokens / cacheMeasuredTokens) * 100 : 0;
+  return `Token ${usage?.totalTokens ?? 0} / 缓存命中率 ${cacheHitRate.toFixed(2)}%`;
+}
+
+function formatRuntimeProgress(state: Pick<JobRuntimeState, "completedWindowCount" | "totalWindowCount">): string {
+  return `进度：${state.completedWindowCount}/${state.totalWindowCount}`;
+}
+
+function toJobStatusFromRuntime(status: JobRuntimeState["status"]): JobStatus {
+  return status === "cancelled" ? "failed" : status;
+}
+
+function calculateEstimatedRemainingMs(
+  completedWindowCount: number,
+  totalWindowCount: number,
+  startedAt: string,
+  nowIso: string
+): number | undefined {
+  if (completedWindowCount <= 0 || completedWindowCount >= totalWindowCount) {
+    return undefined;
+  }
+
+  const startedAtMs = Date.parse(startedAt);
+  const nowMs = Date.parse(nowIso);
+  if (Number.isNaN(startedAtMs) || Number.isNaN(nowMs) || nowMs < startedAtMs) {
+    return undefined;
+  }
+
+  const averageWindowMs = (nowMs - startedAtMs) / completedWindowCount;
+  const remainingWindowCount = totalWindowCount - completedWindowCount;
+  return Math.max(0, Math.round(averageWindowMs * remainingWindowCount));
+}
+
+function isAllWindowsCompleted(
+  progress: Pick<ProjectRuntimeJobProgressRecord, "completedWindowCount" | "totalWindowCount"> | undefined
+): boolean {
+  return Boolean(
+    progress &&
+      progress.totalWindowCount > 0 &&
+      progress.completedWindowCount >= progress.totalWindowCount
+  );
+}
+
+export function toJobPatchFromRuntimeState(
+  state: JobRuntimeState,
+  previousJob: Pick<ProjectRuntimeJobRecord, "timing"> | undefined,
+  clock: Clock
+): Partial<ProjectRuntimeJobRecord> {
+  const now = clock.now();
+  const status = toJobStatusFromRuntime(state.status);
+  const previousTiming = previousJob?.timing;
+  const timing: ProjectRuntimeJobTimingRecord = previousTiming ? { ...previousTiming } : {};
+
+  if (state.status === "running" && !timing.startedAt) {
+    timing.startedAt = now;
+  }
+
+  if ((status === "completed" || status === "failed") && !timing.completedAt) {
+    timing.completedAt = now;
+  }
+
+  const progress = {
+    completedWindowCount: state.completedWindowCount,
+    totalWindowCount: state.totalWindowCount
+  };
+
+  if ((status === "running" || status === "completed") && isAllWindowsCompleted(progress)) {
+    timing.estimatedRemainingMs = 0;
+    timing.estimateFrozenAt = undefined;
+  } else if (status === "running" && state.completedWindowCount <= 0) {
+    timing.estimatedRemainingMs = undefined;
+    timing.estimateFrozenAt = undefined;
+  } else if (
+    status === "running" &&
+    timing.startedAt &&
+    state.completedWindowCount > 0 &&
+    state.completedWindowCount < state.totalWindowCount
+  ) {
+    const estimatedRemainingMs = calculateEstimatedRemainingMs(
+      state.completedWindowCount,
+      state.totalWindowCount,
+      timing.startedAt,
+      now
+    );
+    if (estimatedRemainingMs !== undefined) {
+      timing.estimatedRemainingMs = estimatedRemainingMs;
+      timing.estimateFrozenAt = undefined;
+    }
+  }
+
+  if (status === "paused" && previousTiming?.estimatedRemainingMs !== undefined) {
+    timing.estimatedRemainingMs = previousTiming.estimatedRemainingMs;
+    timing.estimateFrozenAt = now;
+  }
+
   return {
-    id: job.id,
-    bookId: job.bookId,
-    status: job.status,
-    progressText: job.progressText,
-    tokenText: job.tokenText,
-    failureReason: job.failureReason,
-    logFilePath: job.logFilePath,
-    allowedActions: getAllowedActions(job.status),
-    createdAt: job.createdAt,
-    updatedAt: job.updatedAt
+    status,
+    progressText: formatRuntimeProgress(state),
+    tokenText: formatTokenText(state.usage),
+    failureReason: state.failureReason,
+    progress,
+    timing
   };
 }
 
@@ -312,6 +414,126 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     }
   }
 
+  function clampPercent(completedWindowCount: number, totalWindowCount: number): number {
+    if (totalWindowCount <= 0) {
+      return 0;
+    }
+
+    const percent = Math.round((completedWindowCount / totalWindowCount) * 100);
+    return Math.min(100, Math.max(0, percent));
+  }
+
+  function toJobProgressDto(job: P0JobRecord): JobProgressDto | undefined {
+    if (!job.progress) {
+      return undefined;
+    }
+
+    return {
+      completedWindowCount: job.progress.completedWindowCount,
+      totalWindowCount: job.progress.totalWindowCount,
+      percent: clampPercent(job.progress.completedWindowCount, job.progress.totalWindowCount)
+    };
+  }
+
+  function calculateElapsedMs(startedAt: string, endedAt: string): number | undefined {
+    const startedAtMs = Date.parse(startedAt);
+    const endedAtMs = Date.parse(endedAt);
+    if (Number.isNaN(startedAtMs) || Number.isNaN(endedAtMs)) {
+      return undefined;
+    }
+
+    return Math.max(0, endedAtMs - startedAtMs);
+  }
+
+  function toJobTimingDto(job: P0JobRecord, nowIso: string): JobTimingDto | undefined {
+    const timing = job.timing;
+    if (!timing?.startedAt) {
+      return undefined;
+    }
+
+    const estimatedRemainingMs =
+      (job.status === "running" || job.status === "completed") && isAllWindowsCompleted(job.progress)
+        ? 0
+        : timing.estimatedRemainingMs;
+    const hasEstimatedRemaining = estimatedRemainingMs !== undefined;
+    const estimateState: JobTimingDto["estimateState"] =
+      job.status === "paused" && hasEstimatedRemaining
+        ? "frozen"
+        : hasEstimatedRemaining && (job.status === "running" || job.status === "completed")
+          ? "available"
+          : job.status === "running"
+            ? "calculating"
+            : "unknown";
+    const elapsedMs = calculateElapsedMs(timing.startedAt, timing.completedAt ?? nowIso);
+    const dto: JobTimingDto = {
+      startedAt: timing.startedAt,
+      estimateState
+    };
+
+    if (timing.completedAt !== undefined) {
+      dto.completedAt = timing.completedAt;
+    }
+    if (elapsedMs !== undefined) {
+      dto.elapsedMs = elapsedMs;
+    }
+    if (estimatedRemainingMs !== undefined) {
+      dto.estimatedRemainingMs = estimatedRemainingMs;
+    }
+
+    return dto;
+  }
+
+  function toInputSummaryDto(
+    job: P0JobRecord,
+    book: Book,
+    templates: readonly TemplateDto[]
+  ): InputSummaryDto {
+    const templatesById = new Map(templates.map((template) => [template.id, template]));
+
+    return {
+      bookDisplayName: book.displayName,
+      templateNames: job.input.templateIds
+        .map((templateId) => templatesById.get(templateId)?.name)
+        .filter((name): name is string => Boolean(name)),
+      modelId: job.input.modelId
+    };
+  }
+
+  async function resolveJobTemplatesForInputSummary(job: P0JobRecord): Promise<TemplateDto[]> {
+    const book = requireBook(job.bookId);
+    const templatesById = new Map(
+      (await listTemplatesForProject(book.projectId)).map((template) => [template.id, template])
+    );
+    return job.input.templateIds
+      .map((templateId) => templatesById.get(templateId))
+      .filter((template): template is TemplateDto => Boolean(template));
+  }
+
+  async function buildJobDto(job: P0JobRecord): Promise<JobDto> {
+    const book = requireBook(job.bookId);
+    const templates = await resolveJobTemplatesForInputSummary(job);
+
+    return {
+      id: job.id,
+      bookId: job.bookId,
+      status: job.status,
+      progressText: job.progressText,
+      progress: toJobProgressDto(job),
+      timing: toJobTimingDto(job, clock.now()),
+      output: {
+        outputDirectoryLabel: book.displayName,
+        canOpenOutputDirectory: job.status === "completed"
+      },
+      inputSummary: toInputSummaryDto(job, book, templates),
+      tokenText: job.tokenText,
+      failureReason: job.failureReason,
+      logFilePath: job.logFilePath,
+      allowedActions: getAllowedActions(job.status),
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt
+    };
+  }
+
   async function loadProjectRuntime(projectId: string): Promise<ProjectRuntimeDto> {
     const project = await ensureProject(projectId);
     const state = await getProjectRuntimeStore(project).load();
@@ -319,7 +541,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
 
     return {
       books: state.books.map((record) => record.upload),
-      jobs: state.jobs.filter((job) => job.status !== "deleted").map(toJobDto)
+      jobs: await Promise.all(state.jobs.filter((job) => job.status !== "deleted").map(buildJobDto))
     };
   }
 
@@ -713,20 +935,6 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     return error.code === "job_failed" ? error.message : `任务运行失败：${error.code}`;
   }
 
-  function formatTokenText(
-    usage: Pick<TokenUsage, "totalTokens" | "cacheHitTokens" | "cacheMissTokens"> | null | undefined
-  ): string {
-    const cacheHitTokens = usage?.cacheHitTokens ?? 0;
-    const cacheMissTokens = usage?.cacheMissTokens ?? 0;
-    const cacheMeasuredTokens = cacheHitTokens + cacheMissTokens;
-    const cacheHitRate = cacheMeasuredTokens > 0 ? (cacheHitTokens / cacheMeasuredTokens) * 100 : 0;
-    return `Token ${usage?.totalTokens ?? 0} / 缓存命中率 ${cacheHitRate.toFixed(2)}%`;
-  }
-
-  function formatRuntimeProgress(state: Pick<JobRuntimeState, "completedWindowCount" | "totalWindowCount">): string {
-    return `进度：${state.completedWindowCount}/${state.totalWindowCount}`;
-  }
-
   function estimateRuntimeWindowCount(book: Book, input: CreateJobDto): number {
     return planChapterWindows({
       chapterIds: Array.from({ length: book.chapterCount }, (_, index) => String(index + 1)),
@@ -736,22 +944,9 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     }).length;
   }
 
-  function toJobStatusFromRuntime(status: JobRuntimeState["status"]): JobStatus {
-    return status === "cancelled" ? "failed" : status;
-  }
-
-  function toJobPatchFromRuntimeState(state: JobRuntimeState): Partial<P0JobRecord> {
-    return {
-      status: toJobStatusFromRuntime(state.status),
-      progressText: formatRuntimeProgress(state),
-      tokenText: formatTokenText(state.usage),
-      failureReason: state.failureReason
-    };
-  }
-
-  function notifyJobUpdated(job: P0JobRecord): void {
+  async function notifyJobUpdated(job: P0JobRecord): Promise<void> {
     try {
-      options.onJobUpdated?.(toJobDto(job));
+      options.onJobUpdated?.(await buildJobDto(job));
     } catch {
       // Renderer notification must not fail the underlying extraction run.
     }
@@ -807,6 +1002,17 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     const book = requireBook(job.bookId);
     const project = await ensureProject(book.projectId);
     const result = await shellApi.openPath(path.join(project.rootPath, job.logFilePath));
+    if (result) {
+      throw new Error(result);
+    }
+  }
+
+  async function openJobOutputDirectory(job: P0JobRecord): Promise<void> {
+    const book = requireBook(job.bookId);
+    const project = await ensureProject(book.projectId);
+    const result = await shellApi.openPath(
+      path.join(project.rootPath, "assets", "books", book.id, "reports")
+    );
     if (result) {
       throw new Error(result);
     }
@@ -972,17 +1178,50 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     };
   }
 
+  function toTerminalFailurePatch(
+    job: P0JobRecord,
+    failureReason: string
+  ): Partial<P0JobRecord> {
+    return {
+      status: "failed",
+      failureReason,
+      timing: {
+        ...job.timing,
+        completedAt: job.timing?.completedAt ?? clock.now(),
+        estimatedRemainingMs: undefined,
+        estimateFrozenAt: undefined
+      }
+    };
+  }
+
   async function runModelBackedJob(
     job: P0JobRecord,
     runOptions?: RunModelBackedJobOptions
   ): Promise<JobDto> {
     const taskLogger = await createTaskLoggerForJob(job);
+    const initialRunJob = withRunOptions(job, runOptions);
+    const initialTotalWindowCount = estimateRuntimeWindowCount(requireBook(job.bookId), initialRunJob.input);
+    const runningStartedAt =
+      runOptions?.skipAlreadyExtracted === false
+        ? clock.now()
+        : (job.timing?.startedAt ?? clock.now());
     let runningJob = await updateJob(job, {
       status: "running",
       progressText: "正在准备运行窗口",
       tokenText: formatTokenText(null),
       failureReason: undefined,
-      logFilePath: taskLogger.relativePath
+      logFilePath: taskLogger.relativePath,
+      progress: {
+        completedWindowCount: 0,
+        totalWindowCount: initialTotalWindowCount
+      },
+      timing: {
+        ...job.timing,
+        startedAt: runningStartedAt,
+        completedAt: undefined,
+        estimatedRemainingMs: undefined,
+        estimateFrozenAt: undefined
+      }
     });
 
     try {
@@ -1017,7 +1256,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
         idGenerator,
         async onRuntimeState(state) {
           const currentJob = requireJob(state.jobId);
-          await updateJob(currentJob, toJobPatchFromRuntimeState(state));
+          await updateJob(currentJob, toJobPatchFromRuntimeState(state, currentJob, clock));
         },
         providerStore,
         taskLogger,
@@ -1034,24 +1273,20 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
 
       if (!result.ok) {
         const latestJob = requireJob(runningJob.id);
-        const failedJob =
-          latestJob.status === "failed"
-            ? latestJob
-            : await updateJob(latestJob, {
-                status: "failed",
-                failureReason: getRuntimeErrorReason(result.error)
-              });
-        return toJobDto(failedJob);
+        const failedJob = await updateJob(
+          latestJob,
+          toTerminalFailurePatch(latestJob, getRuntimeErrorReason(result.error))
+        );
+        return await buildJobDto(failedJob);
       }
 
-      return toJobDto(requireJob(runningJob.id));
+      return await buildJobDto(requireJob(runningJob.id));
     } catch (error) {
       await taskLogger.append(["错误", "任务"], getFailureReason(error));
-      return toJobDto(
+      return await buildJobDto(
         await updateJob(runningJob, {
-          status: "failed",
-          progressText: "任务失败",
-          failureReason: getFailureReason(error)
+          ...toTerminalFailurePatch(runningJob, getFailureReason(error)),
+          progressText: "任务失败"
         })
       );
     }
@@ -1084,7 +1319,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     };
     jobsById.set(nextJob.id, nextJob);
     await persistJob(nextJob);
-    notifyJobUpdated(nextJob);
+    await notifyJobUpdated(nextJob);
     return nextJob;
   }
 
@@ -1201,11 +1436,16 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       const project = await ensureProject(book.projectId);
       await resolveTemplatesForProject(book.projectId, normalizedInput.templateIds);
       const now = clock.now();
+      const totalWindowCount = estimateRuntimeWindowCount(book, normalizedInput);
       const job: P0JobRecord = {
         id: await createUniqueJobId(project.rootPath),
         bookId: book.id,
         status: "created",
-        progressText: `进度：0/${estimateRuntimeWindowCount(book, normalizedInput)}`,
+        progressText: `进度：0/${totalWindowCount}`,
+        progress: {
+          completedWindowCount: 0,
+          totalWindowCount
+        },
         tokenText: formatTokenText(null),
         input: normalizedInput,
         createdAt: now,
@@ -1213,7 +1453,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       };
       jobsById.set(job.id, job);
       await persistJob(job);
-      return toJobDto(job);
+      return await buildJobDto(job);
     },
     "jobs:start": async (input) => {
       const job = requireJob(input.jobId);
@@ -1221,7 +1461,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     },
     "jobs:pause": async (input) => {
       const job = requireJob(input.jobId);
-      return toJobDto(await updateJob(job, { status: "paused", progressText: "已暂停" }));
+      return await buildJobDto(await updateJob(job, { status: "paused", progressText: "已暂停" }));
     },
     "jobs:resume": async (input) => {
       const job = requireJob(input.jobId);
@@ -1252,6 +1492,10 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     "jobs:openLog": async (input) => {
       const job = requireJob(input.jobId);
       await openJobLog(job);
+    },
+    "jobs:openOutputDirectory": async (input) => {
+      const job = requireJob(input.jobId);
+      await openJobOutputDirectory(job);
     },
     "reports:preview": async (input) => {
       const report = reportsById.get(input.reportId);

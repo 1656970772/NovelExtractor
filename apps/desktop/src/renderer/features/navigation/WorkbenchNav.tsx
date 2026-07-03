@@ -1,196 +1,139 @@
-import { getWorkbenchNavigation, type MenuItemConfig, type MenuItemId } from "@novel-extractor/config";
-import type { FocusEvent, ReactNode } from "react";
-import { useId, useState } from "react";
+import type { ReactNode } from "react";
+import { useState } from "react";
+import { flushSync } from "react-dom";
+import {
+  WORKBENCH_NAV_ITEMS,
+  WORKBENCH_UTILITY_ITEMS,
+  type WorkbenchNavItem,
+  type WorkbenchUtilityNavItem
+} from "./workbenchNavConfig";
 
-export type WorkbenchPage = Extract<MenuItemId, "assets" | "extraction" | "graph">;
+export type WorkbenchPage = "assets" | "extraction" | "graph";
 
 export interface WorkbenchNavProps {
   activePage: WorkbenchPage;
-  projectName: string;
   onPageChange: (page: WorkbenchPage) => void;
+  onOpenProviderConfig?: () => void;
   onOpenSettings?: () => void;
-  userMenu?: ReactNode;
 }
 
-interface WorkbenchNavigationItem extends MenuItemConfig {
-  id: WorkbenchPage;
-}
+type RailItemId = WorkbenchPage | WorkbenchUtilityNavItem["id"];
 
-interface WorkbenchUtilityItem extends MenuItemConfig {
-  id: "desktop-settings";
-}
-
-function isWorkbenchNavigationItem(item: MenuItemConfig): item is WorkbenchNavigationItem {
-  return item.id === "assets" || item.id === "extraction" || item.id === "graph";
-}
-
-function isWorkbenchUtilityItem(item: MenuItemConfig): item is WorkbenchUtilityItem {
-  return item.id === "desktop-settings";
-}
-
-function getRailLabel(item: MenuItemConfig): string {
-  return item.shortLabel ?? item.label.slice(0, 1);
+function getRailTooltipId(id: RailItemId): string {
+  return `workbench-rail-tooltip-${id}`;
 }
 
 export function WorkbenchNav({
   activePage,
-  projectName,
   onPageChange,
-  onOpenSettings,
-  userMenu
-}: WorkbenchNavProps) {
-  const functionMenuId = useId();
-  const [isFunctionMenuHovered, setFunctionMenuHovered] = useState(false);
-  const [isFunctionMenuFocused, setFunctionMenuFocused] = useState(false);
-  const [isFunctionMenuPinnedOpen, setFunctionMenuPinnedOpen] = useState(false);
-  const workbenchNavigation = getWorkbenchNavigation();
-  const topFunctionItems = workbenchNavigation.topFunctionItems.filter(isWorkbenchNavigationItem);
-  const railAssetItem = isWorkbenchNavigationItem(workbenchNavigation.railAssetItem)
-    ? workbenchNavigation.railAssetItem
-    : null;
-  const railFunctionItems =
-    workbenchNavigation.railFunctionItems.filter(isWorkbenchNavigationItem);
-  const railUtilityItems = workbenchNavigation.railUtilityItems.filter(isWorkbenchUtilityItem);
-  const isFunctionMenuOpen =
-    isFunctionMenuHovered || isFunctionMenuFocused || isFunctionMenuPinnedOpen;
+  onOpenProviderConfig,
+  onOpenSettings
+}: WorkbenchNavProps): JSX.Element {
+  const [hoveredRailItemId, setHoveredRailItemId] = useState<RailItemId | null>(null);
+  const [focusedRailItemId, setFocusedRailItemId] = useState<RailItemId | null>(null);
+  const visibleRailItemId = hoveredRailItemId ?? focusedRailItemId;
 
-  function changePage(page: WorkbenchPage): void {
-    onPageChange(page);
-    setFunctionMenuHovered(false);
-    setFunctionMenuFocused(false);
-    setFunctionMenuPinnedOpen(false);
+  function showFocusedTooltip(id: RailItemId): void {
+    flushSync(() => {
+      setFocusedRailItemId(id);
+    });
   }
 
-  function closeFunctionMenuAfterBlur(event: FocusEvent<HTMLDivElement>): void {
-    const nextTarget = event.relatedTarget;
-
-    if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) {
-      setFunctionMenuFocused(false);
-      setFunctionMenuPinnedOpen(false);
-    }
+  function hideFocusedTooltip(id: RailItemId): void {
+    flushSync(() => {
+      setFocusedRailItemId((currentId) => (currentId === id ? null : currentId));
+    });
   }
 
-  function handleUtilityItemClick(item: WorkbenchUtilityItem): void {
-    if (item.id === "desktop-settings") {
-      onOpenSettings?.();
+  function renderTooltip(id: RailItemId, label: string): ReactNode {
+    if (visibleRailItemId !== id) {
+      return null;
     }
+
+    return (
+      <span
+        aria-label={label}
+        className="workbench-rail__tooltip"
+        id={getRailTooltipId(id)}
+        role="tooltip"
+      >
+        {label}
+      </span>
+    );
+  }
+
+  function renderPageButton(item: WorkbenchNavItem): ReactNode {
+    const Icon = item.icon;
+    const tooltipId = getRailTooltipId(item.page);
+
+    return (
+      <div className="workbench-rail__button-wrap" key={item.page}>
+        <button
+          aria-describedby={visibleRailItemId === item.page ? tooltipId : undefined}
+          aria-label={item.label}
+          aria-pressed={activePage === item.page}
+          className="workbench-rail__button"
+          onBlur={() => hideFocusedTooltip(item.page)}
+          onClick={() => onPageChange(item.page)}
+          onFocus={() => showFocusedTooltip(item.page)}
+          onMouseEnter={() => setHoveredRailItemId(item.page)}
+          onMouseLeave={() => setHoveredRailItemId(null)}
+          type="button"
+        >
+          <span className="workbench-rail__icon" aria-hidden="true">
+            <Icon className="workbench-rail__glyph" />
+          </span>
+        </button>
+        {renderTooltip(item.page, item.label)}
+      </div>
+    );
+  }
+
+  function getUtilityClickHandler(item: WorkbenchUtilityNavItem): (() => void) | undefined {
+    if (item.id === "provider-settings") {
+      return onOpenProviderConfig;
+    }
+
+    return onOpenSettings;
+  }
+
+  function renderUtilityButton(item: WorkbenchUtilityNavItem): ReactNode {
+    const Icon = item.icon;
+    const tooltipId = getRailTooltipId(item.id);
+
+    return (
+      <div className="workbench-rail__button-wrap" key={item.id}>
+        <button
+          aria-describedby={visibleRailItemId === item.id ? tooltipId : undefined}
+          aria-label={item.label}
+          className="workbench-rail__button"
+          onBlur={() => hideFocusedTooltip(item.id)}
+          onClick={getUtilityClickHandler(item)}
+          onFocus={() => showFocusedTooltip(item.id)}
+          onMouseEnter={() => setHoveredRailItemId(item.id)}
+          onMouseLeave={() => setHoveredRailItemId(null)}
+          type="button"
+        >
+          <span className="workbench-rail__icon" aria-hidden="true">
+            <Icon className="workbench-rail__glyph" />
+          </span>
+        </button>
+        {renderTooltip(item.id, item.label)}
+      </div>
+    );
   }
 
   return (
-    <header className="workbench-nav">
-      <aside className="rail-nav" aria-label="快捷功能栏">
-        <div className="rail-nav__brand" aria-hidden="true">
-          NE
-        </div>
-        {railAssetItem ? (
-          <div className="rail-nav__group" aria-label="资产入口">
-            <button
-              aria-label={railAssetItem.label}
-              aria-pressed={activePage === railAssetItem.id}
-              className="rail-nav__button"
-              onClick={() => changePage(railAssetItem.id)}
-              title={railAssetItem.label}
-              type="button"
-            >
-              {getRailLabel(railAssetItem)}
-            </button>
-          </div>
-        ) : null}
-        <div className="rail-nav__group" aria-label="功能快捷入口">
-          {railFunctionItems.map((item) => (
-            <button
-              aria-label={item.label}
-              aria-pressed={activePage === item.id}
-              className="rail-nav__button"
-              key={item.id}
-              onClick={() => changePage(item.id)}
-              title={item.label}
-              type="button"
-            >
-              {getRailLabel(item)}
-            </button>
-          ))}
-        </div>
-        {railUtilityItems.length > 0 ? (
-          <div className="rail-nav__group rail-nav__utility-group" aria-label="底部工具入口">
-            {railUtilityItems.map((item) => (
-              <button
-                aria-label={item.label}
-                className="rail-nav__button rail-nav__button--icon"
-                key={item.id}
-                onClick={() => handleUtilityItemClick(item)}
-                title={item.label}
-                type="button"
-              >
-                {getRailLabel(item)}
-              </button>
-            ))}
-          </div>
-        ) : null}
-      </aside>
-      <div className="top-nav">
-        <div className="top-nav__project">
-          <span>当前项目</span>
-          <strong>{projectName}</strong>
-        </div>
-        <div className="top-nav__tabs">
-          <div
-            className="top-nav__menu-wrap"
-            onBlur={closeFunctionMenuAfterBlur}
-            onFocus={() => setFunctionMenuFocused(true)}
-            onMouseEnter={() => setFunctionMenuHovered(true)}
-            onMouseLeave={() => setFunctionMenuHovered(false)}
-          >
-            <button
-              aria-controls={functionMenuId}
-              aria-expanded={isFunctionMenuOpen}
-              className="nav-tab"
-              onClick={() => setFunctionMenuPinnedOpen((currentValue) => !currentValue)}
-              type="button"
-            >
-              {workbenchNavigation.topFunctionLabel}
-            </button>
-            {isFunctionMenuOpen ? (
-              <div className="top-nav__function-panel" id={functionMenuId}>
-                <nav className="top-nav__feature-grid" aria-label="功能入口">
-                  {topFunctionItems.map((item) => (
-                    <button
-                      aria-current={activePage === item.id ? "page" : undefined}
-                      className="top-nav__feature-card"
-                      key={item.id}
-                      onClick={() => changePage(item.id)}
-                      type="button"
-                    >
-                      {item.imageSrc ? (
-                        <img
-                          alt=""
-                          className="top-nav__feature-image"
-                          src={item.imageSrc}
-                        />
-                      ) : (
-                        <span className="top-nav__feature-fallback" aria-hidden="true">
-                          {getRailLabel(item)}
-                        </span>
-                      )}
-                      <span className="top-nav__feature-name">{item.label}</span>
-                    </button>
-                  ))}
-                </nav>
-              </div>
-            ) : null}
-          </div>
-        </div>
-        <div className="top-nav__actions">
-          <button className="button button--quiet" type="button">
-            {workbenchNavigation.languageAction.label}
-          </button>
-          {userMenu ?? (
-            <button className="button button--user" type="button">
-              {workbenchNavigation.userAction.label}
-            </button>
-          )}
-        </div>
+    <nav className="workbench-rail" aria-label="工作台导航">
+      <div className="workbench-rail__brand" aria-hidden="true">
+        NE
       </div>
-    </header>
+      <div className="workbench-rail__group" aria-label="页面入口">
+        {WORKBENCH_NAV_ITEMS.map(renderPageButton)}
+      </div>
+      <div className="workbench-rail__group workbench-rail__utility-group" aria-label="工具入口">
+        {WORKBENCH_UTILITY_ITEMS.map(renderUtilityButton)}
+      </div>
+    </nav>
   );
 }
