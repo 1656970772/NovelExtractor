@@ -71,7 +71,7 @@ describe("jobQueueViewModel", () => {
     });
 
     expect(card.title).toBe("凡人修仙传");
-    expect(card.templateNamesText).toBe("丹药分析、人物关系");
+    expect("templateNamesText" in card).toBe(false);
     expect(card.modelText).toBe("deepseek-chat");
     expect(card.progressCountText).toBe("2 / 5");
     expect(card.progressPercentText).toBe("100%");

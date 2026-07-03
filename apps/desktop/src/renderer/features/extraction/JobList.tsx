@@ -101,8 +101,14 @@ export function JobList({
           {visibleJobs.map((job) => {
             const statusConfig = STATUS_CONFIG[job.status];
             const card = getJobCardViewModel(job);
-            const jobRowClassName =
-              job.id === activeJobId ? "job-row job-card job-card--active" : "job-row job-card";
+            const jobRowClassName = [
+              "job-row",
+              "job-card",
+              `job-card--${job.status}`,
+              job.id === activeJobId ? "job-card--active" : undefined
+            ]
+              .filter(Boolean)
+              .join(" ");
             const shouldShowProgress =
               card.hasStructuredProgress || card.progressText !== card.title;
 
@@ -117,7 +123,6 @@ export function JobList({
                       </span>
                     </div>
                     <div className="job-card__meta">
-                      <span>模板：{card.templateNamesText}</span>
                       <span>模型：{card.modelText}</span>
                     </div>
                   </div>

@@ -531,14 +531,15 @@ describe("ExtractionPage", () => {
     );
 
     expect(screen.getByRole("heading", { name: "凡人修仙传" })).toBeInTheDocument();
-    expect(screen.getByText("模板：丹药分析、人物关系")).toBeInTheDocument();
+    expect(screen.queryByText(/模板：/)).not.toBeInTheDocument();
+    expect(screen.queryByText("丹药分析、人物关系")).not.toBeInTheDocument();
     expect(screen.getByText("模型：deepseek-chat")).toBeInTheDocument();
     expect(screen.getByText("2 / 5")).toBeInTheDocument();
     expect(screen.getByText("40%")).toBeInTheDocument();
     expect(screen.getByText("已用时：00:05:32")).toBeInTheDocument();
     expect(screen.getByText("预计剩余：00:07:58")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "已完成的书" })).toBeInTheDocument();
-    expect(screen.getByText("模板：世界观模板")).toBeInTheDocument();
+    expect(screen.queryByText("世界观模板")).not.toBeInTheDocument();
     expect(screen.getByText("模型：deepseek-reasoner")).toBeInTheDocument();
     expect(screen.getByText("完成时间：2026-07-02 10:12:48")).toBeInTheDocument();
 
@@ -615,11 +616,52 @@ describe("ExtractionPage", () => {
     );
 
     expect(screen.getByRole("heading", { name: "暂停的书" })).toBeInTheDocument();
-    expect(screen.getByText("模板：未选择模板")).toBeInTheDocument();
+    expect(screen.queryByText(/模板：/)).not.toBeInTheDocument();
     expect(screen.getByText("预计剩余：已暂停 00:07:00")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "失败的书" })).toBeInTheDocument();
     expect(screen.getByText("模型返回格式无效")).toBeInTheDocument();
     expect(screen.getByText("失败时间：2026-07-02 09:40:30")).toBeInTheDocument();
+  });
+
+  it("marks job cards with status-specific classes for visual state colors", () => {
+    render(
+      <ExtractionPage
+        models={[modelForTest]}
+        books={[]}
+        jobs={[
+          {
+            id: "job-running",
+            status: "running",
+            progressText: "窗口 1/4",
+            inputSummary: { bookDisplayName: "运行中的书", templateNames: [], modelId: "model-running" }
+          },
+          {
+            id: "job-failed",
+            status: "failed",
+            progressText: "窗口 2/4",
+            failureReason: "窗口执行失败",
+            inputSummary: { bookDisplayName: "失败的书", templateNames: [], modelId: "model-failed" }
+          },
+          {
+            id: "job-completed",
+            status: "completed",
+            progressText: "完成",
+            inputSummary: { bookDisplayName: "完成的书", templateNames: [], modelId: "model-completed" }
+          }
+        ]}
+        state="ready"
+      />
+    );
+
+    expect(screen.getByRole("heading", { name: "运行中的书" }).closest("li")).toHaveClass(
+      "job-card--running"
+    );
+    expect(screen.getByRole("heading", { name: "失败的书" }).closest("li")).toHaveClass(
+      "job-card--failed"
+    );
+    expect(screen.getByRole("heading", { name: "完成的书" }).closest("li")).toHaveClass(
+      "job-card--completed"
+    );
   });
 
   it("shows upload and task loading states", () => {

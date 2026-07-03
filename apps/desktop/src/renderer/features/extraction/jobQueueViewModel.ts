@@ -12,7 +12,6 @@ export const JOB_QUEUE_FILTERS: readonly { key: JobQueueFilter; label: string }[
 
 export interface JobCardViewModel {
   title: string;
-  templateNamesText: string;
   modelText: string;
   hasStructuredProgress: boolean;
   progressText: string;
@@ -136,11 +135,8 @@ export function getRemainingTimeLabel(job: ExtractionJob): string {
 }
 
 export function getJobCardViewModel(job: ExtractionJob): JobCardViewModel {
-  const templateNames = job.inputSummary?.templateNames ?? [];
-
   return {
     title: job.inputSummary?.bookDisplayName || job.progressText || job.id,
-    templateNamesText: templateNames.length > 0 ? templateNames.join("、") : "未选择模板",
     modelText: job.inputSummary?.modelId ?? "--",
     hasStructuredProgress: Boolean(job.progress),
     progressText: job.progressText ?? "尚未开始",

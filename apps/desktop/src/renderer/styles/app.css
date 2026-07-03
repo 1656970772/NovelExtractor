@@ -563,7 +563,7 @@ p {
   min-width: 0;
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 1080px) {
   .extraction-layout {
     grid-template-columns: 1fr;
   }
@@ -662,7 +662,9 @@ p {
 }
 
 .entity-row span,
-.job-row span {
+.job-card__meta span,
+.job-card__details span,
+.job-card__progress-heading span {
   color: var(--app-color-ink-muted);
   font-size: 13px;
 }
@@ -702,12 +704,46 @@ p {
 }
 
 .job-card {
+  --job-card-status-surface: var(--app-color-surface-paper);
+  --job-card-status-border: var(--app-color-border);
+  --job-card-status-emphasis: var(--app-color-ink-muted);
+  --job-card-status-badge-surface: var(--app-color-surface);
   gap: 10px;
   padding: 12px;
+  border-color: var(--job-card-status-border);
+  background: var(--job-card-status-surface);
+}
+
+.job-card--running {
+  --job-card-status-surface: #fefcf9;
+  --job-card-status-border: #f2c46f;
+  --job-card-status-emphasis: #e09a04;
+  --job-card-status-badge-surface: #fff1d8;
+}
+
+.job-card--paused {
+  --job-card-status-surface: #f8fbfd;
+  --job-card-status-border: #b9d0df;
+  --job-card-status-emphasis: #416f91;
+  --job-card-status-badge-surface: #eaf3f8;
+}
+
+.job-card--failed {
+  --job-card-status-surface: #fef8f8;
+  --job-card-status-border: #f2b8b5;
+  --job-card-status-emphasis: #cf2f2f;
+  --job-card-status-badge-surface: #fde5e4;
+}
+
+.job-card--completed {
+  --job-card-status-surface: #f7faf8;
+  --job-card-status-border: #cddcd7;
+  --job-card-status-emphasis: #0f603d;
+  --job-card-status-badge-surface: #eaf5ef;
 }
 
 .job-card--active {
-  border-color: var(--app-color-accent);
+  box-shadow: 0 0 0 1px var(--app-color-accent);
 }
 
 .job-card__header {
@@ -756,24 +792,30 @@ p {
   white-space: nowrap;
 }
 
+.job-card .job-card__status {
+  border-color: var(--job-card-status-emphasis);
+  background: var(--job-card-status-badge-surface);
+  color: var(--job-card-status-emphasis);
+}
+
 .job-card__status--running {
-  border-color: var(--app-color-progress);
-  color: var(--app-color-progress);
+  border-color: var(--job-card-status-emphasis);
+  color: var(--job-card-status-emphasis);
 }
 
 .job-card__status--paused {
-  border-color: var(--app-color-warning);
-  color: var(--app-color-warning);
+  border-color: var(--job-card-status-emphasis);
+  color: var(--job-card-status-emphasis);
 }
 
 .job-card__status--failed {
-  border-color: var(--app-color-danger);
-  color: var(--app-color-danger);
+  border-color: var(--job-card-status-emphasis);
+  color: var(--job-card-status-emphasis);
 }
 
 .job-card__status--completed {
-  border-color: var(--app-color-success);
-  color: var(--app-color-success);
+  border-color: var(--job-card-status-emphasis);
+  color: var(--job-card-status-emphasis);
 }
 
 .job-card__meta,
@@ -813,7 +855,7 @@ p {
   height: 8px;
   overflow: hidden;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--app-color-border) 60%, var(--app-color-surface));
+  background: #d6dade;
 }
 
 .job-card__progress-bar {
@@ -823,16 +865,24 @@ p {
   background: var(--app-color-progress);
 }
 
+.job-card .job-card__progress-bar {
+  background: var(--job-card-status-emphasis);
+}
+
+.job-card__progress-bar--running {
+  background: var(--job-card-status-emphasis);
+}
+
 .job-card__progress-bar--paused {
-  background: var(--app-color-warning);
+  background: var(--job-card-status-emphasis);
 }
 
 .job-card__progress-bar--failed {
-  background: var(--app-color-danger);
+  background: var(--job-card-status-emphasis);
 }
 
 .job-card__progress-bar--completed {
-  background: var(--app-color-success);
+  background: var(--job-card-status-emphasis);
 }
 
 .job-card__footer {

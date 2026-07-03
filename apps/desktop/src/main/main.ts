@@ -10,6 +10,7 @@ import {
   createFileDesktopSettingsStore
 } from "./desktopSettings";
 import { createNotImplementedIpcHandlers, registerIpcHandlers } from "./ipc";
+import { createMainBrowserWindowOptions } from "./mainWindowOptions";
 import { createP0IpcHandlers } from "./p0Handlers";
 import { createProviderIpcHandlers } from "./providerHandlers";
 import { createFileProviderStore } from "./providerStore";
@@ -26,21 +27,13 @@ function canOpenExternalUrl(url: string): boolean {
 
 function createMainWindow(): void {
   const themeTokens = getThemeTokens();
-  const mainWindow = new BrowserWindow({
-    width: 1180,
-    height: 760,
-    minWidth: 960,
-    minHeight: 640,
-    title: "NovelExtractor",
-    frame: false,
-    backgroundColor: themeTokens.color.appBackground,
-    webPreferences: {
-      preload: join(__dirname, "../preload/index.cjs"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true
-    }
-  });
+  const mainWindow = new BrowserWindow(
+    createMainBrowserWindowOptions(
+      { appBackground: themeTokens.color.appBackground },
+      process.env,
+      join(__dirname, "../preload/index.cjs")
+    )
+  );
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (canOpenExternalUrl(url)) {

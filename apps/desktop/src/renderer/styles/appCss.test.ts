@@ -20,6 +20,64 @@ function getRuleBody(selector: string): string {
 }
 
 describe("app css template modal layout", () => {
+  it("keeps the extraction workbench in three columns at the default desktop width", () => {
+    const extractionLayoutRule = getRuleBody(".extraction-layout");
+    const compactBreakpointRule = getRuleBody("@media (max-width: 1080px)");
+
+    expect(extractionLayoutRule).toContain(
+      "grid-template-columns: minmax(300px, 0.9fr) minmax(320px, 1fr) minmax(420px, 1.45fr)"
+    );
+    expect(appCss).not.toContain("@media (max-width: 1180px)");
+    expect(compactBreakpointRule).toContain(".extraction-layout");
+    expect(compactBreakpointRule).toContain("grid-template-columns: 1fr");
+  });
+
+  it("uses distinct card surfaces for running, paused, failed, and completed jobs", () => {
+    const runningRule = getRuleBody(".job-card--running");
+    const pausedRule = getRuleBody(".job-card--paused");
+    const failedRule = getRuleBody(".job-card--failed");
+    const completedRule = getRuleBody(".job-card--completed");
+
+    expect(runningRule).toContain("--job-card-status-surface: #fefcf9");
+    expect(runningRule).toContain("--job-card-status-border: #f2c46f");
+    expect(runningRule).toContain("--job-card-status-emphasis: #e09a04");
+    expect(runningRule).not.toContain("color-mix");
+    expect(pausedRule).toContain("--job-card-status-surface: #f8fbfd");
+    expect(pausedRule).toContain("--job-card-status-emphasis: #416f91");
+    expect(failedRule).toContain("--job-card-status-surface: #fef8f8");
+    expect(failedRule).toContain("--job-card-status-border: #f2b8b5");
+    expect(failedRule).toContain("--job-card-status-emphasis: #cf2f2f");
+    expect(failedRule).not.toContain("color-mix");
+    expect(completedRule).toContain("--job-card-status-surface: #f7faf8");
+    expect(completedRule).toContain("--job-card-status-emphasis: #0f603d");
+  });
+
+  it("keeps active job selection from overriding status border colors", () => {
+    const activeRule = getRuleBody(".job-card--active");
+
+    expect(activeRule).not.toContain("border-color");
+    expect(activeRule).toContain("box-shadow: 0 0 0 1px var(--app-color-accent)");
+  });
+
+  it("uses matching warning visuals for running job badges and progress bars", () => {
+    const runningStatusRule = getRuleBody(".job-card__status--running");
+    const pausedStatusRule = getRuleBody(".job-card__status--paused");
+    const runningProgressRule = getRuleBody(".job-card__progress-bar--running");
+    const pausedProgressRule = getRuleBody(".job-card__progress-bar--paused");
+    const statusInCardRule = getRuleBody(".job-card .job-card__status");
+    const progressBarInCardRule = getRuleBody(".job-card .job-card__progress-bar");
+
+    expect(appCss).not.toContain(".job-row span");
+    expect(statusInCardRule).toContain("background: var(--job-card-status-badge-surface)");
+    expect(statusInCardRule).toContain("color: var(--job-card-status-emphasis)");
+    expect(progressBarInCardRule).toContain("background: var(--job-card-status-emphasis)");
+    expect(runningStatusRule).toContain("border-color: var(--job-card-status-emphasis)");
+    expect(runningProgressRule).toContain("background: var(--job-card-status-emphasis)");
+    expect(pausedStatusRule).toContain("border-color: var(--job-card-status-emphasis)");
+    expect(pausedStatusRule).toContain("color: var(--job-card-status-emphasis)");
+    expect(pausedProgressRule).toContain("background: var(--job-card-status-emphasis)");
+  });
+
   it("keeps the template library scrollable with readable two-column rows", () => {
     const modalRule = getRuleBody(".template-modal");
     const scrollRule = getRuleBody(".template-modal__scroll");
