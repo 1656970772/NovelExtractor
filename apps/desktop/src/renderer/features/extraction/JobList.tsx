@@ -10,6 +10,7 @@ import {
   JOB_QUEUE_FILTERS,
   type JobQueueFilter
 } from "./jobQueueViewModel";
+import { useTransientScrollbar } from "./useTransientScrollbar";
 
 export interface JobListProps {
   jobs: readonly ExtractionJob[];
@@ -37,6 +38,7 @@ export function JobList({
   const [activeFilter, setActiveFilter] = useState<JobQueueFilter>("all");
   const sortedJobs = sortExtractionJobsByCreatedAtDesc(jobs);
   const visibleJobs = filterJobs(sortedJobs, activeFilter);
+  const listScrollbar = useTransientScrollbar();
 
   function runAction(job: ExtractionJob, action: TaskAction): void {
     if (action === "delete") {
@@ -97,7 +99,16 @@ export function JobList({
       {visibleJobs.length === 0 ? (
         <p className="empty-text">{jobs.length === 0 ? "暂无提取任务" : "当前筛选暂无任务"}</p>
       ) : (
-        <ul className="job-list">
+        <ul
+          className={[
+            "job-list",
+            "transient-scrollbar",
+            listScrollbar.isScrollbarActive ? "transient-scrollbar--active" : undefined
+          ]
+            .filter(Boolean)
+            .join(" ")}
+          onScroll={listScrollbar.onScroll}
+        >
           {visibleJobs.map((job) => {
             const statusConfig = STATUS_CONFIG[job.status];
             const card = getJobCardViewModel(job);

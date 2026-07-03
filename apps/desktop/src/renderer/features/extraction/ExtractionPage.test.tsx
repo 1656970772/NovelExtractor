@@ -1022,6 +1022,52 @@ describe("ExtractionPage", () => {
       }
     }
   });
+
+  it("shows local scrollbars while extraction panes scroll and hides them after half a second", () => {
+    vi.useFakeTimers();
+    try {
+      const { container } = render(
+        <ExtractionPage
+          models={[modelForTest]}
+          books={[]}
+          jobs={[
+            { id: "job-1", status: "completed", progressText: "完成 1" },
+            { id: "job-2", status: "completed", progressText: "完成 2" }
+          ]}
+          state="ready"
+        />
+      );
+
+      const layout = container.querySelector(".extraction-layout");
+      const jobList = container.querySelector(".jobs-panel > .job-list");
+      expect(layout).toBeInstanceOf(HTMLElement);
+      expect(jobList).toBeInstanceOf(HTMLElement);
+      expect(layout).toHaveClass("transient-scrollbar");
+      expect(jobList).toHaveClass("transient-scrollbar");
+      expect(layout).not.toHaveClass("transient-scrollbar--active");
+      expect(jobList).not.toHaveClass("transient-scrollbar--active");
+
+      fireEvent.scroll(layout as HTMLElement);
+      fireEvent.scroll(jobList as HTMLElement);
+
+      expect(layout).toHaveClass("transient-scrollbar--active");
+      expect(jobList).toHaveClass("transient-scrollbar--active");
+
+      act(() => {
+        vi.advanceTimersByTime(499);
+      });
+      expect(layout).toHaveClass("transient-scrollbar--active");
+      expect(jobList).toHaveClass("transient-scrollbar--active");
+
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(layout).not.toHaveClass("transient-scrollbar--active");
+      expect(jobList).not.toHaveClass("transient-scrollbar--active");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 function createMockFile(fileName: string, type: string, content: string): File {

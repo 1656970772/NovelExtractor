@@ -19,6 +19,7 @@ import {
 } from "./extractionViewModel";
 import { getDefaultTemplateViews, type TemplateView } from "../templates/templateViewModel";
 import { TemplateUploadPanel } from "../templates/TemplateUploadPanel";
+import { useTransientScrollbar } from "./useTransientScrollbar";
 
 export type { ExtractionBook, ExtractionJob, ExtractionModel } from "./extractionViewModel";
 
@@ -85,6 +86,7 @@ export function ExtractionPage({
     createExtractionFormState({ books, models, templates, defaults, selectedTemplateIds })
   );
   const [localCreateError, setLocalCreateError] = useState<string | undefined>();
+  const layoutScrollbar = useTransientScrollbar();
 
   useEffect(() => {
     setFormState((currentState) =>
@@ -149,7 +151,16 @@ export function ExtractionPage({
         ) : null}
       </div>
 
-      <div className="extraction-layout">
+      <div
+        className={[
+          "extraction-layout",
+          "transient-scrollbar",
+          layoutScrollbar.isScrollbarActive ? "transient-scrollbar--active" : undefined
+        ]
+          .filter(Boolean)
+          .join(" ")}
+        onScroll={layoutScrollbar.onScroll}
+      >
         <div className="extraction-layout__stack">
           <UploadNovelPanel
             books={books}

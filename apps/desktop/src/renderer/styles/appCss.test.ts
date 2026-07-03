@@ -20,6 +20,21 @@ function getRuleBody(selector: string): string {
 }
 
 describe("app css template modal layout", () => {
+  it("keeps desktop scrolling inside app panels instead of the document", () => {
+    const rootDocumentRule = getRuleBody(":root");
+    const bodyRule = getRuleBody("body");
+    const reactRootRule = getRuleBody("#root");
+    const shellRule = getRuleBody(".project-gate-shell,\n.workbench-shell");
+
+    expect(rootDocumentRule).toContain("height: 100%");
+    expect(bodyRule).toContain("height: 100dvh");
+    expect(bodyRule).toContain("overflow: hidden");
+    expect(reactRootRule).toContain("height: 100dvh");
+    expect(reactRootRule).toContain("overflow: hidden");
+    expect(shellRule).toContain("height: 100%");
+    expect(shellRule).toContain("min-height: 0");
+  });
+
   it("keeps the extraction workbench in three columns at the default desktop width", () => {
     const extractionLayoutRule = getRuleBody(".extraction-layout");
     const compactBreakpointRule = getRuleBody("@media (max-width: 1080px)");
@@ -33,21 +48,47 @@ describe("app css template modal layout", () => {
   });
 
   it("keeps the extraction task queue scroll inside the jobs panel on desktop", () => {
+    const extractionMainRule = getRuleBody(".workbench-main--extraction");
     const extractionPageRule = getRuleBody(".extraction-page");
     const extractionLayoutRule = getRuleBody(".extraction-layout");
     const jobsPanelRule = getRuleBody(".jobs-panel");
     const jobListRule = getRuleBody(".jobs-panel > .job-list");
 
+    expect(extractionMainRule).toContain("overflow: hidden");
     expect(extractionPageRule).toContain("height: 100%");
     expect(extractionPageRule).toContain("min-height: 0");
     expect(extractionPageRule).toContain("grid-template-rows: auto minmax(0, 1fr)");
     expect(extractionLayoutRule).toContain("min-height: 0");
     expect(extractionLayoutRule).toContain("align-items: stretch");
+    expect(extractionLayoutRule).toContain("overflow-y: auto");
+    expect(extractionLayoutRule).toContain("overflow-x: hidden");
+    expect(extractionLayoutRule).toContain("scrollbar-width: thin");
+    expect(appCss).toContain(".workbench-main--extraction {\n    overflow: auto;");
+    expect(appCss).toContain("overflow: visible");
     expect(jobsPanelRule).toContain("grid-template-rows: auto auto minmax(0, 1fr)");
     expect(jobsPanelRule).toContain("overflow: hidden");
     expect(jobListRule).toContain("min-height: 0");
     expect(jobListRule).toContain("overflow-y: auto");
     expect(jobListRule).toContain("overflow-x: hidden");
+  });
+
+  it("uses transient thin scrollbar styling for local scroll regions", () => {
+    const transientRule = getRuleBody(".transient-scrollbar");
+    const transientActiveRule = getRuleBody(".transient-scrollbar--active");
+    const webkitScrollbarRule = getRuleBody(".transient-scrollbar::-webkit-scrollbar");
+    const webkitThumbRule = getRuleBody(".transient-scrollbar::-webkit-scrollbar-thumb");
+    const webkitActiveThumbRule = getRuleBody(
+      ".transient-scrollbar--active::-webkit-scrollbar-thumb"
+    );
+
+    expect(transientRule).toContain("--transient-scrollbar-thumb: transparent");
+    expect(transientRule).toContain("scrollbar-color: transparent transparent");
+    expect(transientActiveRule).toContain("--transient-scrollbar-thumb: rgb(189 196 202 / 0.82)");
+    expect(transientActiveRule).toContain("scrollbar-color: var(--transient-scrollbar-thumb) transparent");
+    expect(webkitScrollbarRule).toContain("width: 10px");
+    expect(webkitThumbRule).toContain("border-radius: 999px");
+    expect(webkitThumbRule).toContain("background-clip: padding-box");
+    expect(webkitActiveThumbRule).toContain("background-color: var(--transient-scrollbar-thumb)");
   });
 
   it("uses distinct card surfaces for running, paused, failed, and completed jobs", () => {

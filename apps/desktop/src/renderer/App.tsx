@@ -695,7 +695,7 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
         onOpenProviderConfig={() => setProviderModalOpen(true)}
         onOpenSettings={openSettings}
       />
-      <main className="workbench-main" aria-label="工作台内容">
+      <main className={`workbench-main workbench-main--${activePage}`} aria-label="工作台内容">
         {activePage === "assets" ? (
           <AssetsPage
             books={books}
