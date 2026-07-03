@@ -528,6 +528,17 @@ p {
   gap: 4px;
 }
 
+.extraction-page {
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.extraction-page__chrome {
+  display: grid;
+  gap: 16px;
+}
+
 .section-kicker {
   font-weight: 700;
 }
@@ -553,7 +564,8 @@ p {
   display: grid;
   grid-template-columns: minmax(300px, 0.9fr) minmax(320px, 1fr) minmax(420px, 1.45fr);
   gap: 12px;
-  align-items: start;
+  align-items: stretch;
+  min-height: 0;
 }
 
 .extraction-layout__stack {
@@ -566,6 +578,12 @@ p {
 @media (max-width: 1080px) {
   .extraction-layout {
     grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .extraction-page {
+    height: auto;
+    grid-template-rows: none;
   }
 }
 
@@ -923,9 +941,22 @@ p {
 
 .upload-panel,
 .template-upload-panel,
-.parameters-panel,
+.parameters-panel {
+  align-content: start;
+}
+
 .jobs-panel {
   align-content: start;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.jobs-panel > .job-list {
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-right: 2px;
+  scrollbar-width: thin;
 }
 
 .file-upload-field {

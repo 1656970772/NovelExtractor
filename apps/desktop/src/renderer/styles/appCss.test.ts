@@ -32,6 +32,24 @@ describe("app css template modal layout", () => {
     expect(compactBreakpointRule).toContain("grid-template-columns: 1fr");
   });
 
+  it("keeps the extraction task queue scroll inside the jobs panel on desktop", () => {
+    const extractionPageRule = getRuleBody(".extraction-page");
+    const extractionLayoutRule = getRuleBody(".extraction-layout");
+    const jobsPanelRule = getRuleBody(".jobs-panel");
+    const jobListRule = getRuleBody(".jobs-panel > .job-list");
+
+    expect(extractionPageRule).toContain("height: 100%");
+    expect(extractionPageRule).toContain("min-height: 0");
+    expect(extractionPageRule).toContain("grid-template-rows: auto minmax(0, 1fr)");
+    expect(extractionLayoutRule).toContain("min-height: 0");
+    expect(extractionLayoutRule).toContain("align-items: stretch");
+    expect(jobsPanelRule).toContain("grid-template-rows: auto auto minmax(0, 1fr)");
+    expect(jobsPanelRule).toContain("overflow: hidden");
+    expect(jobListRule).toContain("min-height: 0");
+    expect(jobListRule).toContain("overflow-y: auto");
+    expect(jobListRule).toContain("overflow-x: hidden");
+  });
+
   it("uses distinct card surfaces for running, paused, failed, and completed jobs", () => {
     const runningRule = getRuleBody(".job-card--running");
     const pausedRule = getRuleBody(".job-card--paused");

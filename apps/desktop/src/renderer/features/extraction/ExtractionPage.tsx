@@ -126,26 +126,28 @@ export function ExtractionPage({
   }
 
   return (
-    <section className="page-surface" aria-labelledby="extraction-title">
-      <div className="page-heading">
-        <div>
-          <p className="section-kicker">Extraction</p>
-          <h1 id="extraction-title">小说提取</h1>
+    <section className="page-surface extraction-page" aria-labelledby="extraction-title">
+      <div className="extraction-page__chrome">
+        <div className="page-heading">
+          <div>
+            <p className="section-kicker">Extraction</p>
+            <h1 id="extraction-title">小说提取</h1>
+          </div>
+          <span className="status-chip">{models.length > 0 ? `${models.length} 个模型` : "模型状态待确认"}</span>
         </div>
-        <span className="status-chip">{models.length > 0 ? `${models.length} 个模型` : "模型状态待确认"}</span>
+
+        {state === "error" ? (
+          <div className="state-banner state-banner--danger" role="alert">
+            {errorMessage ?? "读取任务失败"}
+          </div>
+        ) : null}
+
+        {state === "loading" ? (
+          <div className="state-banner" aria-label="上传和任务加载中">
+            正在加载上传信息和任务列表
+          </div>
+        ) : null}
       </div>
-
-      {state === "error" ? (
-        <div className="state-banner state-banner--danger" role="alert">
-          {errorMessage ?? "读取任务失败"}
-        </div>
-      ) : null}
-
-      {state === "loading" ? (
-        <div className="state-banner" aria-label="上传和任务加载中">
-          正在加载上传信息和任务列表
-        </div>
-      ) : null}
 
       <div className="extraction-layout">
         <div className="extraction-layout__stack">
