@@ -892,18 +892,31 @@ p {
   color: var(--job-card-status-emphasis);
 }
 
-.job-card__meta,
-.job-card__details {
+.job-card__meta {
   display: flex;
   flex-wrap: wrap;
   gap: 6px 12px;
   min-width: 0;
 }
 
+.job-card__details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 6px 12px;
+  align-items: start;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
 .job-card__meta span,
 .job-card__details span {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.job-card__details > span:not(.job-row__token) {
+  overflow-wrap: normal;
+  white-space: nowrap;
 }
 
 .job-card__progress {
@@ -918,6 +931,7 @@ p {
   align-items: center;
   justify-content: space-between;
   min-width: 0;
+  font-variant-numeric: tabular-nums;
 }
 
 .job-card__progress-heading strong {
@@ -925,37 +939,21 @@ p {
   font-size: 13px;
 }
 
-.job-card__progress-track {
+.progress-meter {
   height: 8px;
   overflow: hidden;
   border-radius: 999px;
   background: #d6dade;
 }
 
-.job-card__progress-bar {
+.progress-meter__bar {
   display: block;
   height: 100%;
   border-radius: inherit;
   background: var(--app-color-progress);
 }
 
-.job-card .job-card__progress-bar {
-  background: var(--job-card-status-emphasis);
-}
-
-.job-card__progress-bar--running {
-  background: var(--job-card-status-emphasis);
-}
-
-.job-card__progress-bar--paused {
-  background: var(--job-card-status-emphasis);
-}
-
-.job-card__progress-bar--failed {
-  background: var(--job-card-status-emphasis);
-}
-
-.job-card__progress-bar--completed {
+.job-card .progress-meter__bar {
   background: var(--job-card-status-emphasis);
 }
 
@@ -1008,6 +1006,7 @@ p {
 }
 
 .jobs-panel > .job-list {
+  align-content: start;
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
@@ -1367,6 +1366,7 @@ p {
 }
 
 .job-row__token {
+  grid-column: 1 / -1;
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
@@ -1412,7 +1412,7 @@ p {
 }
 
 .job-log-text {
-  width: min(100%, 58rem);
+  width: 100%;
   max-height: 280px;
   overflow: auto;
   margin: 0;
@@ -1892,7 +1892,13 @@ p {
   display: grid;
   gap: 6px;
   margin: 0;
-  padding: 0;
+  max-height: min(220px, 32dvh);
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 0 2px 0 0;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
   list-style: none;
 }
 

@@ -72,6 +72,12 @@ describe("app css template modal layout", () => {
     expect(jobListRule).toContain("overflow-x: hidden");
   });
 
+  it("keeps a single extraction job card at its content height", () => {
+    const jobListRule = getRuleBody(".jobs-panel > .job-list");
+
+    expect(jobListRule).toContain("align-content: start");
+  });
+
   it("uses transient thin scrollbar styling for local scroll regions", () => {
     const transientRule = getRuleBody(".transient-scrollbar");
     const transientActiveRule = getRuleBody(".transient-scrollbar--active");
@@ -121,20 +127,37 @@ describe("app css template modal layout", () => {
   it("uses matching warning visuals for running job badges and progress bars", () => {
     const runningStatusRule = getRuleBody(".job-card__status--running");
     const pausedStatusRule = getRuleBody(".job-card__status--paused");
-    const runningProgressRule = getRuleBody(".job-card__progress-bar--running");
-    const pausedProgressRule = getRuleBody(".job-card__progress-bar--paused");
+    const sharedProgressRule = getRuleBody(".progress-meter");
+    const sharedProgressBarRule = getRuleBody(".progress-meter__bar");
+    const progressBarInCardRule = getRuleBody(".job-card .progress-meter__bar");
     const statusInCardRule = getRuleBody(".job-card .job-card__status");
-    const progressBarInCardRule = getRuleBody(".job-card .job-card__progress-bar");
 
     expect(appCss).not.toContain(".job-row span");
+    expect(sharedProgressRule).toContain("height: 8px");
+    expect(sharedProgressRule).toContain("border-radius: 999px");
+    expect(sharedProgressRule).toContain("background: #d6dade");
+    expect(sharedProgressBarRule).toContain("background: var(--app-color-progress)");
     expect(statusInCardRule).toContain("background: var(--job-card-status-badge-surface)");
     expect(statusInCardRule).toContain("color: var(--job-card-status-emphasis)");
     expect(progressBarInCardRule).toContain("background: var(--job-card-status-emphasis)");
     expect(runningStatusRule).toContain("border-color: var(--job-card-status-emphasis)");
-    expect(runningProgressRule).toContain("background: var(--job-card-status-emphasis)");
     expect(pausedStatusRule).toContain("border-color: var(--job-card-status-emphasis)");
     expect(pausedStatusRule).toContain("color: var(--job-card-status-emphasis)");
-    expect(pausedProgressRule).toContain("background: var(--job-card-status-emphasis)");
+  });
+
+  it("keeps changing running job metrics from shifting the task card layout", () => {
+    const progressHeadingRule = getRuleBody(".job-card__progress-heading");
+    const detailsRule = getRuleBody(".job-card__details");
+    const detailItemRule = getRuleBody(".job-card__details > span:not(.job-row__token)");
+    const tokenRule = getRuleBody(".job-row__token");
+
+    expect(progressHeadingRule).toContain("font-variant-numeric: tabular-nums");
+    expect(detailsRule).toContain("display: grid");
+    expect(detailsRule).toContain("grid-template-columns: repeat(auto-fit, minmax(132px, 1fr))");
+    expect(detailsRule).toContain("font-variant-numeric: tabular-nums");
+    expect(detailItemRule).toContain("white-space: nowrap");
+    expect(detailItemRule).toContain("overflow-wrap: normal");
+    expect(tokenRule).toContain("grid-column: 1 / -1");
   });
 
   it("keeps the template library scrollable with readable two-column rows", () => {
@@ -185,6 +208,16 @@ describe("app css template modal layout", () => {
     expect(nameActionsRule).toContain("min-height: 40px");
   });
 
+  it("keeps pending template uploads in a fixed scrollable list", () => {
+    const uploadFileListRule = getRuleBody(".template-upload__file-list");
+
+    expect(uploadFileListRule).toContain("max-height: min(220px, 32dvh)");
+    expect(uploadFileListRule).toContain("overflow-y: auto");
+    expect(uploadFileListRule).toContain("overflow-x: hidden");
+    expect(uploadFileListRule).toContain("scrollbar-gutter: stable");
+    expect(uploadFileListRule).toContain("scrollbar-width: thin");
+  });
+
   it("uses a red background for destructive template buttons", () => {
     const dangerButtonRule = getRuleBody(".button--danger");
 
@@ -205,6 +238,7 @@ describe("app css template modal layout", () => {
     const actionsRule = getRuleBody(".job-row__actions");
     const detailsRule = getRuleBody(".job-row__details");
     const logActionsRule = getRuleBody(".job-log-actions");
+    const logTextRule = getRuleBody(".job-log-text");
 
     expect(headerRule).toContain("grid-template-columns: minmax(0, 1fr) auto");
     expect(headerRule).toContain("align-items: start");
@@ -214,6 +248,8 @@ describe("app css template modal layout", () => {
     expect(detailsRule).toContain("max-width: 100%");
     expect(logActionsRule).toContain("flex-wrap: nowrap");
     expect(logActionsRule).toContain("justify-content: end");
+    expect(logTextRule).toContain("width: 100%");
+    expect(logTextRule).not.toContain("58rem");
   });
 
   it("keeps desktop settings modal aligned with the template modal shell", () => {

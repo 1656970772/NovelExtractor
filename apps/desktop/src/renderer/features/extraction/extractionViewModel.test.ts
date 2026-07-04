@@ -142,7 +142,7 @@ describe("extractionViewModel", () => {
       timing: {
         startedAt: "2026-06-27T00:00:00.000Z",
         elapsedMs: 1200,
-        estimatedRemainingMs: 3600,
+        estimatedTotalMs: 3600,
         estimateState: "available"
       },
       output: {
@@ -174,7 +174,7 @@ describe("extractionViewModel", () => {
       timing: {
         startedAt: "2026-06-27T00:00:00.000Z",
         elapsedMs: 1200,
-        estimatedRemainingMs: 3600,
+        estimatedTotalMs: 3600,
         estimateState: "available"
       },
       output: {

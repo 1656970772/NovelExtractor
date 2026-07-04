@@ -2841,7 +2841,8 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
               content: "skipped_covered",
               usage: { ...EMPTY_USAGE },
               fee: NO_TOOL_FEE,
-              toolCalls: []
+              toolCalls: [],
+              skipped: true
             };
           }
 

@@ -14,11 +14,17 @@ export interface ProjectRuntimeBookRecord {
 export interface ProjectRuntimeJobProgressRecord {
   completedWindowCount: number;
   totalWindowCount: number;
+  skippedWindowCount?: number;
+  executedWindowCount?: number;
 }
 
 export interface ProjectRuntimeJobTimingRecord {
   startedAt?: string;
   completedAt?: string;
+  initialWindowEstimateMs?: number;
+  effectiveTotalWindowCount?: number;
+  executedWindowElapsedMs?: number;
+  estimatedTotalMs?: number;
   estimatedRemainingMs?: number;
   estimateFrozenAt?: string;
 }
@@ -200,7 +206,9 @@ function isJobProgress(value: unknown): value is ProjectRuntimeJobProgressRecord
   return (
     isPlainRecord(value) &&
     typeof value.completedWindowCount === "number" &&
-    typeof value.totalWindowCount === "number"
+    typeof value.totalWindowCount === "number" &&
+    (value.skippedWindowCount === undefined || typeof value.skippedWindowCount === "number") &&
+    (value.executedWindowCount === undefined || typeof value.executedWindowCount === "number")
   );
 }
 
@@ -209,6 +217,10 @@ function isJobTiming(value: unknown): value is ProjectRuntimeJobTimingRecord {
     isPlainRecord(value) &&
     (value.startedAt === undefined || typeof value.startedAt === "string") &&
     (value.completedAt === undefined || typeof value.completedAt === "string") &&
+    (value.initialWindowEstimateMs === undefined || typeof value.initialWindowEstimateMs === "number") &&
+    (value.effectiveTotalWindowCount === undefined || typeof value.effectiveTotalWindowCount === "number") &&
+    (value.executedWindowElapsedMs === undefined || typeof value.executedWindowElapsedMs === "number") &&
+    (value.estimatedTotalMs === undefined || typeof value.estimatedTotalMs === "number") &&
     (value.estimatedRemainingMs === undefined || typeof value.estimatedRemainingMs === "number") &&
     (value.estimateFrozenAt === undefined || typeof value.estimateFrozenAt === "string")
   );

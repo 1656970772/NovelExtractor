@@ -19,9 +19,13 @@ export interface JobCardViewModel {
   progressPercentText?: string;
   progressWidthPercent: number;
   elapsedText: string;
-  remainingText: string;
+  estimatedTotalText: string;
   completedAtText: string;
   failedAtText: string;
+}
+
+export interface JobCardViewModelOptions {
+  nowMs?: number;
 }
 
 export function getFilterCount(jobs: readonly ExtractionJob[], filter: JobQueueFilter): number {
@@ -98,43 +102,64 @@ function formatCardDuration(milliseconds?: number): string {
   return `00:${formattedDuration}`;
 }
 
-function getCardRemainingTimeLabel(job: ExtractionJob): string {
+function getTimingEstimateMs(job: ExtractionJob): number | undefined {
+  return job.timing?.estimatedTotalMs;
+}
+
+function getCardEstimatedTotalTimeLabel(job: ExtractionJob): string {
   if (!job.timing) {
-    return getRemainingTimeLabel(job);
+    return getEstimatedTotalTimeLabel(job);
   }
 
   if (job.timing.estimateState === "frozen") {
-    return `已暂停 ${formatCardDuration(job.timing.estimatedRemainingMs)}`;
+    return `已暂停 ${formatCardDuration(getTimingEstimateMs(job))}`;
   }
 
   if (job.timing.estimateState === "available") {
-    return formatCardDuration(job.timing.estimatedRemainingMs);
+    return formatCardDuration(getTimingEstimateMs(job));
   }
 
-  return getRemainingTimeLabel(job);
+  return getEstimatedTotalTimeLabel(job);
 }
 
-export function getRemainingTimeLabel(job: ExtractionJob): string {
+export function getEstimatedTotalTimeLabel(job: ExtractionJob): string {
   if (!job.timing) {
     return "--";
   }
 
   if (job.timing.estimateState === "frozen") {
-    return `已暂停 ${formatDuration(job.timing.estimatedRemainingMs)}`;
+    return `已暂停 ${formatDuration(getTimingEstimateMs(job))}`;
   }
 
   if (job.timing.estimateState === "calculating") {
     return "计算中";
   }
 
-  if (job.timing.estimateState === "available" && job.timing.estimatedRemainingMs !== undefined) {
-    return formatDuration(job.timing.estimatedRemainingMs);
+  const estimatedTotalMs = getTimingEstimateMs(job);
+  if (job.timing.estimateState === "available" && estimatedTotalMs !== undefined) {
+    return formatDuration(estimatedTotalMs);
   }
 
   return "--";
 }
 
-export function getJobCardViewModel(job: ExtractionJob): JobCardViewModel {
+function getRunningElapsedMs(job: ExtractionJob, nowMs: number | undefined): number | undefined {
+  if (job.status !== "running" || !job.timing?.startedAt || nowMs === undefined) {
+    return job.timing?.elapsedMs;
+  }
+
+  const startedAtMs = Date.parse(job.timing.startedAt);
+  if (Number.isNaN(startedAtMs) || !Number.isFinite(nowMs)) {
+    return job.timing.elapsedMs;
+  }
+
+  return Math.max(0, nowMs - startedAtMs);
+}
+
+export function getJobCardViewModel(
+  job: ExtractionJob,
+  options: JobCardViewModelOptions = {}
+): JobCardViewModel {
   return {
     title: job.inputSummary?.bookDisplayName || job.progressText || job.id,
     modelText: job.inputSummary?.modelId ?? "--",
@@ -145,8 +170,8 @@ export function getJobCardViewModel(job: ExtractionJob): JobCardViewModel {
       : undefined,
     progressPercentText: formatProgressPercent(job.progress?.percent),
     progressWidthPercent: clampProgressPercent(job.progress?.percent),
-    elapsedText: formatCardDuration(job.timing?.elapsedMs),
-    remainingText: getCardRemainingTimeLabel(job),
+    elapsedText: formatCardDuration(getRunningElapsedMs(job, options.nowMs)),
+    estimatedTotalText: getCardEstimatedTotalTimeLabel(job),
     completedAtText: formatTimestamp(job.timing?.completedAt),
     failedAtText: formatTimestamp(job.timing?.completedAt)
   };

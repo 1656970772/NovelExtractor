@@ -50,6 +50,21 @@ function toDisplayTimestamp(timestamp: string): string {
   return `${match[1]}-${match[2]}-${match[3]} ${match[4]}:${match[5]}:${match[6]}`;
 }
 
+function toElapsedTimestamp(startedAt: string, timestamp: string): string {
+  const startedAtMs = Date.parse(startedAt);
+  const timestampMs = Date.parse(timestamp);
+  if (Number.isNaN(startedAtMs) || Number.isNaN(timestampMs)) {
+    return timestamp;
+  }
+
+  const totalSeconds = Math.max(0, Math.floor((timestampMs - startedAtMs) / 1000));
+  const seconds = totalSeconds % 60;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const minutes = totalMinutes % 60;
+  const hours = Math.floor(totalMinutes / 60);
+  return [hours, minutes, seconds].map((part) => String(part).padStart(2, "0")).join(":");
+}
+
 function toFileTimestamp(timestamp: string): string {
   const match = timestamp.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/u);
   if (!match) {
@@ -277,7 +292,7 @@ export async function createTaskTextLogger(input: CreateTaskTextLoggerInput): Pr
   }
 
   function renderSimpleLine(tags: readonly string[], value: unknown, timestampValue = clock.now()): string {
-    const summarized = summarizeTaskLogEntry({ tags, timestamp: timestampValue, value });
+    const summarized = summarizeTaskLogEntry({ tags, timestamp: toElapsedTimestamp(createdAt, timestampValue), value });
     return `${redactTaskLogText(summarized, secrets)}\n`;
   }
 

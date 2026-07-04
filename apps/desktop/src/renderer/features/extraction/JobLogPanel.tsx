@@ -1,8 +1,9 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 export interface JobLogPanelProps {
   jobId: string;
   logFilePath?: string;
+  footerActions?: ReactNode;
   onReadLog?: (jobId: string) => Promise<string>;
   onOpenLog?: (jobId: string) => Promise<void>;
 }
@@ -10,7 +11,7 @@ export interface JobLogPanelProps {
 const LOG_REFRESH_MS = 2000;
 const AUTO_SCROLL_EPSILON = 24;
 
-export function JobLogPanel({ jobId, logFilePath, onOpenLog, onReadLog }: JobLogPanelProps) {
+export function JobLogPanel({ footerActions, jobId, logFilePath, onOpenLog, onReadLog }: JobLogPanelProps) {
   const [isOpen, setOpen] = useState(false);
   const [content, setContent] = useState<string | undefined>();
   const [state, setState] = useState<"idle" | "loading" | "error">("idle");
@@ -80,7 +81,14 @@ export function JobLogPanel({ jobId, logFilePath, onOpenLog, onReadLog }: JobLog
   }
 
   if (!logFilePath) {
-    return <p className="job-log-summary">暂无运行流程</p>;
+    return (
+      <div className="job-log-panel">
+        <div className="job-log-actions">
+          <p className="job-log-summary">暂无运行流程</p>
+          {footerActions}
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -102,6 +110,7 @@ export function JobLogPanel({ jobId, logFilePath, onOpenLog, onReadLog }: JobLog
         >
           打开完整日志
         </button>
+        {footerActions}
       </div>
       {isOpen ? (
         <div className="job-log-content">

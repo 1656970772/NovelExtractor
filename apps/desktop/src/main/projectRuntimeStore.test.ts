@@ -92,7 +92,7 @@ describe("project runtime store", () => {
       },
       timing: {
         startedAt: "2026-07-02T11:00:00.000Z",
-        estimatedRemainingMs: 180000,
+        estimatedTotalMs: 180000,
         estimateFrozenAt: "2026-07-02T11:20:00.000Z"
       }
     } as ProjectRuntimeJobRecord;
@@ -131,7 +131,7 @@ describe("project runtime store", () => {
     });
     expect(state.jobs[0].timing).toEqual({
       startedAt: "2026-07-02T11:00:00.000Z",
-      estimatedRemainingMs: 180000,
+      estimatedTotalMs: 180000,
       estimateFrozenAt: "2026-07-02T11:20:00.000Z"
     });
     expect(state.reports).toEqual([report]);
@@ -150,14 +150,14 @@ describe("project runtime store", () => {
       },
       timing: {
         startedAt: "2026-07-02T11:00:00.000Z",
-        estimatedRemainingMs: 180000
+        estimatedTotalMs: 180000
       }
     } as ProjectRuntimeJobRecord;
 
     await store.saveJob(job);
     const firstLoad = await store.load();
     firstLoad.jobs[0].progress!.completedWindowCount = 99;
-    firstLoad.jobs[0].timing!.estimatedRemainingMs = 1;
+    firstLoad.jobs[0].timing!.estimatedTotalMs = 1;
 
     const secondLoad = await store.load();
 
@@ -167,7 +167,7 @@ describe("project runtime store", () => {
     });
     expect(secondLoad.jobs[0].timing).toEqual({
       startedAt: "2026-07-02T11:00:00.000Z",
-      estimatedRemainingMs: 180000
+      estimatedTotalMs: 180000
     });
   });
 

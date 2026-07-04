@@ -100,6 +100,7 @@ export interface P0IpcHandlersOptions {
   credentialStore?: MemoryCredentialStore;
   fetch?: FetchLike;
   getAppVersion?: () => string;
+  estimateRandom?: () => number;
   onJobUpdated?: (job: JobDto) => void;
   shell?: {
     openPath(path: string): Promise<string>;
@@ -109,6 +110,8 @@ export interface P0IpcHandlersOptions {
 const TASK_STATUS_CONFIG = getTaskStatusConfig();
 const RULES_FILE_NAME = "提取规则.md";
 const JOB_ID_COLLISION_RETRY_LIMIT = 50;
+const INITIAL_WINDOW_ESTIMATE_MIN_MS = 150000;
+const INITIAL_WINDOW_ESTIMATE_MAX_MS = 190000;
 
 const systemClock: Clock = {
   now: () => new Date().toISOString()
@@ -233,13 +236,100 @@ function toJobStatusFromRuntime(status: JobRuntimeState["status"]): JobStatus {
   return status === "cancelled" ? "failed" : status;
 }
 
-function calculateEstimatedRemainingMs(
+interface RuntimeEstimateOptions {
+  createInitialWindowEstimateMs?: () => number;
+}
+
+interface RuntimeWindowMetrics {
+  completedWindowCount: number;
+  totalWindowCount: number;
+  skippedWindowCount: number;
+  executedWindowCount: number;
+  executedWindowElapsedMs?: number;
+  effectiveTotalWindowCount: number;
+  hasDetailedWindowMetrics: boolean;
+}
+
+function clampWindowCount(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+
+  return Math.min(max, Math.max(min, Math.trunc(value)));
+}
+
+function toNonNegativeFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function createRandomInitialWindowEstimateMs(random: () => number = Math.random): number {
+  const rawRandom = random();
+  const normalizedRandom = Number.isFinite(rawRandom) ? Math.min(1, Math.max(0, rawRandom)) : 0;
+  return Math.round(
+    INITIAL_WINDOW_ESTIMATE_MIN_MS +
+      normalizedRandom * (INITIAL_WINDOW_ESTIMATE_MAX_MS - INITIAL_WINDOW_ESTIMATE_MIN_MS)
+  );
+}
+
+function getInitialWindowEstimateMs(
+  timing: ProjectRuntimeJobTimingRecord,
+  options: RuntimeEstimateOptions
+): number {
+  if (timing.initialWindowEstimateMs !== undefined && Number.isFinite(timing.initialWindowEstimateMs)) {
+    return timing.initialWindowEstimateMs;
+  }
+
+  return options.createInitialWindowEstimateMs?.() ?? createRandomInitialWindowEstimateMs();
+}
+
+function getRuntimeWindowMetrics(state: JobRuntimeState): RuntimeWindowMetrics {
+  const totalWindowCount = clampWindowCount(state.totalWindowCount, 0, Number.MAX_SAFE_INTEGER);
+  const completedWindowCount = clampWindowCount(state.completedWindowCount, 0, totalWindowCount);
+  const rawSkippedWindowCount = toNonNegativeFiniteNumber(state.skippedWindowCount);
+  const rawExecutedWindowCount = toNonNegativeFiniteNumber(state.executedWindowCount);
+  const executedWindowElapsedMs = toNonNegativeFiniteNumber(state.executedWindowElapsedMs);
+  const hasDetailedWindowMetrics =
+    rawSkippedWindowCount !== undefined ||
+    rawExecutedWindowCount !== undefined ||
+    executedWindowElapsedMs !== undefined;
+
+  if (!hasDetailedWindowMetrics) {
+    return {
+      completedWindowCount,
+      totalWindowCount,
+      skippedWindowCount: 0,
+      executedWindowCount: completedWindowCount,
+      effectiveTotalWindowCount: totalWindowCount,
+      hasDetailedWindowMetrics
+    };
+  }
+
+  const skippedWindowCount = clampWindowCount(rawSkippedWindowCount ?? 0, 0, completedWindowCount);
+  const maxExecutedWindowCount = Math.max(0, completedWindowCount - skippedWindowCount);
+  const executedWindowCount = clampWindowCount(
+    rawExecutedWindowCount ?? maxExecutedWindowCount,
+    0,
+    maxExecutedWindowCount
+  );
+
+  return {
+    completedWindowCount,
+    totalWindowCount,
+    skippedWindowCount,
+    executedWindowCount,
+    executedWindowElapsedMs: executedWindowElapsedMs ?? 0,
+    effectiveTotalWindowCount: Math.max(0, totalWindowCount - skippedWindowCount),
+    hasDetailedWindowMetrics
+  };
+}
+
+function calculateLegacyEstimatedTotalMs(
   completedWindowCount: number,
   totalWindowCount: number,
   startedAt: string,
   nowIso: string
 ): number | undefined {
-  if (completedWindowCount <= 0 || completedWindowCount >= totalWindowCount) {
+  if (completedWindowCount <= 0 || totalWindowCount <= 0) {
     return undefined;
   }
 
@@ -250,8 +340,65 @@ function calculateEstimatedRemainingMs(
   }
 
   const averageWindowMs = (nowMs - startedAtMs) / completedWindowCount;
-  const remainingWindowCount = totalWindowCount - completedWindowCount;
-  return Math.max(0, Math.round(averageWindowMs * remainingWindowCount));
+  return Math.max(0, Math.round(averageWindowMs * totalWindowCount));
+}
+
+function calculateDetailedEstimatedTotalMs(
+  metrics: RuntimeWindowMetrics,
+  timing: ProjectRuntimeJobTimingRecord,
+  options: RuntimeEstimateOptions
+): number | undefined {
+  if (metrics.totalWindowCount <= 0) {
+    return 0;
+  }
+
+  if (metrics.executedWindowCount > 0 && metrics.executedWindowElapsedMs !== undefined) {
+    const averageWindowMs = metrics.executedWindowElapsedMs / metrics.executedWindowCount;
+    return Math.max(0, Math.round(averageWindowMs * metrics.effectiveTotalWindowCount));
+  }
+
+  const initialWindowEstimateMs = getInitialWindowEstimateMs(timing, options);
+  timing.initialWindowEstimateMs = initialWindowEstimateMs;
+  return Math.max(0, initialWindowEstimateMs * metrics.effectiveTotalWindowCount);
+}
+
+function applyRuntimeEstimateMetadata(
+  timing: ProjectRuntimeJobTimingRecord,
+  metrics: RuntimeWindowMetrics
+): void {
+  if (!metrics.hasDetailedWindowMetrics) {
+    return;
+  }
+
+  timing.effectiveTotalWindowCount = metrics.effectiveTotalWindowCount;
+  timing.executedWindowElapsedMs = metrics.executedWindowElapsedMs ?? 0;
+}
+
+function calculateRuntimeEstimatedTotalMs(
+  metrics: RuntimeWindowMetrics,
+  timing: ProjectRuntimeJobTimingRecord,
+  nowIso: string,
+  options: RuntimeEstimateOptions
+): number | undefined {
+  if (metrics.hasDetailedWindowMetrics) {
+    return calculateDetailedEstimatedTotalMs(metrics, timing, options);
+  }
+
+  if (metrics.completedWindowCount <= 0) {
+    timing.effectiveTotalWindowCount = metrics.totalWindowCount;
+    const initialWindowEstimateMs = getInitialWindowEstimateMs(timing, options);
+    timing.initialWindowEstimateMs = initialWindowEstimateMs;
+    return Math.max(0, initialWindowEstimateMs * metrics.totalWindowCount);
+  }
+
+  return timing.startedAt
+    ? calculateLegacyEstimatedTotalMs(
+        metrics.completedWindowCount,
+        metrics.totalWindowCount,
+        timing.startedAt,
+        nowIso
+      )
+    : undefined;
 }
 
 function isAllWindowsCompleted(
@@ -264,15 +411,40 @@ function isAllWindowsCompleted(
   );
 }
 
+function getReusableEstimatedTotalMs(
+  metrics: RuntimeWindowMetrics,
+  previousJob: Pick<ProjectRuntimeJobRecord, "progress" | "timing"> | undefined
+): number | undefined {
+  if (
+    previousJob?.progress?.completedWindowCount !== metrics.completedWindowCount ||
+    previousJob.progress.totalWindowCount !== metrics.totalWindowCount
+  ) {
+    return undefined;
+  }
+
+  if (
+    metrics.hasDetailedWindowMetrics &&
+    ((previousJob.progress.skippedWindowCount ?? 0) !== metrics.skippedWindowCount ||
+      (previousJob.progress.executedWindowCount ?? 0) !== metrics.executedWindowCount)
+  ) {
+    return undefined;
+  }
+
+  const estimatedTotalMs = previousJob.timing?.estimatedTotalMs;
+  return estimatedTotalMs !== undefined && Number.isFinite(estimatedTotalMs) ? estimatedTotalMs : undefined;
+}
+
 export function toJobPatchFromRuntimeState(
   state: JobRuntimeState,
-  previousJob: Pick<ProjectRuntimeJobRecord, "timing"> | undefined,
-  clock: Clock
+  previousJob: Pick<ProjectRuntimeJobRecord, "progress" | "timing"> | undefined,
+  clock: Clock,
+  estimateOptions: RuntimeEstimateOptions = {}
 ): Partial<ProjectRuntimeJobRecord> {
   const now = clock.now();
   const status = toJobStatusFromRuntime(state.status);
   const previousTiming = previousJob?.timing;
   const timing: ProjectRuntimeJobTimingRecord = previousTiming ? { ...previousTiming } : {};
+  const metrics = getRuntimeWindowMetrics(state);
 
   if (state.status === "running" && !timing.startedAt) {
     timing.startedAt = now;
@@ -282,37 +454,42 @@ export function toJobPatchFromRuntimeState(
     timing.completedAt = now;
   }
 
-  const progress = {
-    completedWindowCount: state.completedWindowCount,
-    totalWindowCount: state.totalWindowCount
+  const progress: ProjectRuntimeJobProgressRecord = {
+    completedWindowCount: metrics.completedWindowCount,
+    totalWindowCount: metrics.totalWindowCount
   };
+  if (metrics.hasDetailedWindowMetrics) {
+    progress.skippedWindowCount = metrics.skippedWindowCount;
+    progress.executedWindowCount = metrics.executedWindowCount;
+  }
+  applyRuntimeEstimateMetadata(timing, metrics);
+  const reusableEstimatedTotalMs = getReusableEstimatedTotalMs(metrics, previousJob);
 
-  if ((status === "running" || status === "completed") && isAllWindowsCompleted(progress)) {
-    timing.estimatedRemainingMs = 0;
+  if (status === "running" && reusableEstimatedTotalMs !== undefined) {
+    timing.estimatedTotalMs = reusableEstimatedTotalMs;
+    timing.estimatedRemainingMs = undefined;
     timing.estimateFrozenAt = undefined;
-  } else if (status === "running" && state.completedWindowCount <= 0) {
+  } else if ((status === "running" || status === "completed") && isAllWindowsCompleted(progress)) {
+    const estimatedTotalMs = calculateRuntimeEstimatedTotalMs(metrics, timing, now, estimateOptions);
+    timing.estimatedTotalMs = estimatedTotalMs ?? 0;
     timing.estimatedRemainingMs = undefined;
     timing.estimateFrozenAt = undefined;
   } else if (
     status === "running" &&
     timing.startedAt &&
-    state.completedWindowCount > 0 &&
-    state.completedWindowCount < state.totalWindowCount
+    metrics.completedWindowCount < metrics.totalWindowCount
   ) {
-    const estimatedRemainingMs = calculateEstimatedRemainingMs(
-      state.completedWindowCount,
-      state.totalWindowCount,
-      timing.startedAt,
-      now
-    );
-    if (estimatedRemainingMs !== undefined) {
-      timing.estimatedRemainingMs = estimatedRemainingMs;
+    const estimatedTotalMs = calculateRuntimeEstimatedTotalMs(metrics, timing, now, estimateOptions);
+    if (estimatedTotalMs !== undefined) {
+      timing.estimatedTotalMs = estimatedTotalMs;
+      timing.estimatedRemainingMs = undefined;
       timing.estimateFrozenAt = undefined;
     }
   }
 
-  if (status === "paused" && previousTiming?.estimatedRemainingMs !== undefined) {
-    timing.estimatedRemainingMs = previousTiming.estimatedRemainingMs;
+  if (status === "paused" && previousTiming?.estimatedTotalMs !== undefined) {
+    timing.estimatedTotalMs = previousTiming.estimatedTotalMs;
+    timing.estimatedRemainingMs = undefined;
     timing.estimateFrozenAt = now;
   }
 
@@ -341,6 +518,7 @@ function toReportDto(report: ReportAsset): ReportDto {
 
 export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handlers {
   const clock = options.clock ?? systemClock;
+  const createInitialWindowEstimateMs = () => createRandomInitialWindowEstimateMs(options.estimateRandom);
   const idGenerator = options.idGenerator ?? createSequentialIdGenerator();
   const workspaceRoot =
     options.workspaceRoot ??
@@ -452,20 +630,17 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       return undefined;
     }
 
-    const estimatedRemainingMs =
-      (job.status === "running" || job.status === "completed") && isAllWindowsCompleted(job.progress)
-        ? 0
-        : timing.estimatedRemainingMs;
-    const hasEstimatedRemaining = estimatedRemainingMs !== undefined;
+    const elapsedMs = calculateElapsedMs(timing.startedAt, timing.completedAt ?? nowIso);
+    const estimatedTotalMs = timing.estimatedTotalMs;
+    const hasEstimatedTotal = estimatedTotalMs !== undefined;
     const estimateState: JobTimingDto["estimateState"] =
-      job.status === "paused" && hasEstimatedRemaining
+      job.status === "paused" && hasEstimatedTotal
         ? "frozen"
-        : hasEstimatedRemaining && (job.status === "running" || job.status === "completed")
+        : hasEstimatedTotal && (job.status === "running" || job.status === "completed")
           ? "available"
           : job.status === "running"
             ? "calculating"
             : "unknown";
-    const elapsedMs = calculateElapsedMs(timing.startedAt, timing.completedAt ?? nowIso);
     const dto: JobTimingDto = {
       startedAt: timing.startedAt,
       estimateState
@@ -477,8 +652,8 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     if (elapsedMs !== undefined) {
       dto.elapsedMs = elapsedMs;
     }
-    if (estimatedRemainingMs !== undefined) {
-      dto.estimatedRemainingMs = estimatedRemainingMs;
+    if (estimatedTotalMs !== undefined) {
+      dto.estimatedTotalMs = estimatedTotalMs;
     }
 
     return dto;
@@ -1190,6 +1365,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       timing: {
         ...job.timing,
         completedAt: job.timing?.completedAt ?? clock.now(),
+        estimatedTotalMs: undefined,
         estimatedRemainingMs: undefined,
         estimateFrozenAt: undefined
       }
@@ -1207,6 +1383,10 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       runOptions?.skipAlreadyExtracted === false
         ? clock.now()
         : (job.timing?.startedAt ?? clock.now());
+    const initialWindowEstimateMs =
+      runOptions?.skipAlreadyExtracted === false
+        ? createInitialWindowEstimateMs()
+        : (job.timing?.initialWindowEstimateMs ?? createInitialWindowEstimateMs());
     let runningJob = await updateJob(job, {
       status: "running",
       progressText: "正在准备运行窗口",
@@ -1215,12 +1395,18 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       logFilePath: taskLogger.relativePath,
       progress: {
         completedWindowCount: 0,
-        totalWindowCount: initialTotalWindowCount
+        totalWindowCount: initialTotalWindowCount,
+        skippedWindowCount: 0,
+        executedWindowCount: 0
       },
       timing: {
         ...job.timing,
         startedAt: runningStartedAt,
         completedAt: undefined,
+        initialWindowEstimateMs,
+        effectiveTotalWindowCount: initialTotalWindowCount,
+        executedWindowElapsedMs: 0,
+        estimatedTotalMs: initialWindowEstimateMs * initialTotalWindowCount,
         estimatedRemainingMs: undefined,
         estimateFrozenAt: undefined
       }
@@ -1258,7 +1444,10 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
         idGenerator,
         async onRuntimeState(state) {
           const currentJob = requireJob(state.jobId);
-          await updateJob(currentJob, toJobPatchFromRuntimeState(state, currentJob, clock));
+          await updateJob(
+            currentJob,
+            toJobPatchFromRuntimeState(state, currentJob, clock, { createInitialWindowEstimateMs })
+          );
         },
         providerStore,
         taskLogger,

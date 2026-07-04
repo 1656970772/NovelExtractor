@@ -71,9 +71,9 @@ describe("task text logger", () => {
     expect(content).not.toContain("raw-field-secret");
     expect(content.trim()).not.toMatch(/^\{.*\}$/su);
     expect(simpleContent).toContain("构建信息：已记录");
-    expect(simpleContent).toContain("15:30:12 开始任务：book-1，1 个模板，模型 mock-model");
-    expect(simpleContent).toContain("15:30:13 搜索文件：丹药分析.md");
-    expect(simpleContent).toContain("15:30:14 模型返回");
+    expect(simpleContent).toContain("00:00:00 开始任务：book-1，1 个模板，模型 mock-model");
+    expect(simpleContent).toContain("00:00:01 搜索文件：丹药分析.md");
+    expect(simpleContent).toContain("00:00:02 模型返回");
     expect(simpleContent).not.toContain("输入参数");
     expect(simpleContent).not.toContain("筑基丹");
     expect(simpleContent).not.toContain("sk-task-log-secret");

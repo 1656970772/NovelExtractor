@@ -10,6 +10,7 @@ afterEach(() => {
   cleanup();
   vi.resetModules();
   vi.doUnmock("@novel-extractor/config");
+  vi.useRealTimers();
 });
 
 const modelForTest = {
@@ -479,7 +480,8 @@ describe("ExtractionPage", () => {
   });
 
   it("renders advanced job cards with structured progress, timing, summary, and output action", async () => {
-    const user = userEvent.setup();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-02T11:05:32.000Z"));
     const onOpenOutputDirectory = vi.fn().mockResolvedValue(undefined);
     render(
       <ExtractionPage
@@ -494,9 +496,9 @@ describe("ExtractionPage", () => {
             timing: {
               startedAt: "2026-07-02T11:00:00.000Z",
               elapsedMs: 332_000,
-              estimatedRemainingMs: 478_000,
+              estimatedTotalMs: 478_000,
               estimateState: "available"
-            },
+            } as never,
             inputSummary: {
               bookDisplayName: "凡人修仙传",
               templateNames: ["丹药分析", "人物关系"],
@@ -536,16 +538,67 @@ describe("ExtractionPage", () => {
     expect(screen.getByText("模型：deepseek-chat")).toBeInTheDocument();
     expect(screen.getByText("2 / 5")).toBeInTheDocument();
     expect(screen.getByText("40%")).toBeInTheDocument();
+    const runningProgress = screen.getByRole("progressbar", { name: "任务进度 40%" });
+    const runningProgressBar = runningProgress.querySelector(".progress-meter__bar");
+    expect(runningProgress).toHaveClass("progress-meter");
+    expect(runningProgressBar).toHaveClass("job-card__progress-bar--running");
+    expect(runningProgressBar).toHaveStyle({ width: "40%" });
     expect(screen.getByText("已用时：00:05:32")).toBeInTheDocument();
-    expect(screen.getByText("预计剩余：00:07:58")).toBeInTheDocument();
+    expect(screen.getByText("预计总耗时：00:07:58")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "已完成的书" })).toBeInTheDocument();
     expect(screen.queryByText("世界观模板")).not.toBeInTheDocument();
     expect(screen.getByText("模型：deepseek-reasoner")).toBeInTheDocument();
     expect(screen.getByText("完成时间：2026-07-02 10:12:48")).toBeInTheDocument();
+    const completedCard = screen.getByRole("heading", { name: "已完成的书" }).closest("li");
+    expect(completedCard).toBeInstanceOf(HTMLElement);
+    const outputButton = within(completedCard as HTMLElement).getByRole("button", { name: "打开输出目录" });
+    expect(outputButton.closest(".job-log-actions")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "打开输出目录" }));
+    fireEvent.click(outputButton);
 
     expect(onOpenOutputDirectory).toHaveBeenCalledWith("job-completed");
+  });
+
+  it("refreshes running elapsed time every second while keeping estimated total time stable", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-02T11:00:05.000Z"));
+
+    render(
+      <ExtractionPage
+        models={[modelForTest]}
+        books={[]}
+        jobs={[
+          {
+            id: "job-running-live-time",
+            status: "running",
+            progressText: "窗口 1/4",
+            progress: { completedWindowCount: 1, totalWindowCount: 4, percent: 25 },
+            timing: {
+              startedAt: "2026-07-02T11:00:00.000Z",
+              elapsedMs: 5_000,
+              estimatedTotalMs: 80_000,
+              estimateState: "available"
+            } as never,
+            inputSummary: {
+              bookDisplayName: "实时计时小说",
+              templateNames: [],
+              modelId: "deepseek-chat"
+            }
+          }
+        ]}
+        state="ready"
+      />
+    );
+
+    expect(screen.getByText("已用时：00:00:05")).toBeInTheDocument();
+    expect(screen.getByText("预计总耗时：00:01:20")).toBeInTheDocument();
+
+    await act(async () => {
+      vi.advanceTimersByTime(1_000);
+    });
+
+    expect(screen.getByText("已用时：00:00:06")).toBeInTheDocument();
+    expect(screen.getByText("预计总耗时：00:01:20")).toBeInTheDocument();
   });
 
   it("only renders output directory action for completed jobs", () => {
@@ -583,9 +636,9 @@ describe("ExtractionPage", () => {
             progress: { completedWindowCount: 1, totalWindowCount: 4, percent: 25 },
             timing: {
               elapsedMs: 180_000,
-              estimatedRemainingMs: 420_000,
+              estimatedTotalMs: 420_000,
               estimateState: "frozen"
-            },
+            } as never,
             inputSummary: {
               bookDisplayName: "暂停的书",
               templateNames: [],
@@ -617,7 +670,7 @@ describe("ExtractionPage", () => {
 
     expect(screen.getByRole("heading", { name: "暂停的书" })).toBeInTheDocument();
     expect(screen.queryByText(/模板：/)).not.toBeInTheDocument();
-    expect(screen.getByText("预计剩余：已暂停 00:07:00")).toBeInTheDocument();
+    expect(screen.getByText("预计总耗时：已暂停 00:07:00")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "失败的书" })).toBeInTheDocument();
     expect(screen.getByText("模型返回格式无效")).toBeInTheDocument();
     expect(screen.getByText("失败时间：2026-07-02 09:40:30")).toBeInTheDocument();

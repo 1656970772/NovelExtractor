@@ -7,7 +7,7 @@ import {
   formatTimestamp,
   getJobCardViewModel,
   getFilterCount,
-  getRemainingTimeLabel,
+  getEstimatedTotalTimeLabel,
   JOB_QUEUE_FILTERS
 } from "./jobQueueViewModel";
 
@@ -60,9 +60,9 @@ describe("jobQueueViewModel", () => {
       timing: {
         completedAt: "2026-07-02T10:12:48.000Z",
         elapsedMs: 332_000,
-        estimatedRemainingMs: 478_000,
+        estimatedTotalMs: 478_000,
         estimateState: "available"
-      },
+      } as ExtractionJob["timing"],
       inputSummary: {
         bookDisplayName: "凡人修仙传",
         templateNames: ["丹药分析", "人物关系"],
@@ -77,8 +77,27 @@ describe("jobQueueViewModel", () => {
     expect(card.progressPercentText).toBe("100%");
     expect(card.progressWidthPercent).toBe(100);
     expect(card.elapsedText).toBe("00:05:32");
-    expect(card.remainingText).toBe("00:07:58");
+    expect(card.estimatedTotalText).toBe("00:07:58");
     expect(card.completedAtText).toBe("2026-07-02 10:12:48");
+  });
+
+  it("uses the current clock for running elapsed time without changing the total estimate", () => {
+    const card = getJobCardViewModel(
+      {
+        id: "running-live",
+        status: "running",
+        timing: {
+          startedAt: "2026-07-02T10:00:00.000Z",
+          elapsedMs: 5_000,
+          estimatedTotalMs: 240_000,
+          estimateState: "available"
+        } as ExtractionJob["timing"]
+      },
+      { nowMs: Date.parse("2026-07-02T10:00:12.000Z") }
+    );
+
+    expect(card.elapsedText).toBe("00:00:12");
+    expect(card.estimatedTotalText).toBe("00:04:00");
   });
 
   it("formats timestamps without depending on locale settings", () => {
@@ -93,27 +112,27 @@ describe("jobQueueViewModel", () => {
       status: "paused",
       timing: {
         elapsedMs: 180_000,
-        estimatedRemainingMs: 420_000,
+        estimatedTotalMs: 420_000,
         estimateState: "frozen"
-      }
+      } as ExtractionJob["timing"]
     });
 
-    expect(card.remainingText).toBe("已暂停 00:07:00");
+    expect(card.estimatedTotalText).toBe("已暂停 00:07:00");
   });
 
-  it("labels frozen paused remaining time", () => {
+  it("labels frozen paused total time", () => {
     expect(
-      getRemainingTimeLabel({
+      getEstimatedTotalTimeLabel({
         id: "paused-frozen",
         status: "paused",
-        timing: { estimateState: "frozen", estimatedRemainingMs: 420_000 }
+        timing: { estimateState: "frozen", estimatedTotalMs: 420_000 } as ExtractionJob["timing"]
       })
     ).toBe("已暂停 07:00");
   });
 
-  it("labels calculating remaining time", () => {
+  it("labels calculating total time", () => {
     expect(
-      getRemainingTimeLabel({
+      getEstimatedTotalTimeLabel({
         id: "running-calculating",
         status: "running",
         timing: { estimateState: "calculating" }
@@ -121,20 +140,20 @@ describe("jobQueueViewModel", () => {
     ).toBe("计算中");
   });
 
-  it("falls back when remaining time is unavailable", () => {
-    expect(getRemainingTimeLabel({ id: "without-timing", status: "running" })).toBe("--");
+  it("falls back when total time is unavailable", () => {
+    expect(getEstimatedTotalTimeLabel({ id: "without-timing", status: "running" })).toBe("--");
     expect(
-      getRemainingTimeLabel({
+      getEstimatedTotalTimeLabel({
         id: "unknown",
         status: "running",
         timing: { estimateState: "unknown" }
       })
     ).toBe("--");
     expect(
-      getRemainingTimeLabel({
+      getEstimatedTotalTimeLabel({
         id: "failed-stale",
         status: "failed",
-        timing: { estimateState: "unknown", estimatedRemainingMs: 420_000 }
+        timing: { estimateState: "unknown", estimatedTotalMs: 420_000 } as ExtractionJob["timing"]
       })
     ).toBe("--");
   });

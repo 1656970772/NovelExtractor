@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createJobRuntime, type JobRunInput, type JobRuntimeEvent } from "./jobRuntime";
+import { createJobRuntime, type JobRunInput, type JobRuntimeEvent, type LlmWindowResult } from "./jobRuntime";
 
 function twoWindowJob(overrides: Partial<JobRunInput> = {}): JobRunInput {
   return {
@@ -57,6 +57,78 @@ describe("P0 job runtime", () => {
       "job.window.completed",
       "job.completed"
     ]);
+  });
+
+  it("tracks skipped windows separately from fully executed windows", async () => {
+    let nowMs = Date.parse("2026-07-02T10:00:00.000Z");
+    const savedStates: Array<{
+      completedWindowCount: number;
+      totalWindowCount: number;
+      skippedWindowCount?: number;
+      executedWindowCount?: number;
+      executedWindowElapsedMs?: number;
+    }> = [];
+    const runtime = createJobRuntime({
+      maxConcurrentJobs: 1,
+      clock: {
+        now: () => new Date(nowMs).toISOString()
+      },
+      repository: {
+        saveState: vi.fn(async (state) => {
+          savedStates.push({
+            completedWindowCount: state.completedWindowCount,
+            totalWindowCount: state.totalWindowCount,
+            skippedWindowCount: state.skippedWindowCount,
+            executedWindowCount: state.executedWindowCount,
+            executedWindowElapsedMs: state.executedWindowElapsedMs
+          });
+        })
+      },
+      llm: {
+        completeWindow: vi
+          .fn()
+          .mockImplementationOnce(async () => {
+            nowMs += 120000;
+            return {
+              content: "skipped",
+              usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+              fee: { amount: 0, currency: "USD" },
+              skipped: true
+            } as LlmWindowResult;
+          })
+          .mockImplementationOnce(async () => {
+            nowMs += 180000;
+            return {
+              content: "executed",
+              usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+              fee: { amount: 0.01, currency: "USD" }
+            };
+          })
+      },
+      tools: {
+        execute: vi.fn()
+      }
+    });
+
+    const result = await runtime.startJob(twoWindowJob());
+
+    expect(result).toMatchObject({
+      ok: true,
+      state: {
+        completedWindowCount: 2,
+        totalWindowCount: 2,
+        skippedWindowCount: 1,
+        executedWindowCount: 1,
+        executedWindowElapsedMs: 180000
+      }
+    });
+    expect(savedStates.at(-1)).toMatchObject({
+      completedWindowCount: 2,
+      totalWindowCount: 2,
+      skippedWindowCount: 1,
+      executedWindowCount: 1,
+      executedWindowElapsedMs: 180000
+    });
   });
 
   it("guards P0 single job execution with a typed error", async () => {

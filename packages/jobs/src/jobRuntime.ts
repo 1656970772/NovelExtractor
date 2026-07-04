@@ -31,6 +31,7 @@ export interface LlmWindowResult {
   usage: TokenUsage;
   fee: FeeAmount;
   toolCalls?: ToolCallRequest[];
+  skipped?: boolean;
 }
 
 export interface JobLlmClient {
@@ -80,6 +81,9 @@ export interface JobRuntimeState {
   status: JobStatus | "cancelled";
   completedWindowCount: number;
   totalWindowCount: number;
+  skippedWindowCount?: number;
+  executedWindowCount?: number;
+  executedWindowElapsedMs?: number;
   usage: TokenUsage;
   fee: FeeAmount | null;
   failureReason?: string;
@@ -168,12 +172,23 @@ function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Job failed";
 }
 
+function calculateElapsedMs(startedAtMs: number, finishedAtMs: number): number {
+  if (!Number.isFinite(startedAtMs) || !Number.isFinite(finishedAtMs) || finishedAtMs < startedAtMs) {
+    return 0;
+  }
+
+  return finishedAtMs - startedAtMs;
+}
+
 function cloneState(state: MutableJobRuntimeState): JobRuntimeState {
   return {
     jobId: state.jobId,
     status: state.status,
     completedWindowCount: state.completedWindowCount,
     totalWindowCount: state.totalWindowCount,
+    skippedWindowCount: state.skippedWindowCount,
+    executedWindowCount: state.executedWindowCount,
+    executedWindowElapsedMs: state.executedWindowElapsedMs,
     usage: { ...state.usage },
     fee: state.fee ? { ...state.fee } : null,
     failureReason: state.failureReason
@@ -269,6 +284,9 @@ export function createJobRuntime(options: JobRuntimeOptions): JobRuntime {
         status: "running",
         completedWindowCount: 0,
         totalWindowCount: input.windows.length,
+        skippedWindowCount: 0,
+        executedWindowCount: 0,
+        executedWindowElapsedMs: 0,
         usage: { ...EMPTY_USAGE },
         fee: null,
         pauseRequested: false,
@@ -293,7 +311,9 @@ export function createJobRuntime(options: JobRuntimeOptions): JobRuntime {
           }
 
           await emit("job.window.started", { jobId: input.jobId, windowId: window.id, windowIndex });
+          const windowStartedAtMs = Date.parse(clock.now());
           const llmResult = await options.llm.completeWindow({ job: input, window, windowIndex });
+          const windowFinishedAtMs = Date.parse(clock.now());
 
           for (const toolCall of llmResult.toolCalls ?? []) {
             const toolResult = await options.tools.execute(toolCall, { job: input, window, windowIndex });
@@ -309,13 +329,21 @@ export function createJobRuntime(options: JobRuntimeOptions): JobRuntime {
           state.usage = addUsage(state.usage, llmResult.usage);
           state.fee = addFee(state.fee, llmResult.fee);
           state.completedWindowCount += 1;
+          if (llmResult.skipped === true) {
+            state.skippedWindowCount = (state.skippedWindowCount ?? 0) + 1;
+          } else {
+            state.executedWindowCount = (state.executedWindowCount ?? 0) + 1;
+            state.executedWindowElapsedMs =
+              (state.executedWindowElapsedMs ?? 0) + calculateElapsedMs(windowStartedAtMs, windowFinishedAtMs);
+          }
           await saveState(state);
           await emit("job.window.completed", {
             jobId: input.jobId,
             windowId: window.id,
             windowIndex,
             usage: llmResult.usage,
-            fee: llmResult.fee
+            fee: llmResult.fee,
+            skipped: llmResult.skipped === true
           });
 
           if (state.cancelRequested) {

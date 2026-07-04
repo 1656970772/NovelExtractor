@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { TaskAction } from "@novel-extractor/config";
 import { getTaskActionConfig, getTaskStatusConfig } from "@novel-extractor/config";
+import { ProgressBar } from "../../components/ProgressBar";
 import { JobLogPanel } from "./JobLogPanel";
 import { sortExtractionJobsByCreatedAtDesc, type ExtractionJob } from "./extractionViewModel";
 import {
@@ -36,9 +37,24 @@ export function JobList({
 }: JobListProps) {
   const [deleteCandidate, setDeleteCandidate] = useState<ExtractionJob | null>(null);
   const [activeFilter, setActiveFilter] = useState<JobQueueFilter>("all");
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const sortedJobs = sortExtractionJobsByCreatedAtDesc(jobs);
   const visibleJobs = filterJobs(sortedJobs, activeFilter);
+  const hasRunningTimedJob = jobs.some((job) => job.status === "running" && Boolean(job.timing?.startedAt));
   const listScrollbar = useTransientScrollbar();
+
+  useEffect(() => {
+    if (!hasRunningTimedJob) {
+      return undefined;
+    }
+
+    setNowMs(Date.now());
+    const timer = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [hasRunningTimedJob]);
 
   function runAction(job: ExtractionJob, action: TaskAction): void {
     if (action === "delete") {
@@ -111,7 +127,7 @@ export function JobList({
         >
           {visibleJobs.map((job) => {
             const statusConfig = STATUS_CONFIG[job.status];
-            const card = getJobCardViewModel(job);
+            const card = getJobCardViewModel(job, { nowMs });
             const jobRowClassName = [
               "job-row",
               "job-card",
@@ -122,6 +138,16 @@ export function JobList({
               .join(" ");
             const shouldShowProgress =
               card.hasStructuredProgress || card.progressText !== card.title;
+            const outputDirectoryAction =
+              job.status === "completed" && job.output?.canOpenOutputDirectory ? (
+                <button
+                  className="button button--secondary button--compact"
+                  onClick={() => openOutputDirectory(job)}
+                  type="button"
+                >
+                  打开输出目录
+                </button>
+              ) : null;
 
             return (
               <li className={jobRowClassName} key={job.id}>
@@ -163,19 +189,11 @@ export function JobList({
                       )}
                     </div>
                     {card.hasStructuredProgress ? (
-                      <div
-                        aria-label={`任务进度 ${card.progressPercentText ?? "--"}`}
-                        aria-valuemax={100}
-                        aria-valuemin={0}
-                        aria-valuenow={card.progressWidthPercent}
-                        className="job-card__progress-track"
-                        role="progressbar"
-                      >
-                        <span
-                          className={`job-card__progress-bar job-card__progress-bar--${job.status}`}
-                          style={{ width: `${card.progressWidthPercent}%` }}
-                        />
-                      </div>
+                      <ProgressBar
+                        indicatorClassName={`job-card__progress-bar--${job.status}`}
+                        label={`任务进度 ${card.progressPercentText ?? "--"}`}
+                        value={card.progressWidthPercent}
+                      />
                     ) : null}
                   </div>
                 ) : null}
@@ -190,7 +208,7 @@ export function JobList({
                   {job.status === "running" || job.status === "paused" ? (
                     <>
                       <span>已用时：{card.elapsedText}</span>
-                      <span>预计剩余：{card.remainingText}</span>
+                      <span>预计总耗时：{card.estimatedTotalText}</span>
                     </>
                   ) : null}
                   {job.tokenText ? <span className="job-row__token">{job.tokenText}</span> : null}
@@ -200,20 +218,12 @@ export function JobList({
                 </div>
                 <div className="job-card__footer">
                   <JobLogPanel
+                    footerActions={outputDirectoryAction}
                     jobId={job.id}
                     logFilePath={job.logFilePath}
                     onOpenLog={onOpenJobLog}
                     onReadLog={onReadJobLog}
                   />
-                  {job.status === "completed" && job.output?.canOpenOutputDirectory ? (
-                    <button
-                      className="button button--secondary button--compact"
-                      onClick={() => openOutputDirectory(job)}
-                      type="button"
-                    >
-                      打开输出目录
-                    </button>
-                  ) : null}
                 </div>
               </li>
             );

@@ -35,6 +35,7 @@ export interface ExtractionJobTiming {
   startedAt?: string;
   completedAt?: string;
   elapsedMs?: number;
+  estimatedTotalMs?: number;
   estimatedRemainingMs?: number;
   estimateState: "unknown" | "calculating" | "available" | "frozen";
 }
