@@ -99,6 +99,7 @@ export interface P0IpcHandlersOptions {
   projectRuntimeStoreFactory?: (project: Project) => ProjectRuntimeStore;
   credentialStore?: MemoryCredentialStore;
   fetch?: FetchLike;
+  getAppVersion?: () => string;
   onJobUpdated?: (job: JobDto) => void;
   shell?: {
     openPath(path: string): Promise<string>;
@@ -971,6 +972,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       clock,
       jobId: job.id,
       projectRoot: project.rootPath,
+      appVersion: options.getAppVersion?.(),
       taskInfo: buildTaskInfo(job, book)
     });
   }

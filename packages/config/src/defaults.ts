@@ -166,6 +166,8 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
       "ls",
       "multi_edit",
       "read_file",
+      "read_report_excerpt",
+      "upsert_report_section",
       "wait",
       "write_file",
       "mark_no_update"
@@ -173,9 +175,9 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
     maxRepeatedRecoverableToolErrors: 3,
     recoverableToolErrorHints: {
       replacement_text_not_found:
-        "old_string 必须精确匹配文件中的原文；可先用 grep/read_file 找到准确片段；若已 read_file 且需要整体更新，可用 write_file 提交完整保留旧内容的新版报告。",
+        "old_string 必须精确匹配文件中的原文；更新既有报告优先用 read_report_excerpt 按关键词读取相关段落，再用 grep/read_file 找到必要的准确锚点；若已读取且需要整体更新，可用 write_file 提交完整保留旧内容的新版报告。",
       replacement_text_not_unique:
-        "old_string 在文件中匹配到多处；请用 read_file/grep 找到目标段落并加入足够上下文，或用 write_file 提交完整保留旧内容的新版报告。",
+        "old_string 在文件中匹配到多处；请先用 read_report_excerpt 按关键词读取相关段落，再用 grep/read_file 找到目标段落并加入足够上下文，或用 write_file 提交完整保留旧内容的新版报告。",
       read_tool_target_not_found:
         "读取目标不存在；请先用 ls/glob 确认可读路径，或改用当前窗口文本、reports 目录或本批选中报告文件名。",
       read_tool_scope_denied:
@@ -210,7 +212,7 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
       MATERIAL_RESOURCE_COVERAGE_RULE,
       PUBLIC_REPORT_METADATA_RULE,
       TEMPLATE_EXAMPLE_EVIDENCE_RULE,
-      "更新既有报告前，必须先在本轮使用 read_file 或 grep 查询同一个报告文件。",
+      "更新既有报告前，必须先在本轮使用 read_report_excerpt 按关键词查询同一个报告文件的相关段落；常规报告更新优先使用 upsert_report_section 的 sectionId/writeMode，不要提供 old_string；只有当前窗口文本或小报告需要精确行号时才使用 read_file/grep 和 edit_file/multi_edit。",
       "如果本批次只有部分模板无新增信息，必须对这些模板调用 mark_no_update，并继续为其他模板写入或更新报告。",
       "如果当前窗口没有可写入的新信息，且未执行写工具，最终文本必须严格返回 NO_UPDATE。"
     ]

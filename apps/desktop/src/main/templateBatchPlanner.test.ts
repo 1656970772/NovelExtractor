@@ -39,18 +39,39 @@ describe("template batch planner", () => {
     expect(batches[0].splitReason).toBe("complete");
   });
 
-  it("splits before the prompt budget is exceeded and records the budget reason", () => {
+  it("splits only by template count", () => {
     const batches = planTemplateBatches({
       templates,
-      maxTemplatesPerCall: 4,
-      promptBudgetChars: 60
+      maxTemplatesPerCall: 2
     });
 
     expect(batches.map((batch) => batch.templates.map((template) => template.fileName))).toEqual([
       ["甲报告.md", "乙报告.md"],
-      ["丙报告.md"],
-      ["丁报告.md"]
+      ["丙报告.md", "丁报告.md"]
     ]);
-    expect(batches.map((batch) => batch.splitReason)).toEqual(["budget", "budget", "complete"]);
+    expect(batches.map((batch) => batch.splitReason)).toEqual(["maxTemplatesPerCall", "complete"]);
+  });
+
+  it("does not split large template bodies by prompt character budget", () => {
+    const largeTemplates = templates.map((template) => ({
+      ...template,
+      body: "很长的模板正文。".repeat(2000),
+      promptChars: 20000
+    }));
+    const legacyBudgetInput = {
+      templates: largeTemplates,
+      maxTemplatesPerCall: 4,
+      promptBudgetChars: 60
+    };
+    const batches = planTemplateBatches(legacyBudgetInput);
+
+    expect(batches).toHaveLength(1);
+    expect(batches[0].templates.map((template) => template.fileName)).toEqual([
+      "甲报告.md",
+      "乙报告.md",
+      "丙报告.md",
+      "丁报告.md"
+    ]);
+    expect(batches[0].splitReason).toBe("complete");
   });
 });

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { classifyToolEffects, isWriteTool, type BuiltinToolName } from "./toolPolicy";
 import { BashJobManager } from "./reasonix/bashJobs";
@@ -18,6 +19,11 @@ import {
   createKillShellTool,
   createWaitTool
 } from "./reasonix/tools/bashTool";
+import { findRelevantReportExcerpt } from "./reportRelevantExcerpt";
+import {
+  upsertReportSection,
+  type ReportWriteMode
+} from "./reportSectionIndex";
 
 export interface ToolExecutionContext {
   projectRoot: string;
@@ -35,12 +41,13 @@ export interface ToolExecutionContext {
   env?: NodeJS.ProcessEnv;
   bashTimeoutSeconds?: number;
   shell?: ReasonixShellConfig;
+  allowedReportFileNames?: readonly string[];
 }
 
 export class ToolExecutionError extends Error {
   constructor(
     message: string,
-    readonly code: "UNKNOWN_TOOL" | "INVALID_ARGUMENTS" | "UNSAFE_PATH" | "NOT_FOUND" | "IO_ERROR",
+    readonly code: "UNKNOWN_TOOL" | "INVALID_ARGUMENTS" | "UNSAFE_PATH" | "NOT_FOUND" | "IO_ERROR" | "SECTION_NOT_FOUND",
     readonly output?: string
   ) {
     super(message);
@@ -63,6 +70,14 @@ export async function executeBuiltinFileTool(name: string, rawArguments: unknown
       return executeMarkNoUpdate(rawArguments, context);
     }
 
+    if (name === "read_report_excerpt") {
+      return executeReadReportExcerpt(rawArguments, context);
+    }
+
+    if (name === "upsert_report_section") {
+      return executeUpsertReportSection(rawArguments, context);
+    }
+
     const workspace = createReasonixWorkspace(context);
     const tool = createReasonixTool(name as BuiltinToolName, workspace);
     const executionArguments = normalizeReasonixArguments(name, rawArguments, context);
@@ -77,6 +92,159 @@ export async function executeBuiltinFileTool(name: string, rawArguments: unknown
   } catch (error) {
     throw toToolError(error, "IO_ERROR");
   }
+}
+
+async function executeUpsertReportSection(rawArguments: unknown, context: ToolExecutionContext): Promise<string> {
+  const args = parseObjectArgument(rawArguments);
+  if (args === undefined) {
+    throw new ToolExecutionError("Tool arguments must be an object", "INVALID_ARGUMENTS");
+  }
+  assertAllowedUpsertReportSectionArguments(args);
+
+  if (typeof args.outputFileName !== "string") {
+    throw new ToolExecutionError("outputFileName must be a string", "INVALID_ARGUMENTS");
+  }
+  if (typeof args.content !== "string") {
+    throw new ToolExecutionError("content must be a string", "INVALID_ARGUMENTS");
+  }
+
+  const writeMode = normalizeReportWriteMode(args.writeMode);
+  const sectionId = typeof args.sectionId === "string" ? args.sectionId : undefined;
+  if ((writeMode === "replace_section" || writeMode === "append_to_section") && (!sectionId || sectionId.trim() === "")) {
+    throw new ToolExecutionError("sectionId must be a non-empty string for replace_section and append_to_section", "INVALID_ARGUMENTS");
+  }
+
+  const outputFileName = validateFlatReportFileName(args.outputFileName);
+  if (context.allowedReportFileNames !== undefined && !context.allowedReportFileNames.includes(outputFileName)) {
+    throw new ToolExecutionError("Path is outside allowed root", "UNSAFE_PATH");
+  }
+
+  assertReportsRootInsideProject(context);
+  fs.mkdirSync(context.reportsRoot, { recursive: true });
+  const reportPath = path.join(context.reportsRoot, outputFileName);
+  assertReportPathInsideReportsRoot(context.reportsRoot, reportPath);
+  await assertExistingReportFileIsSafe(reportPath);
+
+  const currentContent = await readReportFileIfExists(reportPath);
+  const result = upsertReportSection({
+    content: currentContent,
+    sectionId,
+    writeMode,
+    nextContent: args.content
+  });
+  if (!result.ok) {
+    throw new ToolExecutionError(result.message, result.code);
+  }
+
+  await mkdir(path.dirname(reportPath), { recursive: true });
+  await writeFile(reportPath, result.content, "utf8");
+  return `upserted report section ${sectionId ?? "(end)"} in ${outputFileName} with ${writeMode}`;
+}
+
+function assertAllowedUpsertReportSectionArguments(args: Record<string, unknown>): void {
+  if (Object.prototype.hasOwnProperty.call(args, "old_string")) {
+    throw new ToolExecutionError(
+      "upsert_report_section does not accept old_string; use section id and writeMode instead.",
+      "INVALID_ARGUMENTS"
+    );
+  }
+
+  const allowedKeys = new Set(["outputFileName", "sectionId", "content", "writeMode"]);
+  const extraKeys = Object.keys(args).filter((key) => !allowedKeys.has(key));
+  if (extraKeys.length > 0) {
+    throw new ToolExecutionError(`upsert_report_section received unsupported argument(s): ${extraKeys.join(", ")}`, "INVALID_ARGUMENTS");
+  }
+}
+
+function normalizeReportWriteMode(value: unknown): ReportWriteMode {
+  if (value === "replace_section" || value === "append_to_section" || value === "append_to_end") {
+    return value;
+  }
+  throw new ToolExecutionError("writeMode must be replace_section, append_to_section, or append_to_end", "INVALID_ARGUMENTS");
+}
+
+async function readReportFileIfExists(reportPath: string): Promise<string> {
+  try {
+    return await readFile(reportPath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return "";
+    }
+    throw error;
+  }
+}
+
+async function assertExistingReportFileIsSafe(reportPath: string): Promise<void> {
+  try {
+    const stat = await fs.promises.lstat(reportPath);
+    if (!stat.isFile()) {
+      throw new ToolExecutionError("Path is outside allowed root", "UNSAFE_PATH");
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+}
+
+async function executeReadReportExcerpt(rawArguments: unknown, context: ToolExecutionContext): Promise<string> {
+  const args = parseObjectArgument(rawArguments);
+  if (args === undefined) {
+    throw new ToolExecutionError("Tool arguments must be an object", "INVALID_ARGUMENTS");
+  }
+  assertAllowedReadReportExcerptArguments(args);
+
+  if (typeof args.outputFileName !== "string") {
+    throw new ToolExecutionError("outputFileName must be a string", "INVALID_ARGUMENTS");
+  }
+  if (!Array.isArray(args.keywords)) {
+    throw new ToolExecutionError("keywords must be an array", "INVALID_ARGUMENTS");
+  }
+
+  const outputFileName = validateFlatReportFileName(args.outputFileName);
+  const keywords = args.keywords.map((keyword) => (typeof keyword === "string" ? keyword.trim() : ""));
+  if (keywords.length === 0 || keywords.some((keyword) => keyword === "")) {
+    throw new ToolExecutionError("keywords must contain non-empty strings", "INVALID_ARGUMENTS");
+  }
+
+  if (context.allowedReportFileNames !== undefined && !context.allowedReportFileNames.includes(outputFileName)) {
+    throw new ToolExecutionError("Path is outside allowed root", "UNSAFE_PATH");
+  }
+
+  const maxChars = normalizeMaxChars(args.maxChars);
+  const reportPath = path.join(context.reportsRoot, outputFileName);
+  assertReportPathInsideReportsRoot(context.reportsRoot, reportPath);
+  if (fs.existsSync(reportPath)) {
+    assertInsideRoot(fs.realpathSync.native(context.reportsRoot), fs.realpathSync.native(reportPath));
+  }
+
+  return JSON.stringify(
+    await findRelevantReportExcerpt({
+      outputFileName,
+      reportPath,
+      keywords,
+      maxChars
+    })
+  );
+}
+
+function assertAllowedReadReportExcerptArguments(args: Record<string, unknown>): void {
+  const allowedKeys = new Set(["outputFileName", "keywords", "maxChars"]);
+  const extraKeys = Object.keys(args).filter((key) => !allowedKeys.has(key));
+  if (extraKeys.length > 0) {
+    throw new ToolExecutionError(`read_report_excerpt received unsupported argument(s): ${extraKeys.join(", ")}`, "INVALID_ARGUMENTS");
+  }
+}
+
+function normalizeMaxChars(value: unknown): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new ToolExecutionError("maxChars must be a number", "INVALID_ARGUMENTS");
+  }
+  return Math.floor(value);
 }
 
 function createReasonixWorkspace(context: ToolExecutionContext): Workspace {
@@ -239,10 +407,34 @@ function validateFlatReportFileName(reportFileName: string): string {
   return normalized;
 }
 
+function assertReportPathInsideReportsRoot(reportsRoot: string, reportPath: string): void {
+  assertInsideRoot(path.resolve(reportsRoot), path.resolve(reportPath));
+}
+
 function assertReportsRootInsideProject(context: ToolExecutionContext): void {
   const projectRootRealPath = fs.realpathSync.native(context.projectRoot);
-  const reportsRootRealPath = fs.realpathSync.native(context.reportsRoot);
+  const reportsRootRealPath = resolveExistingOrFutureRealPath(context.reportsRoot);
   assertInsideRoot(projectRootRealPath, reportsRootRealPath);
+}
+
+function resolveExistingOrFutureRealPath(targetPath: string): string {
+  const absoluteTargetPath = path.resolve(targetPath);
+  if (fs.existsSync(absoluteTargetPath)) {
+    return fs.realpathSync.native(absoluteTargetPath);
+  }
+
+  let existingAncestor = absoluteTargetPath;
+  const missingSegments: string[] = [];
+  while (!fs.existsSync(existingAncestor)) {
+    const parent = path.dirname(existingAncestor);
+    if (parent === existingAncestor) {
+      return absoluteTargetPath;
+    }
+    missingSegments.unshift(path.basename(existingAncestor));
+    existingAncestor = parent;
+  }
+
+  return path.join(fs.realpathSync.native(existingAncestor), ...missingSegments);
 }
 
 function assertInsideRoot(rootRealPath: string, targetPath: string): void {

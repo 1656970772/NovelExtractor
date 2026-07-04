@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { createBuildMetadataDefine } from "./buildInfo";
 
 const desktopRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const repoRoot = join(desktopRoot, "..", "..");
@@ -63,6 +64,87 @@ const readMainRuntimeWorkspaceImports = (): string[] => {
 };
 
 describe("electron vite main bundle config", () => {
+  it("allows unknown commit and time in dev when git and env are unavailable", () => {
+    expect(
+      createBuildMetadataDefine({
+        command: "serve",
+        env: {},
+        readGitCommit: () => undefined,
+        now: () => "2026-07-03T00:00:00.000Z"
+      })
+    ).toEqual({
+      __NOVEL_EXTRACTOR_BUILD_COMMIT__: JSON.stringify("unknown"),
+      __NOVEL_EXTRACTOR_BUILD_TIME__: JSON.stringify("unknown")
+    });
+  });
+
+  it("rejects build metadata when build cannot resolve commit and time", () => {
+    expect(() =>
+      createBuildMetadataDefine({
+        command: "build",
+        env: {},
+        readGitCommit: () => undefined,
+        now: () => "2026-07-03T00:00:00.000Z"
+      })
+    ).toThrow(/build metadata/i);
+  });
+
+  it("rejects literal unknown build metadata from environment in build mode", () => {
+    expect(() =>
+      createBuildMetadataDefine({
+        command: "build",
+        env: {
+          NOVEL_EXTRACTOR_BUILD_COMMIT: " unknown ",
+          NOVEL_EXTRACTOR_BUILD_TIME: "UNKNOWN"
+        },
+        readGitCommit: () => undefined,
+        now: () => "2026-07-03T00:00:00.000Z"
+      })
+    ).toThrow(/build metadata/i);
+  });
+
+  it("rejects literal unknown git commit in build mode", () => {
+    expect(() =>
+      createBuildMetadataDefine({
+        command: "build",
+        env: {},
+        readGitCommit: () => "UnKnOwN",
+        now: () => "2026-07-03T00:00:00.000Z"
+      })
+    ).toThrow(/build metadata/i);
+  });
+
+  it("uses environment build metadata in build mode without git", () => {
+    expect(
+      createBuildMetadataDefine({
+        command: "build",
+        env: {
+          NOVEL_EXTRACTOR_BUILD_COMMIT: "env-commit",
+          NOVEL_EXTRACTOR_BUILD_TIME: "env-time"
+        },
+        readGitCommit: () => undefined,
+        now: () => "2026-07-03T00:00:00.000Z"
+      })
+    ).toEqual({
+      __NOVEL_EXTRACTOR_BUILD_COMMIT__: JSON.stringify("env-commit"),
+      __NOVEL_EXTRACTOR_BUILD_TIME__: JSON.stringify("env-time")
+    });
+  });
+
+  it("uses git commit and current time in build mode when env is absent", () => {
+    expect(
+      createBuildMetadataDefine({
+        command: "build",
+        env: {},
+        readGitCommit: () => "git-commit",
+        now: () => "2026-07-03T00:00:00.000Z"
+      })
+    ).toEqual({
+      __NOVEL_EXTRACTOR_BUILD_COMMIT__: JSON.stringify("git-commit"),
+      __NOVEL_EXTRACTOR_BUILD_TIME__: JSON.stringify("2026-07-03T00:00:00.000Z")
+    });
+  });
+
   it("bundles runtime workspace packages that still export TypeScript source", () => {
     const externalizeExclude = readMainExternalizeExclude();
     const runtimeWorkspaceTypeScriptImports = readMainRuntimeWorkspaceImports();

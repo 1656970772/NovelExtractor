@@ -1,9 +1,24 @@
+import { execSync } from "node:child_process";
 import { resolve } from "node:path";
 import react from "@vitejs/plugin-react";
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
+import { createBuildMetadataDefine } from "./src/main/buildInfo";
 
-export default defineConfig({
+function readGitCommit(): string | undefined {
+  try {
+    return execSync("git rev-parse HEAD", { cwd: __dirname, encoding: "utf8" }).trim();
+  } catch {
+    return undefined;
+  }
+}
+
+export default defineConfig(({ command }) => ({
   main: {
+    define: createBuildMetadataDefine({
+      command,
+      env: process.env,
+      readGitCommit
+    }),
     plugins: [
       externalizeDepsPlugin({
         exclude: [
@@ -53,4 +68,4 @@ export default defineConfig({
       }
     }
   }
-});
+}));

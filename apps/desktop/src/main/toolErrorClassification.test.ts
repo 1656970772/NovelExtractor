@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ToolExecutionError } from "@novel-extractor/tools";
 import {
+  classifyToolLoopRoundReason,
   classifyToolExecutionError,
   fingerprintRecoverableToolError,
   type ToolErrorClassification
@@ -94,6 +95,22 @@ describe("tool error classification", () => {
     });
   });
 
+  it("classifies upsert_report_section SECTION_NOT_FOUND as recoverable by the model", () => {
+    expect(
+      classify(
+        "upsert_report_section",
+        new ToolExecutionError(
+          "SECTION_NOT_FOUND: Task 7 关键词未命中新内容改用 append_to_end；需要创建新标题要等后续 create_section 能力，本任务不隐式创建 section。",
+          "SECTION_NOT_FOUND" as never
+        )
+      )
+    ).toMatchObject({
+      category: "recoverable_by_model",
+      recoverableByModel: true,
+      reason: "tool_invalid_arguments"
+    });
+  });
+
   it("classifies model calls to unknown tool names as recoverable by the model", () => {
     const error = new ToolExecutionError("Tool is not enabled: pwd", "UNKNOWN_TOOL");
 
@@ -131,5 +148,148 @@ describe("tool error classification", () => {
         path: "事件因果链（长程因果图）.md"
       })
     ).toBe("edit_file|INVALID_ARGUMENTS|old_string is not unique in report.md (5 matches); add more surrounding context|事件因果链（长程因果图）.md");
+  });
+
+  it("maps recoverable tool classifications to lightweight tool-loop round reasons", () => {
+    const largeReportReadError = new ToolExecutionError("File is larger than maxReadBytes", "INVALID_ARGUMENTS");
+
+    expect(
+      classifyToolLoopRoundReason({
+        toolName: "glob",
+        classification: classify("glob", new ToolExecutionError("读工具路径不在当前窗口允许范围内。", "UNSAFE_PATH")),
+        executionArguments: { pattern: "reports/*.md" }
+      })
+    ).toBe("report_discovery_rejected");
+    expect(
+      classifyToolLoopRoundReason({
+        toolName: "read_file",
+        classification: classify("read_file", largeReportReadError),
+        executionArguments: { path: "丹药分析.md" },
+        allowedOutputFileNames: new Set(["丹药分析.md"]),
+        error: largeReportReadError
+      })
+    ).toBe("old_report_relevant_sections_needed");
+    expect(
+      classifyToolLoopRoundReason({
+        toolName: "edit_file",
+        classification: classify("edit_file", new ToolExecutionError("old_string not found", "INVALID_ARGUMENTS")),
+        executionArguments: { path: "丹药分析.md" }
+      })
+    ).toBe("edit_anchor_failed");
+    expect(
+      classifyToolLoopRoundReason({
+        toolName: "write_file",
+        classification: classify("write_file", new ToolExecutionError("content must be a string", "INVALID_ARGUMENTS")),
+        executionArguments: { path: "丹药分析.md" }
+      })
+    ).toBe("tool_arguments_invalid");
+    expect(
+      classifyToolLoopRoundReason({
+        toolName: "pwd",
+        classification: classify("pwd", new ToolExecutionError("Tool is not enabled: pwd", "UNKNOWN_TOOL")),
+        executionArguments: { command: "pwd" }
+      })
+    ).toBe("unknown_tool_recovered");
+  });
+
+  it("does not mark non-report read scope denials as report discovery rejections", () => {
+    const scopeError = new ToolExecutionError("读工具路径不在当前窗口允许范围内。", "UNSAFE_PATH");
+
+    expect(
+      classifyToolLoopRoundReason({
+        toolName: "read_file",
+        classification: classify("read_file", scopeError),
+        executionArguments: { path: "runs/job-1/windows/window-0002.txt" },
+        error: scopeError
+      })
+    ).toBeUndefined();
+
+    expect(
+      classifyToolLoopRoundReason({
+        toolName: "read_file",
+        classification: classify("read_file", scopeError),
+        executionArguments: { path: "rules/latest.md" },
+        error: scopeError
+      })
+    ).toBeUndefined();
+  });
+
+  it("only marks report-discovery glob scope denials as report discovery rejections", () => {
+    const scopeError = new ToolExecutionError("读工具路径不在当前窗口允许范围内。", "UNSAFE_PATH");
+
+    expect(
+      classifyToolLoopRoundReason({
+        toolName: "glob",
+        classification: classify("glob", scopeError),
+        executionArguments: { pattern: "rules/**/*.md" },
+        error: scopeError
+      })
+    ).toBeUndefined();
+
+    expect(
+      classifyToolLoopRoundReason({
+        toolName: "glob",
+        classification: classify("glob", scopeError),
+        executionArguments: { pattern: "reports/*.md" },
+        error: scopeError
+      })
+    ).toBe("report_discovery_rejected");
+
+    expect(
+      classifyToolLoopRoundReason({
+        toolName: "glob",
+        classification: classify("glob", scopeError),
+        executionArguments: { pattern: "**/材料分析.md" },
+        allowedOutputFileNames: new Set(["材料分析.md"]),
+        error: scopeError
+      })
+    ).toBe("report_discovery_rejected");
+  });
+
+  it("marks report inventory guard bash rejections as report discovery rejections", () => {
+    const guardError = new ToolExecutionError(
+      "报告清单已提供；请直接根据清单判断已有报告和待创建报告，不要调用 glob、ls 或 bash 查找报告是否存在。",
+      "UNSAFE_PATH"
+    );
+    const classification = classify("bash", guardError);
+
+    expect(classification).toMatchObject({
+      category: "recoverable_by_model",
+      reason: "bash_tool_scope_denied"
+    });
+    expect(
+      classifyToolLoopRoundReason({
+        toolName: "bash",
+        classification,
+        executionArguments: { command: "ls" },
+        allowedOutputFileNames: new Set(["材料分析.md"]),
+        error: guardError
+      })
+    ).toBe("report_discovery_rejected");
+  });
+
+  it("only marks oversized selected report reads as old-report relevant-section requests", () => {
+    const offsetError = new ToolExecutionError("offset must be an integer", "INVALID_ARGUMENTS");
+    const largeReportReadError = new ToolExecutionError("File is larger than maxReadBytes", "INVALID_ARGUMENTS");
+
+    expect(
+      classifyToolLoopRoundReason({
+        toolName: "read_file",
+        classification: classify("read_file", offsetError),
+        executionArguments: { path: "丹药分析.md", offset: "bad" },
+        allowedOutputFileNames: new Set(["丹药分析.md"]),
+        error: offsetError
+      })
+    ).toBe("tool_arguments_invalid");
+
+    expect(
+      classifyToolLoopRoundReason({
+        toolName: "read_file",
+        classification: classify("read_file", largeReportReadError),
+        executionArguments: { path: "丹药分析.md" },
+        allowedOutputFileNames: new Set(["丹药分析.md"]),
+        error: largeReportReadError
+      })
+    ).toBe("old_report_relevant_sections_needed");
   });
 });

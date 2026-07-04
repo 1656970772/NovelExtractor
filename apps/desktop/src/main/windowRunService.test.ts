@@ -6,7 +6,11 @@ import type { ApiKeyRef, ProviderConfig } from "@novel-extractor/domain";
 import { reasonixToolOrder } from "@novel-extractor/tools";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMemoryCredentialStore } from "./credentials";
-import { cleanupBashSandboxAfterWindow, createWindowRunService } from "./windowRunService";
+import {
+  cleanupBashSandboxAfterWindow,
+  createWindowRunService,
+  interceptReportDiscoveryToolCall
+} from "./windowRunService";
 
 const scratchDirs: string[] = [];
 
@@ -67,6 +71,353 @@ describe("window run bash sandbox cleanup", () => {
       })
     );
   });
+});
+
+describe("window run coverage context", () => {
+  it("computes each template rules semantic hash once per job context", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-rules-hash-cache-"));
+    scratchDirs.push(projectRoot);
+    const templates = Array.from({ length: 4 }, (_, index) =>
+      createTemplate({
+        id: `template-${index + 1}`,
+        name: `模板${index + 1}`,
+        fileName: `模板${index + 1}.md`
+      })
+    );
+    const artifacts = createWindowArtifacts({ projectRoot, templates, windowCount: 10 });
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+    const semanticHashForTemplate = (templateId: string) => `rules-semantic-${templateId}`;
+    const createRulesSemanticHash = vi.fn((hashTemplates: readonly { id: string }[]) => {
+      const [template] = hashTemplates;
+      if (template === undefined) {
+        throw new Error("expected one template for semantic hash");
+      }
+      return semanticHashForTemplate(template.id);
+    });
+    const fetch = vi.fn(async () => {
+      throw new Error("covered windows should not call the model");
+    });
+    await writeCoverageIndexForArtifacts({
+      artifacts,
+      projectRoot,
+      semanticHashForTemplate
+    });
+
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      createRulesSemanticHash,
+      fetch,
+      findExistingReport: () => undefined,
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeState: async () => {},
+      providerStore: createProviderStore(createProviderConfig(apiKeyRef)),
+      registerReport: () => {},
+      taskLogger: { append: vi.fn(async () => {}), setSecrets: vi.fn() } as any
+    });
+
+    await service.runJobWindows({
+      artifacts,
+      job: createWindowRunJob({
+        skipAlreadyExtracted: true,
+        templateIds: templates.map((template) => template.id)
+      })
+    });
+
+    expect(createRulesSemanticHash).toHaveBeenCalledTimes(4);
+    expect(createRulesSemanticHash.mock.calls.map(([hashTemplates]) => hashTemplates[0]?.id)).toEqual([
+      "template-1",
+      "template-2",
+      "template-3",
+      "template-4"
+    ]);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("window run report inventory", () => {
+  const reportInventory = [
+    { outputFileName: "NPC性格与代表事件.md", exists: true, source: "selected_template" as const },
+    { outputFileName: "势力设定.md", exists: true, source: "selected_template" as const },
+    { outputFileName: "材料分析.md", exists: true, source: "selected_template" as const },
+    { outputFileName: "事件因果链（长程因果图）.md", exists: false, source: "selected_template" as const }
+  ];
+
+  it("intercepts only report-discovery tool calls covered by the host inventory", () => {
+    expect(
+      interceptReportDiscoveryToolCall({
+        toolName: "glob",
+        args: { pattern: "**/材料分析.md" },
+        reportInventory
+      })
+    ).toMatchObject({
+      code: "REPORT_INVENTORY_ALREADY_PROVIDED",
+      error: {
+        code: "REPORT_INVENTORY_ALREADY_PROVIDED",
+        message: expect.stringContaining("报告清单已提供")
+      }
+    });
+
+    expect(
+      interceptReportDiscoveryToolCall({
+        toolName: "glob",
+        args: { pattern: "templates/*.md" },
+        reportInventory
+      })
+    ).toBeUndefined();
+  });
+
+  it("intercepts bash report discovery from the sandbox reports root", () => {
+    const commands = [
+      "ls",
+      "dir",
+      "find . -name \"*.md\"",
+      "Get-ChildItem .",
+      "Get-ChildItem",
+      "wc -l *.md",
+      "wc -l 材料分析.md"
+    ];
+
+    for (const command of commands) {
+      expect(
+        interceptReportDiscoveryToolCall({
+          toolName: "bash",
+          args: { command },
+          reportDirectoryPaths: ["assets/books/book-1/reports", "reports"],
+          reportInventory
+        })
+      ).toMatchObject({
+        code: "REPORT_INVENTORY_ALREADY_PROVIDED",
+        error: {
+          code: "REPORT_INVENTORY_ALREADY_PROVIDED",
+          message: expect.stringContaining("报告清单已提供")
+        }
+      });
+    }
+
+    expect(
+      interceptReportDiscoveryToolCall({
+        toolName: "bash",
+        args: { command: "pnpm test" },
+        reportDirectoryPaths: ["assets/books/book-1/reports", "reports"],
+        reportInventory
+      })
+    ).toBeUndefined();
+  });
+
+  it("intercepts report discovery path variants without blocking unrelated markdown globs", () => {
+    const interceptedCalls = [
+      { toolName: "ls", args: { path: "reports/" } },
+      { toolName: "ls", args: { path: "assets/books/book-1/reports/" } },
+      { toolName: "glob", args: { pattern: "**/材料分析.MD" } }
+    ];
+
+    for (const call of interceptedCalls) {
+      expect(
+        interceptReportDiscoveryToolCall({
+          ...call,
+          reportDirectoryPaths: ["assets/books/book-1/reports", "reports"],
+          reportInventory
+        })
+      ).toMatchObject({
+        code: "REPORT_INVENTORY_ALREADY_PROVIDED",
+        error: {
+          message: expect.stringContaining("报告清单已提供")
+        }
+      });
+    }
+
+    expect(
+      interceptReportDiscoveryToolCall({
+        toolName: "glob",
+        args: { pattern: "templates/*.md" },
+        reportDirectoryPaths: ["assets/books/book-1/reports", "reports"],
+        reportInventory
+      })
+    ).toBeUndefined();
+  });
+
+  it("adds the host-provided report inventory to the window prompt", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-report-inventory-"));
+    scratchDirs.push(projectRoot);
+    const reportsRoot = path.join(projectRoot, "assets", "books", "book-1", "reports");
+    const windowTextPath = path.join(projectRoot, "runs", "job-1", "windows", "window-0001.txt");
+    const requestBodies: Record<string, unknown>[] = [];
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+
+    await fs.mkdir(path.dirname(windowTextPath), { recursive: true });
+    await fs.mkdir(reportsRoot, { recursive: true });
+    await fs.writeFile(windowTextPath, "第一章\n\n主角发现新的材料线索。", "utf8");
+    await fs.writeFile(path.join(reportsRoot, "NPC性格与代表事件.md"), "# NPC性格与代表事件\n", "utf8");
+    await fs.writeFile(path.join(reportsRoot, "势力设定.md"), "# 势力设定\n", "utf8");
+    await fs.writeFile(path.join(reportsRoot, "材料分析.md"), "# 材料分析\n", "utf8");
+
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      requestBodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+      const responseBody =
+        requestBodies.length === 1
+          ? createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-no-update-npc", "mark_no_update", {
+                  path: "NPC性格与代表事件.md",
+                  reason: "当前窗口没有新增 NPC 性格事件。"
+                }),
+                createToolCall("call-no-update-faction", "mark_no_update", {
+                  path: "势力设定.md",
+                  reason: "当前窗口没有新增势力设定。"
+                }),
+                createToolCall("call-no-update-material", "mark_no_update", {
+                  path: "材料分析.md",
+                  reason: "当前窗口没有新增材料信息。"
+                }),
+                createToolCall("call-no-update-causal", "mark_no_update", {
+                  path: "事件因果链（长程因果图）.md",
+                  reason: "当前窗口没有新增事件因果链。"
+                })
+              ]
+            })
+          : createChatCompletionResponse({ content: "窗口完成。" });
+      return new Response(
+        JSON.stringify(responseBody),
+        {
+          headers: { "Content-Type": "application/json" },
+          status: 200
+        }
+      );
+    });
+
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      fetch,
+      findExistingReport: () => undefined,
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeState: async () => {},
+      providerStore: createProviderStore(createProviderConfig(apiKeyRef)),
+      registerReport: () => {},
+      taskLogger: { append: vi.fn(async () => {}), setSecrets: vi.fn() } as any
+    });
+
+    await service.runJobWindows({
+      artifacts: createWindowArtifacts({
+        projectRoot,
+        templates: [
+          createTemplate({ id: "template-1", name: "NPC性格与代表事件", fileName: "NPC性格与代表事件.md" }),
+          createTemplate({ id: "template-2", name: "势力设定", fileName: "势力设定.md" }),
+          createTemplate({ id: "template-3", name: "材料分析", fileName: "材料分析.md" }),
+          createTemplate({
+            id: "template-4",
+            name: "事件因果链（长程因果图）",
+            fileName: "事件因果链（长程因果图）.md"
+          })
+        ]
+      }),
+      job: createWindowRunJob({
+        templateIds: ["template-1", "template-2", "template-3", "template-4"]
+      })
+    });
+
+    const promptMessages = messagesOf(requestBodies[0]);
+    const userPrompt = promptMessages.find((message) => message.role === "user")?.content;
+    expect(userPrompt).toContain("已有报告：NPC性格与代表事件.md、势力设定.md、材料分析.md");
+    expect(userPrompt).toContain("待创建报告：事件因果链（长程因果图）.md");
+    expect(userPrompt).toContain("不要调用 glob、ls 或 bash 查找这些报告是否存在");
+  }, 20000);
+
+  it("limits each batched prompt report inventory to that batch", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-report-inventory-batch-"));
+    scratchDirs.push(projectRoot);
+    const reportsRoot = path.join(projectRoot, "assets", "books", "book-1", "reports");
+    const windowTextPath = path.join(projectRoot, "runs", "job-1", "windows", "window-0001.txt");
+    const requestBodies: Record<string, unknown>[] = [];
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+    const templates = [
+      createTemplate({ id: "template-1", name: "报告一", fileName: "报告一.md" }),
+      createTemplate({ id: "template-2", name: "报告二", fileName: "报告二.md" }),
+      createTemplate({ id: "template-3", name: "报告三", fileName: "报告三.md" }),
+      createTemplate({ id: "template-4", name: "报告四", fileName: "报告四.md" }),
+      createTemplate({ id: "template-5", name: "报告五", fileName: "报告五.md" })
+    ];
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requestBodies.push(body);
+
+      if (requestBodies.length === 1) {
+        return new Response(
+          JSON.stringify(createChatCompletionResponse({
+            toolCalls: templates.slice(0, 4).map((template) =>
+              createToolCall(`call-no-update-${template.id}`, "mark_no_update", {
+                path: template.fileName,
+                reason: `${template.name}当前窗口无新增。`
+              })
+            )
+          })),
+          { headers: { "Content-Type": "application/json" }, status: 200 }
+        );
+      }
+
+      if (requestBodies.length === 3) {
+        return new Response(
+          JSON.stringify(createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-no-update-template-5", "mark_no_update", {
+                path: "报告五.md",
+                reason: "报告五当前窗口无新增。"
+              })
+            ]
+          })),
+          { headers: { "Content-Type": "application/json" }, status: 200 }
+        );
+      }
+
+      return new Response(
+        JSON.stringify(createChatCompletionResponse({ content: "窗口完成。" })),
+        { headers: { "Content-Type": "application/json" }, status: 200 }
+      );
+    });
+
+    await fs.mkdir(path.dirname(windowTextPath), { recursive: true });
+    await fs.mkdir(reportsRoot, { recursive: true });
+    await fs.writeFile(windowTextPath, "第一章\n\n主角整理旧资料。", "utf8");
+
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      fetch,
+      findExistingReport: () => undefined,
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeState: async () => {},
+      providerStore: createProviderStore(createProviderConfig(apiKeyRef)),
+      registerReport: () => {},
+      taskLogger: { append: vi.fn(async () => {}), setSecrets: vi.fn() } as any
+    });
+
+    await service.runJobWindows({
+      artifacts: createWindowArtifacts({ projectRoot, templates }),
+      job: createWindowRunJob({ templateIds: templates.map((template) => template.id) })
+    });
+
+    expect(requestBodies).toHaveLength(4);
+    const firstPrompt = messagesOf(requestBodies[0]).find((message) => message.role === "user")?.content;
+    const secondBatchPrompt = messagesOf(requestBodies[2]).find((message) => message.role === "user")?.content;
+    expect(firstPrompt).toContain("报告一.md");
+    expect(firstPrompt).toContain("报告四.md");
+    expect(firstPrompt).not.toContain("报告五.md");
+    expect(secondBatchPrompt).toContain("报告五.md");
+    expect(secondBatchPrompt).not.toContain("报告一.md");
+  }, 20000);
 });
 
 describe("window run Reasonix tool loop integration", () => {
@@ -479,6 +830,73 @@ describe("window run Reasonix tool loop integration", () => {
         reportKind: "template-output"
       })
     });
+  }, 20000);
+
+  it("does not mask the original window error when reason-summary logging fails", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-summary-failure-"));
+    scratchDirs.push(projectRoot);
+    const reportsRoot = path.join(projectRoot, "assets", "books", "book-1", "reports");
+    const windowTextPath = path.join(projectRoot, "runs", "job-1", "windows", "window-0001.txt");
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+    const providerConfig = createProviderConfig(apiKeyRef);
+    const fetch = vi.fn(async () => {
+      const responseBody = createChatCompletionResponse({
+        toolCalls: [
+          createToolCall("call-absolute-write", "write_file", {
+            path: "C:\\outside\\人物.md",
+            content: "# 人物\n\n不应写入。"
+          })
+        ]
+      });
+
+      return new Response(JSON.stringify(responseBody), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      });
+    });
+    const append = vi.fn(async (tags: readonly string[]) => {
+      if (tags[0] === "上下文" && tags[1] === "多轮原因汇总") {
+        throw new Error("summary log failed");
+      }
+    });
+
+    await fs.mkdir(path.dirname(windowTextPath), { recursive: true });
+    await fs.mkdir(reportsRoot, { recursive: true });
+    await fs.writeFile(windowTextPath, "第一章\n\n主角整理旧资料。", "utf8");
+
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      fetch,
+      findExistingReport: () => undefined,
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeState: async () => {},
+      providerStore: createProviderStore(providerConfig),
+      registerReport: () => {},
+      taskLogger: { append, setSecrets: vi.fn() } as any
+    });
+
+    const result = await service.runJobWindows({
+      artifacts: createWindowArtifacts({
+        projectRoot,
+        templates: [createTemplate({ id: "template-1", name: "人物", fileName: "人物.md" })]
+      }),
+      job: createWindowRunJob({ templateIds: ["template-1"] })
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "job_failed",
+        message: expect.stringMatching(/写工具 write_file 的 path 必须属于本轮选中模板 outputFileName/u)
+      }
+    });
+    const errorMessage = result.ok === false && result.error.code === "job_failed" ? result.error.message : "";
+    expect(errorMessage).not.toContain("summary log failed");
   }, 20000);
 
   it("does not expose real reports symlink targets inside the initial bash sandbox", async () => {
@@ -1482,7 +1900,26 @@ function createTemplate(input: { fileName: string; id: string; name: string }) {
 function createWindowArtifacts(input: {
   projectRoot: string;
   templates: Array<ReturnType<typeof createTemplate>>;
+  windowCount?: number;
 }) {
+  const windowCount = input.windowCount ?? 1;
+  const windows = Array.from({ length: windowCount }, (_, index) => {
+    const chapterTitle = index === 0 ? "第一章" : `第${index + 1}章`;
+    const chapterText = index === 0 ? "第一章\n\n主角整理旧资料。" : `${chapterTitle}\n\n主角整理旧资料 ${index + 1}。`;
+    return {
+      windowId: `window-${index + 1}`,
+      index,
+      fileName: `window-${String(index + 1).padStart(4, "0")}.txt`,
+      textPath: `runs/job-1/windows/window-${String(index + 1).padStart(4, "0")}.txt`,
+      windowHash: sha256(chapterText),
+      contextChapterRange: `${index + 1}`,
+      submittedChapterRange: `${index + 1}`,
+      contextChapterTitles: [chapterTitle],
+      submittedChapterTitles: [chapterTitle],
+      characterCount: chapterText.length
+    };
+  });
+
   return {
     book: {
       id: "book-1",
@@ -1508,38 +1945,59 @@ function createWindowArtifacts(input: {
       splitConfigHash: sha256("split"),
       splitterVersion: "test",
       generatedAt: "2026-07-01T00:00:00.000Z",
-      totalDetectedChapterCount: 1,
-      windows: [
-        {
-          windowId: "window-1",
-          index: 0,
-          fileName: "window-0001.txt",
-          textPath: "runs/job-1/windows/window-0001.txt",
-          windowHash: sha256("第一章\n\n主角整理旧资料。"),
-          contextChapterRange: "1",
-          submittedChapterRange: "1",
-          contextChapterTitles: ["第一章"],
-          submittedChapterTitles: ["第一章"],
-          characterCount: "第一章\n\n主角整理旧资料。".length
-        }
-      ]
+      totalDetectedChapterCount: windowCount,
+      windows
     },
     rulesSnapshotPath: "runs/job-1/rules.json",
     templates: input.templates
   };
 }
 
-function createWindowRunJob(input: { templateIds: string[] }) {
+function createWindowRunJob(input: { skipAlreadyExtracted?: boolean; templateIds: string[] }) {
   return {
     id: "job-1",
     bookId: "book-1",
     input: {
       modelId: "mock-model",
       providerConfigId: "provider-1",
-      skipAlreadyExtracted: false,
+      skipAlreadyExtracted: input.skipAlreadyExtracted ?? false,
       templateIds: input.templateIds
     }
   };
+}
+
+async function writeCoverageIndexForArtifacts(input: {
+  artifacts: ReturnType<typeof createWindowArtifacts>;
+  projectRoot: string;
+  semanticHashForTemplate(templateId: string): string;
+}): Promise<void> {
+  const records = input.artifacts.runtimeWindowManifest.windows.flatMap((window) =>
+    input.artifacts.templates.map((template) => ({
+      bookId: input.artifacts.book.id,
+      templateId: template.id,
+      outputFileName: template.fileName,
+      templateHash: createTemplatePromptHashForTest(template),
+      windowHash: window.windowHash,
+      rulesSemanticHash: input.semanticHashForTemplate(template.id),
+      submittedChapterRange: window.submittedChapterRange,
+      status: "written" as const,
+      updatedAt: "2026-07-01T00:00:00.000Z"
+    }))
+  );
+  const indexPath = path.join(input.projectRoot, "metadata", "coverage", "coverage-index.json");
+  await fs.mkdir(path.dirname(indexPath), { recursive: true });
+  await fs.writeFile(indexPath, `${JSON.stringify({ version: 1, records }, null, 2)}\n`, "utf8");
+}
+
+function createTemplatePromptHashForTest(template: ReturnType<typeof createTemplate>): string {
+  return sha256(
+    JSON.stringify({
+      outputFileName: template.fileName,
+      templateBody: template.body,
+      templateId: template.id,
+      templateName: template.name
+    })
+  );
 }
 
 function sha256(value: string): string {

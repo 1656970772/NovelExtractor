@@ -11,6 +11,8 @@ const reasonixOrder = [
   "ls",
   "multi_edit",
   "read_file",
+  "read_report_excerpt",
+  "upsert_report_section",
   "wait",
   "write_file"
 ];
@@ -34,11 +36,13 @@ describe("Reasonix workspace parity", () => {
     const { Workspace } = await import("./workspace");
     const workspace = new Workspace({ dir: path.resolve("C:\\tmp", "project") });
 
-    expect(workspace.tools(["wait", "bash", "read_file", "todo_write", "grep", "kill_shell"]).map((tool: { name: string }) => tool.name)).toEqual([
+    expect(workspace.tools(["wait", "bash", "read_file", "read_report_excerpt", "upsert_report_section", "todo_write", "grep", "kill_shell"]).map((tool: { name: string }) => tool.name)).toEqual([
       "bash",
       "grep",
       "kill_shell",
       "read_file",
+      "read_report_excerpt",
+      "upsert_report_section",
       "wait"
     ]);
   });
@@ -109,6 +113,8 @@ describe("Reasonix workspace parity", () => {
     >;
 
     expect(tools.read_file.readOnly()).toBe(true);
+    expect(tools.read_report_excerpt.readOnly()).toBe(true);
+    expect(tools.upsert_report_section.readOnly()).toBe(false);
     expect(tools.write_file.readOnly()).toBe(false);
     expect(tools.grep.readOnly()).toBe(true);
     expect(tools.bash.readOnly()).toBe(false);
@@ -123,6 +129,27 @@ describe("Reasonix workspace parity", () => {
         limit: { type: "integer", minimum: 1 }
       }
     });
+    expect(tools.read_report_excerpt.schema()).toMatchObject({
+      type: "object",
+      required: ["outputFileName", "keywords"],
+      properties: {
+        outputFileName: { type: "string" },
+        keywords: { type: "array", items: { type: "string" } },
+        maxChars: { type: "integer" }
+      }
+    });
+    expect(tools.upsert_report_section.schema()).toMatchObject({
+      type: "object",
+      required: ["outputFileName", "content", "writeMode"],
+      additionalProperties: false,
+      properties: {
+        outputFileName: { type: "string" },
+        sectionId: { type: "string" },
+        content: { type: "string" },
+        writeMode: { enum: ["replace_section", "append_to_section", "append_to_end"] }
+      }
+    });
+    expect(JSON.stringify(tools.upsert_report_section.schema())).not.toContain("old_string");
     expect(tools.edit_file.schema()).toMatchObject({
       required: ["path", "old_string", "new_string"],
       properties: {
@@ -196,5 +223,20 @@ describe("Reasonix workspace parity", () => {
 
     expect(bash.description()).toContain("commands run under PowerShell 7 (pwsh), so write PowerShell, not bash");
     expect(bash.description()).toContain("'&&' and '||' are parsed for conditional chaining");
+  });
+
+  it("warns report workflows not to rediscover host-provided report inventory", async () => {
+    const { Workspace } = await import("./workspace");
+    const tools = Object.fromEntries(new Workspace({}).tools().map((tool: ReasonixToolDefinitionForTest) => [tool.name, tool])) as Record<
+      string,
+      ReasonixToolDefinitionForTest
+    >;
+
+    expect(tools.glob.description()).toContain("报告是否存在已由宿主清单提供");
+    expect(tools.glob.description()).toContain("不要用 glob/ls/bash 查找报告");
+    expect(tools.ls.description()).toContain("报告是否存在已由宿主清单提供");
+    expect(tools.bash.description()).toContain("不要用 glob/ls/bash 查找报告");
+    expect(tools.read_file.description()).toContain("需要读已有报告时后续任务会走关键词检索/相关段落");
+    expect(tools.read_report_excerpt.description()).toContain("关键词");
   });
 });

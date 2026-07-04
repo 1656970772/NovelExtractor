@@ -122,6 +122,7 @@ void app.whenReady().then(async () => {
       providerStore,
       workspaceRoot: appPaths.userDataDir,
       projectsRoot: () => projectStorageDirectory,
+      getAppVersion: () => app.getVersion(),
       shell,
       onJobUpdated: notifyRendererJobUpdated
     }),

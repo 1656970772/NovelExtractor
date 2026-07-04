@@ -14,6 +14,8 @@ export const reasonixToolOrder = [
   "ls",
   "multi_edit",
   "read_file",
+  "read_report_excerpt",
+  "upsert_report_section",
   "wait",
   "write_file"
 ] as const;
@@ -101,6 +103,8 @@ export class Workspace {
 
 const toolReadOnly: Record<ReasonixToolName, boolean> = {
   read_file: true,
+  read_report_excerpt: true,
+  upsert_report_section: false,
   write_file: false,
   edit_file: false,
   multi_edit: false,
@@ -114,8 +118,13 @@ const toolReadOnly: Record<ReasonixToolName, boolean> = {
 };
 
 const toolDescriptions: Record<ReasonixToolName, (workspace: Workspace) => string> = {
-  read_file: () =>
-    "Read a text file with optional line offset/limit. Output prefixes each line with its 1-based number (e.g. `   42→...`) so subsequent edit_file calls can target exact lines. Use `offset` and `limit` to page through large files; the tool reports total length and pagination hints in a trailer.",
+  read_file: (workspace) =>
+    "Read a text file with optional line offset/limit. Output prefixes each line with its 1-based number (e.g. `   42→...`) so subsequent edit_file calls can target exact lines. Use `offset` and `limit` to page through large files; the tool reports total length and pagination hints in a trailer." +
+    reportInventoryGuidance(workspace, "read_existing"),
+  read_report_excerpt: () =>
+    "按关键词检索本批允许的旧报告，命中时只返回相关段落、相关 Markdown 小节或命中行附近 bounded range；未命中时返回 found=false 并建议 append_to_end。只提供 outputFileName、keywords，可选 maxChars，不要查目录或整读旧报告。",
+  upsert_report_section: () =>
+    "Update a Markdown report by stable section id and writeMode without old_string. Use replace_section or append_to_section for existing headings; if Task 7 keywords found no old content, use append_to_end. This tool does not create new section headings implicitly.",
   write_file: () => "Write content to a file at the given path (overwriting existing content). Creates parent directories as needed.",
   edit_file: () =>
     "Replace an exact string in a file with another. old_string must occur exactly once; add surrounding context to disambiguate. Use for targeted edits instead of rewriting the whole file.",
@@ -125,11 +134,13 @@ const toolDescriptions: Record<ReasonixToolName, (workspace: Workspace) => strin
     workspace.search.rgPath !== undefined && workspace.search.rgPath !== ""
       ? "Search for a regular expression in a file, or recursively under a directory — ripgrep-backed, so it honors .gitignore. Returns matching lines as path:line:text, capped at 200 matches."
       : "Search for a regular expression in a file, or recursively under a directory (skips hidden files and files matched by .gitignore). Returns matching lines as path:line:text, capped at 200 matches.",
-  glob: () =>
-    'Find files matching a glob pattern (e.g. "*.go", "internal/*/*.go", "**/*.test.ts"). Supports shell metacharacters * ? [] and the recursive ** pattern.',
-  ls: () =>
-    "List the entries of a directory. Directories are shown with a trailing slash; files show their byte size. Set recursive=true to list all nested files depth-first (skips .git/node_modules).",
-  bash: (workspace) => bashDescription(resolveWorkspaceShell(workspace)),
+  glob: (workspace) =>
+    'Find files matching a glob pattern (e.g. "*.go", "internal/*/*.go", "**/*.test.ts"). Supports shell metacharacters * ? [] and the recursive ** pattern.' +
+    reportInventoryGuidance(workspace, "discovery"),
+  ls: (workspace) =>
+    "List the entries of a directory. Directories are shown with a trailing slash; files show their byte size. Set recursive=true to list all nested files depth-first (skips .git/node_modules)." +
+    reportInventoryGuidance(workspace, "discovery"),
+  bash: (workspace) => bashDescription(resolveWorkspaceShell(workspace)) + reportInventoryGuidance(workspace, "read_existing"),
   bash_output: () =>
     "Read new output from a background job started with bash(run_in_background=true) or task(run_in_background=true). Returns the output produced since the last bash_output call for that job, plus its status (running/done/failed/killed). Does not block.",
   wait: () =>
@@ -147,6 +158,44 @@ const toolSchemas: Record<ReasonixToolName, unknown> = {
       limit: { type: "integer", description: "Maximum lines to return (default 2000)", minimum: 1 }
     },
     required: ["path"]
+  },
+  read_report_excerpt: {
+    type: "object",
+    properties: {
+      outputFileName: { type: "string", description: "本批选中模板的平面报告文件名，例如 材料分析.md" },
+      keywords: {
+        type: "array",
+        items: { type: "string" },
+        minItems: 1,
+        description: "用于检索旧报告相关段落的关键词数组，至少一个非空字符串。"
+      },
+      maxChars: {
+        type: "integer",
+        description: "返回相关段落的最大字符数，默认 4000，允许范围 500-20000。",
+        minimum: 500,
+        maximum: 20000
+      }
+    },
+    required: ["outputFileName", "keywords"],
+    additionalProperties: false
+  },
+  upsert_report_section: {
+    type: "object",
+    properties: {
+      outputFileName: { type: "string", description: "本批选中模板的平面报告文件名，例如 材料分析.md" },
+      sectionId: {
+        type: "string",
+        description: "buildReportSectionIndex 返回的稳定 section id，例如 材料分析/法器；append_to_end 不需要。"
+      },
+      content: { type: "string", description: "要替换、追加到 section 或追加到报告末尾的 Markdown 正文。" },
+      writeMode: {
+        type: "string",
+        enum: ["replace_section", "append_to_section", "append_to_end"],
+        description: "replace_section 替换命中 section 正文；append_to_section 追加到命中 section；append_to_end 追加到报告末尾。"
+      }
+    },
+    required: ["outputFileName", "content", "writeMode"],
+    additionalProperties: false
   },
   write_file: {
     type: "object",
@@ -265,6 +314,15 @@ const toolSchemas: Record<ReasonixToolName, unknown> = {
 
 const bashToolSteer =
   " Use for builds, tests, git, package managers, etc. To search/read/list/edit/move files, prefer the dedicated tools (grep, read_file, ls, glob, edit_file, move_file) over shell grep/cat/ls/find/sed/mv/Move-Item — they behave identically on every OS. For symbol search or architecture questions, prefer LSP/read tools and targeted grep before shell commands.";
+
+function reportInventoryGuidance(workspace: Workspace, mode: "discovery" | "read_existing"): string {
+  if (workspace.dir !== "") {
+    return "";
+  }
+
+  const base = " 报告是否存在已由宿主清单提供；不要用 glob/ls/bash 查找报告。";
+  return mode === "read_existing" ? `${base}需要读已有报告时后续任务会走关键词检索/相关段落。` : base;
+}
 
 function bashDescription(shell: ReasonixResolvedShell): string {
   if (shell.kind === "powershell") {

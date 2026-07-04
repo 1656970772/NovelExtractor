@@ -124,16 +124,16 @@ describe("default config", () => {
         "ls",
         "multi_edit",
         "read_file",
+        "read_report_excerpt",
+        "upsert_report_section",
         "wait",
         "write_file",
         "mark_no_update"
       ],
       maxRepeatedRecoverableToolErrors: 3,
       recoverableToolErrorHints: {
-        replacement_text_not_found:
-          "old_string 必须精确匹配文件中的原文；可先用 grep/read_file 找到准确片段；若已 read_file 且需要整体更新，可用 write_file 提交完整保留旧内容的新版报告。",
-        replacement_text_not_unique:
-          "old_string 在文件中匹配到多处；请用 read_file/grep 找到目标段落并加入足够上下文，或用 write_file 提交完整保留旧内容的新版报告。",
+        replacement_text_not_found: expect.stringContaining("read_report_excerpt"),
+        replacement_text_not_unique: expect.stringContaining("read_report_excerpt"),
         read_tool_target_not_found:
           "读取目标不存在；请先用 ls/glob 确认可读路径，或改用当前窗口文本、reports 目录或本批选中报告文件名。",
         read_tool_scope_denied:
@@ -163,6 +163,9 @@ describe("default config", () => {
     });
     expect(getDefaultConfig().toolLoopDefaults.windowInstructionLines.join("\n")).toContain(
       "mark_no_update"
+    );
+    expect(getDefaultConfig().toolLoopDefaults.windowInstructionLines.join("\n")).toContain(
+      "upsert_report_section"
     );
   });
 
@@ -257,6 +260,8 @@ describe("default config", () => {
       "ls",
       "multi_edit",
       "read_file",
+      "read_report_excerpt",
+      "upsert_report_section",
       "wait",
       "write_file",
       "mark_no_update"

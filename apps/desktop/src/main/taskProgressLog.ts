@@ -1,4 +1,5 @@
 import path from "node:path";
+import { TOOL_LOOP_ROUND_REASON_LABELS, type ToolLoopRoundReason } from "./toolErrorClassification";
 
 export interface TaskProgressLogEntry {
   tags: readonly string[];
@@ -11,6 +12,15 @@ type ToolSummary = {
   result: string;
   target: (value: unknown) => string;
 };
+
+const TOOL_LOOP_ROUND_REASON_ORDER: ToolLoopRoundReason[] = [
+  "report_discovery_rejected",
+  "old_report_relevant_sections_needed",
+  "edit_anchor_failed",
+  "tool_arguments_invalid",
+  "missing_template_outcome",
+  "unknown_tool_recovered"
+];
 
 const TOOL_SUMMARIES: Record<string, ToolSummary> = {
   read_file: {
@@ -169,6 +179,16 @@ function countArrayOrRenderedItems(value: unknown, key: string): number {
   return count;
 }
 
+function numberField(value: unknown, key: string): number | undefined {
+  const field = stringField(value, key);
+  if (!field) {
+    return undefined;
+  }
+
+  const parsed = Number(field);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 function firstRecord(value: unknown, keys: readonly string[]): Record<string, unknown> | undefined {
   for (const key of keys) {
     const record = objectField(value, key);
@@ -219,6 +239,25 @@ function hasResultContent(value: unknown): boolean {
   return content !== null && typeof content !== "undefined";
 }
 
+function isToolLoopRoundReason(value: unknown): value is ToolLoopRoundReason {
+  return typeof value === "string" && value in TOOL_LOOP_ROUND_REASON_LABELS;
+}
+
+function continuationReasonLabel(value: unknown): string | undefined {
+  const explicit = stringField(value, "继续原因");
+  if (explicit) {
+    return explicit;
+  }
+
+  const reasonTag = stringField(value, "继续原因标签");
+  return isToolLoopRoundReason(reasonTag) ? TOOL_LOOP_ROUND_REASON_LABELS[reasonTag] : undefined;
+}
+
+function appendContinuationReason(message: string, value: unknown): string {
+  const reason = continuationReasonLabel(value);
+  return reason ? `${message}，继续原因：${reason}` : message;
+}
+
 function summarizeTaskInfo(value: unknown): string {
   const book = stringField(value, "书籍") ?? stringField(value, "书籍名称") ?? "未知书籍";
   const model = stringField(value, "模型") ?? "未知模型";
@@ -233,6 +272,27 @@ function summarizeCoverageIndex(value: unknown): string {
   const skip = stringField(value, "跳过已提取") ?? "false";
   const pendingCount = countArrayOrRenderedItems(value, "待处理模板");
   return `检查覆盖索引：跳过已提取=${skip}，待处理模板 ${pendingCount} 个`;
+}
+
+function summarizeCoveragePrecheck(value: unknown): string {
+  const totalCount = numberField(value, "窗口总数") ?? 0;
+  const coveredCount = numberField(value, "已覆盖窗口数") ?? 0;
+  const pendingCount = numberField(value, "待处理窗口数") ?? 0;
+  const pendingWindows = (arrayField(value, "待处理窗口") ?? []).filter(
+    (item): item is string => typeof item === "string" && item.trim() !== ""
+  );
+  const compactPendingWindows = pendingWindows.map((item, index) =>
+    index === 0 ? item : item.replace(/^窗口\s*/u, "")
+  );
+  const pendingSuffix = compactPendingWindows.length > 0 ? `（${compactPendingWindows.join("、")}）` : "";
+
+  return `覆盖索引预检：${totalCount} 个窗口，${coveredCount} 个已覆盖，${pendingCount} 个待处理${pendingSuffix}`;
+}
+
+function summarizeCoverageSkippedWindow(value: unknown): string {
+  const windowText = stringField(value, "窗口") ?? "?/?";
+  const windowFileName = stringField(value, "窗口文件") ?? "未知窗口文件";
+  return `窗口 ${windowText}（${windowFileName}）已经提取过，跳过`;
 }
 
 function summarizeWindow(value: unknown): string {
@@ -270,16 +330,20 @@ function summarizeModelResponse(value: unknown): string {
 function summarizeRetry(value: unknown): string {
   const text = asText(value) ?? stringField(value, "原因") ?? "";
   const missing = /缺少\s*(?:outputFileName)?[：:]\s*([^。\n]+)/u.exec(text)?.[1]?.trim();
+  let message: string;
   if (missing) {
-    return `继续补齐结果：缺少 ${missing}`;
+    message = `继续补齐结果：缺少 ${missing}`;
+    return appendContinuationReason(message, value);
   }
 
   const missingCount = stringField(value, "缺失数量") ?? /还缺\s*(\d+)\s*个/u.exec(text)?.[1];
   if (missingCount) {
-    return `继续补齐结果：还缺 ${missingCount} 个模板处理结果`;
+    message = `继续补齐结果：还缺 ${missingCount} 个模板处理结果`;
+    return appendContinuationReason(message, value);
   }
 
-  return "继续补齐结果：检查未完成模板";
+  message = "继续补齐结果：检查未完成模板";
+  return appendContinuationReason(message, value);
 }
 
 function summarizeBatchResult(value: unknown): string {
@@ -302,6 +366,25 @@ function summarizeCoverageUpdate(value: unknown): string {
   return `更新覆盖索引：窗口 ${windowText} 已记录`;
 }
 
+function summarizeToolLoopReasonSummary(value: unknown): string {
+  const windowText = stringField(value, "窗口") ?? "?/?";
+  const reasonCounts = objectField(value, "原因计数") ?? {};
+  const orderedCounts = Object.entries(reasonCounts)
+    .filter((entry): entry is [ToolLoopRoundReason, number] => isToolLoopRoundReason(entry[0]) && typeof entry[1] === "number" && entry[1] > 0)
+    .sort((left, right) => {
+      if (right[1] !== left[1]) {
+        return right[1] - left[1];
+      }
+      return TOOL_LOOP_ROUND_REASON_ORDER.indexOf(left[0]) - TOOL_LOOP_ROUND_REASON_ORDER.indexOf(right[0]);
+    });
+  const summary =
+    orderedCounts.length > 0
+      ? orderedCounts.map(([reason, count]) => `${TOOL_LOOP_ROUND_REASON_LABELS[reason]} ${count} 次`).join("，")
+      : "无";
+
+  return `窗口 ${windowText} 多轮原因：${summary}`;
+}
+
 function summarizeToolCall(toolName: string, value: unknown): string {
   const summary = TOOL_SUMMARIES[toolName];
   if (!summary) {
@@ -321,7 +404,9 @@ function summarizeToolResult(toolName: string, value: unknown): string {
   const target = summary.target(value);
   if (hasRecoverableError(value)) {
     const recoverableLabel = summary.result.replace(/完成$/u, "返回可恢复错误");
-    return target ? `${recoverableLabel}：${target}，模型将重试` : `${recoverableLabel}，模型将重试`;
+    const message = target ? `${recoverableLabel}：${target}` : recoverableLabel;
+    const reason = continuationReasonLabel(value);
+    return reason ? `${message}，继续原因：${reason}` : `${message}，模型将重试`;
   }
 
   if (toolName === "glob") {
@@ -365,6 +450,10 @@ export function summarizeTaskLogEntry(entry: TaskProgressLogEntry): string {
     message = "加载任务上下文：书籍、模板、规则快照和报告目录已准备";
   } else if (firstTag === "上下文" && secondTag === "覆盖索引") {
     message = summarizeCoverageIndex(entry.value);
+  } else if (firstTag === "上下文" && secondTag === "覆盖索引预检") {
+    message = summarizeCoveragePrecheck(entry.value);
+  } else if (firstTag === "上下文" && secondTag === "覆盖索引跳过窗口") {
+    message = summarizeCoverageSkippedWindow(entry.value);
   } else if (firstTag === "上下文" && secondTag === "窗口") {
     message = summarizeWindow(entry.value);
   } else if (firstTag === "大模型请求" && secondTag === "Prompt") {
@@ -381,6 +470,8 @@ export function summarizeTaskLogEntry(entry: TaskProgressLogEntry): string {
     message = summarizeBatchResult(entry.value);
   } else if (firstTag === "上下文" && secondTag === "覆盖索引更新") {
     message = summarizeCoverageUpdate(entry.value);
+  } else if (firstTag === "上下文" && secondTag === "多轮原因汇总") {
+    message = summarizeToolLoopReasonSummary(entry.value);
   } else if (firstTag === "错误" && secondTag === "窗口") {
     message = summarizeWindowError(entry.value);
   } else if (firstTag === "错误" && secondTag === "任务") {

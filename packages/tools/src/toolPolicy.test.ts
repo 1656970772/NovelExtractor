@@ -9,6 +9,8 @@ describe("tool policy", () => {
     expect(classifyToolEffects("ls")).toBe("read");
     expect(classifyToolEffects("bash_output")).toBe("read");
     expect(classifyToolEffects("wait")).toBe("read");
+    expect(classifyToolEffects("read_report_excerpt")).toBe("read");
+    expect(classifyToolEffects("upsert_report_section")).toBe("write");
     expect(classifyToolEffects("write_file")).toBe("write");
     expect(classifyToolEffects("edit_file")).toBe("write");
     expect(classifyToolEffects("multi_edit")).toBe("write");
@@ -21,6 +23,8 @@ describe("tool policy", () => {
     expect(isReadTool("grep")).toBe(true);
     expect(isReadTool("bash_output")).toBe(true);
     expect(isReadTool("wait")).toBe(true);
+    expect(isReadTool("read_report_excerpt")).toBe(true);
+    expect(isWriteTool("upsert_report_section")).toBe(true);
     expect(isReadTool("write_file")).toBe(false);
     expect(isWriteTool("multi_edit")).toBe(true);
     expect(isWriteTool("bash")).toBe(true);

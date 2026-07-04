@@ -16,6 +16,30 @@ describe("task progress log summarizer", () => {
   it("summarizes context, model request, retry, batch result, and coverage update", () => {
     expect(
       summarizeTaskLogEntry({
+        tags: ["上下文", "覆盖索引预检"],
+        timestamp: "2026-07-02T04:36:44.000Z",
+        value: {
+          窗口总数: 10,
+          已覆盖窗口数: 6,
+          待处理窗口数: 4,
+          待处理窗口: ["窗口 7/10", "窗口 8/10", "窗口 9/10", "窗口 10/10"]
+        }
+      })
+    ).toBe("04:36:44 覆盖索引预检：10 个窗口，6 个已覆盖，4 个待处理（窗口 7/10、8/10、9/10、10/10）");
+
+    expect(
+      summarizeTaskLogEntry({
+        tags: ["上下文", "覆盖索引跳过窗口"],
+        timestamp: "2026-07-02T04:36:45.000Z",
+        value: {
+          窗口: "1/10",
+          窗口文件: "window-0001.txt"
+        }
+      })
+    ).toBe("04:36:45 窗口 1/10（window-0001.txt）已经提取过，跳过");
+
+    expect(
+      summarizeTaskLogEntry({
         tags: ["上下文", "覆盖索引"],
         timestamp: "2026-07-02T04:36:45.000Z",
         value: {
@@ -249,6 +273,64 @@ describe("task progress log summarizer", () => {
         }
       })
     ).toBe("06:42:46 更新返回可恢复错误：事件因果链（长程因果图）.md，模型将重试");
+  });
+
+  it("includes tool-loop continuation reasons in retry and recoverable tool summaries", () => {
+    expect(
+      summarizeTaskLogEntry({
+        timestamp: "2026-07-02 06:42:46",
+        tags: ["工具返回", "glob"],
+        value: {
+          实际执行输入: { pattern: "runs/job-1/**/*.md" },
+          是否可恢复错误: true,
+          继续原因标签: "report_discovery_rejected",
+          继续原因: "报告查找方式被拒绝",
+          返回内容: {
+            reason: "read_tool_scope_denied"
+          }
+        }
+      })
+    ).toBe("06:42:46 查找返回可恢复错误：*.md，继续原因：报告查找方式被拒绝");
+
+    expect(
+      summarizeTaskLogEntry({
+        timestamp: "2026-07-02 06:43:00",
+        tags: ["上下文", "重试"],
+        value: {
+          继续原因标签: "missing_template_outcome",
+          继续原因: "缺失模板处理结果",
+          原因: "上一轮尚未为本批次所有选中模板提供处理结果，缺少 outputFileName：材料分析.md。"
+        }
+      })
+    ).toBe("06:43:00 继续补齐结果：缺少 材料分析.md，继续原因：缺失模板处理结果");
+  });
+
+  it("summarizes per-window tool-loop reason counts by root cause", () => {
+    expect(
+      summarizeTaskLogEntry({
+        timestamp: "2026-07-02 06:44:00",
+        tags: ["上下文", "多轮原因汇总"],
+        value: {
+          窗口: "8/10",
+          原因计数: {
+            report_discovery_rejected: 4,
+            edit_anchor_failed: 1,
+            tool_arguments_invalid: 1
+          }
+        }
+      })
+    ).toBe("06:44:00 窗口 8/10 多轮原因：报告查找方式被拒绝 4 次，报告锚点未命中 1 次，工具参数或路径无效 1 次");
+
+    expect(
+      summarizeTaskLogEntry({
+        timestamp: "2026-07-02 06:45:00",
+        tags: ["上下文", "多轮原因汇总"],
+        value: {
+          窗口: "9/10",
+          原因计数: {}
+        }
+      })
+    ).toBe("06:45:00 窗口 9/10 多轮原因：无");
   });
 
   it("summarizes repeated tool failure as a window failure reason", () => {

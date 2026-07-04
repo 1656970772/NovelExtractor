@@ -1,11 +1,9 @@
-export type TemplateBatchSplitReason = "budget" | "complete" | "maxTemplatesPerCall";
+export type TemplateBatchSplitReason = "complete" | "maxTemplatesPerCall";
 
 export interface TemplateBatchPlannerTemplate {
   id: string;
   name: string;
   fileName: string;
-  body?: string;
-  promptChars?: number;
 }
 
 export interface TemplateBatch<TTemplate extends TemplateBatchPlannerTemplate> {
@@ -15,7 +13,6 @@ export interface TemplateBatch<TTemplate extends TemplateBatchPlannerTemplate> {
 
 export interface PlanTemplateBatchesInput<TTemplate extends TemplateBatchPlannerTemplate> {
   maxTemplatesPerCall: number;
-  promptBudgetChars?: number;
   templates: readonly TTemplate[];
 }
 
@@ -23,18 +20,12 @@ function toBatchSize(maxTemplatesPerCall: number): number {
   return Math.max(1, Math.floor(maxTemplatesPerCall));
 }
 
-function estimatePromptChars(template: TemplateBatchPlannerTemplate): number {
-  return template.promptChars ?? template.body?.length ?? 0;
-}
-
 export function planTemplateBatches<TTemplate extends TemplateBatchPlannerTemplate>(
   input: PlanTemplateBatchesInput<TTemplate>
 ): Array<TemplateBatch<TTemplate>> {
   const batchSize = toBatchSize(input.maxTemplatesPerCall);
-  const promptBudgetChars = input.promptBudgetChars;
   const batches: Array<TemplateBatch<TTemplate>> = [];
   let currentTemplates: TTemplate[] = [];
-  let currentPromptChars = 0;
 
   function flush(splitReason: TemplateBatchSplitReason): void {
     if (currentTemplates.length === 0) {
@@ -45,21 +36,10 @@ export function planTemplateBatches<TTemplate extends TemplateBatchPlannerTempla
       splitReason
     });
     currentTemplates = [];
-    currentPromptChars = 0;
   }
 
   for (const template of input.templates) {
-    const nextPromptChars = estimatePromptChars(template);
-    const wouldExceedBudget =
-      promptBudgetChars !== undefined &&
-      currentTemplates.length > 0 &&
-      currentPromptChars + nextPromptChars > promptBudgetChars;
-    if (wouldExceedBudget) {
-      flush("budget");
-    }
-
     currentTemplates.push(template);
-    currentPromptChars += nextPromptChars;
 
     if (currentTemplates.length >= batchSize) {
       flush("maxTemplatesPerCall");

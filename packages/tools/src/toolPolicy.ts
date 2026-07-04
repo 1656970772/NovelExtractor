@@ -2,6 +2,7 @@ export type ToolEffect = "read" | "write" | "state";
 
 const TOOL_EFFECTS = {
   read_file: "read",
+  read_report_excerpt: "read",
   grep: "read",
   glob: "read",
   ls: "read",
@@ -10,6 +11,7 @@ const TOOL_EFFECTS = {
   write_file: "write",
   edit_file: "write",
   multi_edit: "write",
+  upsert_report_section: "write",
   bash: "write",
   kill_shell: "write",
   mark_no_update: "state"

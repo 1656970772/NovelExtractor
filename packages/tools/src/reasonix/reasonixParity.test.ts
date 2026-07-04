@@ -30,6 +30,8 @@ const reasonixToolNames = [
   "ls",
   "multi_edit",
   "read_file",
+  "read_report_excerpt",
+  "upsert_report_section",
   "wait",
   "write_file"
 ] as const;
@@ -44,6 +46,8 @@ const requiredByTool = {
   ls: undefined,
   multi_edit: ["path", "edits"],
   read_file: ["path"],
+  read_report_excerpt: ["outputFileName", "keywords"],
+  upsert_report_section: ["outputFileName", "content", "writeMode"],
   wait: undefined,
   write_file: ["path", "content"]
 } as const;
@@ -58,6 +62,8 @@ const readOnlyByTool = {
   ls: true,
   multi_edit: false,
   read_file: true,
+  read_report_excerpt: true,
+  upsert_report_section: false,
   wait: true,
   write_file: false
 } as const;
@@ -72,6 +78,8 @@ const protocolDescriptionSnippets = {
   ls: ["List the entries of a directory", "recursive=true"],
   multi_edit: ["Apply a list of edits", "atomically"],
   read_file: ["Read a text file", "pagination hints"],
+  read_report_excerpt: ["关键词", "相关段落"],
+  upsert_report_section: ["section id", "old_string"],
   wait: ["Block until background jobs finish", "Omit job_ids"],
   write_file: ["Write content to a file", "overwriting existing content"]
 } as const;

@@ -46,6 +46,8 @@ const ALLOWED_QUANTITY_EVIDENCE_SCOPES = new Set<QuantityPolicyDefaults["evidenc
 ]);
 const ALLOWED_TOOL_LOOP_TOOL_NAMES = new Set<ToolLoopToolName>([
   "read_file",
+  "read_report_excerpt",
+  "upsert_report_section",
   "grep",
   "glob",
   "ls",

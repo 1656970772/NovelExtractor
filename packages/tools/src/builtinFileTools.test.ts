@@ -1,11 +1,23 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   executeBuiltinFileTool,
   ToolExecutionError,
 } from "./builtinFileTools";
+
+const readFileMock = vi.hoisted(() => vi.fn());
+
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  readFileMock.mockImplementation(actual.readFile);
+  return {
+    ...actual,
+    default: { ...actual, readFile: readFileMock },
+    readFile: readFileMock
+  };
+});
 
 function makeContext() {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "novel-tools-"));
@@ -46,6 +58,10 @@ function expectToolExecutionErrorCode(error: unknown, code: ToolExecutionError["
 }
 
 describe("builtin file tools", () => {
+  beforeEach(() => {
+    readFileMock.mockClear();
+  });
+
   it("lists, reads, and greps files under the project root", async () => {
     const context = makeContext();
 
@@ -185,6 +201,289 @@ describe("builtin file tools", () => {
     await expect(executeBuiltinFileTool("grep", { path: "chapters/重复.txt", pattern: "凝气丹" }, { ...context, maxGrepMatches: 1 })).resolves.toContain(
       "重复.txt"
     );
+  });
+
+  it("reads only relevant report excerpts by outputFileName and keywords", async () => {
+    const context = makeContext();
+    fs.writeFileSync(
+      path.join(context.reportsRoot, "材料分析.md"),
+      [
+        "# 材料分析",
+        "",
+        "## 无关旧段落",
+        "整份报告中无关的大段正文。",
+        "",
+        "## 法器",
+        "青竹蜂云剑是旧报告中的法器线索。",
+        "需要保留这个相关段落。"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const result = await executeBuiltinFileTool(
+      "read_report_excerpt",
+      { outputFileName: "材料分析.md", keywords: ["青竹蜂云剑"], maxChars: 500 },
+      { ...context, allowedReportFileNames: ["材料分析.md"] }
+    );
+
+    expect(result).toContain("\"found\":true");
+    expect(result).toContain("青竹蜂云剑");
+    expect(result).toContain("## 法器");
+    expect(result).not.toContain("整份报告中无关的大段正文");
+  });
+
+  it("returns sectionId in read_report_excerpt output for a matched duplicate heading section", async () => {
+    const context = makeContext();
+    fs.writeFileSync(
+      path.join(context.reportsRoot, "材料分析.md"),
+      ["# 材料分析", "", "## 法器", "青竹蜂云剑 A", "", "## 法器", "青竹蜂云剑 B"].join("\n"),
+      "utf8"
+    );
+
+    const result = await executeBuiltinFileTool(
+      "read_report_excerpt",
+      { outputFileName: "材料分析.md", keywords: ["青竹蜂云剑 B"], maxChars: 500 },
+      { ...context, allowedReportFileNames: ["材料分析.md"] }
+    );
+
+    expect(result).toContain("\"sectionId\":\"材料分析/法器#2\"");
+    expect(result).toContain("青竹蜂云剑 B");
+    expect(result).not.toContain("青竹蜂云剑 A");
+  });
+
+  it("returns append_to_end without range reads when report keywords are not found", async () => {
+    const context = makeContext();
+
+    await expect(
+      executeBuiltinFileTool(
+        "read_report_excerpt",
+        { outputFileName: "丹药分析.md", keywords: ["青竹蜂云剑"] },
+        { ...context, allowedReportFileNames: ["丹药分析.md"] }
+      )
+    ).resolves.toContain("\"recommendedWriteMode\":\"append_to_end\"");
+  });
+
+  it("rejects read_report_excerpt for unselected or unsafe report names", async () => {
+    const context = makeContext();
+
+    await expect(
+      executeBuiltinFileTool(
+        "read_report_excerpt",
+        { outputFileName: "其他.md", keywords: ["凝气丹"] },
+        { ...context, allowedReportFileNames: ["丹药分析.md"] }
+      )
+    ).rejects.toMatchObject({ code: "UNSAFE_PATH" });
+
+    await expect(
+      executeBuiltinFileTool("read_report_excerpt", { outputFileName: "../丹药分析.md", keywords: ["凝气丹"] }, context)
+    ).rejects.toMatchObject({ code: "UNSAFE_PATH" });
+  });
+
+  it("rejects extra read_report_excerpt fields at runtime", async () => {
+    const context = makeContext();
+
+    await expect(
+      executeBuiltinFileTool(
+        "read_report_excerpt",
+        {
+          outputFileName: "丹药分析.md",
+          keywords: ["凝气丹"],
+          path: "../outside.md"
+        },
+        context
+      )
+    ).rejects.toMatchObject({ code: "INVALID_ARGUMENTS" });
+  });
+
+  it("reads the report file at most once when read_report_excerpt finds a keyword", async () => {
+    const context = makeContext();
+    fs.writeFileSync(
+      path.join(context.reportsRoot, "材料分析.md"),
+      [
+        "# 材料分析",
+        "",
+        "## 法器",
+        "青竹蜂云剑是旧报告中的法器线索。",
+        "需要保留这个相关段落。"
+      ].join("\n"),
+      "utf8"
+    );
+    await executeBuiltinFileTool(
+      "read_report_excerpt",
+      { outputFileName: "材料分析.md", keywords: ["青竹蜂云剑"], maxChars: 500 },
+      { ...context, allowedReportFileNames: ["材料分析.md"] }
+    );
+
+    const reportReadCount = readFileMock.mock.calls.filter(([filePath]) => path.normalize(String(filePath)) === path.join(context.reportsRoot, "材料分析.md")).length;
+    expect(reportReadCount).toBeLessThanOrEqual(1);
+  });
+
+  it("upserts a report section by outputFileName and section id", async () => {
+    const context = makeContext();
+    fs.writeFileSync(path.join(context.reportsRoot, "材料分析.md"), "# 材料分析\n\n## 法器\n旧内容\n", "utf8");
+
+    const result = await executeBuiltinFileTool(
+      "upsert_report_section",
+      {
+        outputFileName: "材料分析.md",
+        sectionId: "材料分析/法器",
+        writeMode: "replace_section",
+        content: "新内容"
+      },
+      { ...context, allowedReportFileNames: ["材料分析.md"] }
+    );
+
+    expect(result).toContain("upserted report section");
+    expect(fs.readFileSync(path.join(context.reportsRoot, "材料分析.md"), "utf8")).toBe(
+      "# 材料分析\n\n## 法器\n新内容\n"
+    );
+  });
+
+  it("includes sectionId in SECTION_NOT_FOUND errors for upsert_report_section", async () => {
+    const context = makeContext();
+
+    await expect(
+      executeBuiltinFileTool(
+        "upsert_report_section",
+        {
+          outputFileName: "丹药分析.md",
+          sectionId: "丹药分析/不存在",
+          writeMode: "replace_section",
+          content: "新内容"
+        },
+        { ...context, allowedReportFileNames: ["丹药分析.md"] }
+      )
+    ).rejects.toMatchObject({
+      code: "SECTION_NOT_FOUND",
+      message: expect.stringContaining("sectionId=丹药分析/不存在")
+    });
+  });
+
+  it("does not create reportsRoot before verifying it is inside projectRoot", async () => {
+    const context = makeContext();
+    const outsideParent = fs.mkdtempSync(path.join(os.tmpdir(), "novel-tools-outside-parent-"));
+    const outsideReportsRoot = path.join(outsideParent, "new-reports-root");
+
+    await expect(
+      executeBuiltinFileTool(
+        "upsert_report_section",
+        {
+          outputFileName: "新报告.md",
+          writeMode: "append_to_end",
+          content: "# 新报告\n\n内容"
+        },
+        { ...context, reportsRoot: outsideReportsRoot, allowedReportFileNames: ["新报告.md"] }
+      )
+    ).rejects.toMatchObject({
+      name: "ToolExecutionError",
+      code: "UNSAFE_PATH"
+    });
+    expect(fs.existsSync(outsideReportsRoot)).toBe(false);
+  });
+
+  it.skipIf(directoryLinkType === null)("rejects missing reportsRoot under a symlink parent before creating it", async () => {
+    const context = makeContext();
+    const outsideParent = fs.mkdtempSync(path.join(os.tmpdir(), "novel-tools-outside-symlink-parent-"));
+    const linkPath = path.join(context.projectRoot, "linked-reports-parent");
+    const linkedReportsRoot = path.join(linkPath, "reports");
+    fs.symlinkSync(outsideParent, linkPath, directoryLinkType ?? "dir");
+
+    await expect(
+      executeBuiltinFileTool(
+        "upsert_report_section",
+        {
+          outputFileName: "新报告.md",
+          writeMode: "append_to_end",
+          content: "# 新报告\n\n内容"
+        },
+        { ...context, reportsRoot: linkedReportsRoot, allowedReportFileNames: ["新报告.md"] }
+      )
+    ).rejects.toMatchObject({
+      name: "ToolExecutionError",
+      code: "UNSAFE_PATH"
+    });
+    expect(fs.existsSync(path.join(outsideParent, "reports"))).toBe(false);
+  });
+
+  it("rejects upsert_report_section old_string, extra fields, and unselected reports", async () => {
+    const context = makeContext();
+
+    await expect(
+      executeBuiltinFileTool(
+        "upsert_report_section",
+        {
+          outputFileName: "丹药分析.md",
+          sectionId: "丹药分析",
+          writeMode: "replace_section",
+          content: "新内容",
+          old_string: "旧内容"
+        },
+        { ...context, allowedReportFileNames: ["丹药分析.md"] }
+      )
+    ).rejects.toMatchObject({
+      code: "INVALID_ARGUMENTS",
+      message: expect.stringMatching(/section id|writeMode/u)
+    });
+
+    await expect(
+      executeBuiltinFileTool(
+        "upsert_report_section",
+        {
+          outputFileName: "丹药分析.md",
+          sectionId: "丹药分析",
+          writeMode: "replace_section",
+          content: "新内容",
+          unsupported: true
+        },
+        { ...context, allowedReportFileNames: ["丹药分析.md"] }
+      )
+    ).rejects.toMatchObject({ code: "INVALID_ARGUMENTS" });
+
+    await expect(
+      executeBuiltinFileTool(
+        "upsert_report_section",
+        {
+          outputFileName: "其他.md",
+          sectionId: "其他",
+          writeMode: "replace_section",
+          content: "新内容"
+        },
+        { ...context, allowedReportFileNames: ["丹药分析.md"] }
+      )
+    ).rejects.toMatchObject({ code: "UNSAFE_PATH" });
+  });
+
+  it("re-reads the latest report content for consecutive upsert_report_section calls", async () => {
+    const context = makeContext();
+    const reportPath = path.join(context.reportsRoot, "材料分析.md");
+    fs.writeFileSync(reportPath, "# 材料分析\n\n## 法器\n旧内容\n", "utf8");
+
+    await executeBuiltinFileTool(
+      "upsert_report_section",
+      {
+        outputFileName: "材料分析.md",
+        sectionId: "材料分析/法器",
+        writeMode: "append_to_section",
+        content: "批次 A 内容"
+      },
+      { ...context, allowedReportFileNames: ["材料分析.md"] }
+    );
+    await executeBuiltinFileTool(
+      "upsert_report_section",
+      {
+        outputFileName: "材料分析.md",
+        sectionId: "材料分析/法器",
+        writeMode: "append_to_section",
+        content: "批次 B 内容"
+      },
+      { ...context, allowedReportFileNames: ["材料分析.md"] }
+    );
+
+    const finalReport = fs.readFileSync(reportPath, "utf8");
+    const reportReadCount = readFileMock.mock.calls.filter(([filePath]) => path.normalize(String(filePath)) === reportPath).length;
+    expect(reportReadCount).toBe(2);
+    expect(finalReport).toContain("批次 A 内容");
+    expect(finalReport).toContain("批次 B 内容");
   });
 
   it.each(["../outside.md", "nested/report.md", path.resolve("outside.md")])("rejects unsafe report path %s", async (candidate) => {

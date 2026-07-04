@@ -43,15 +43,22 @@ import type { TemplateDto } from "../shared/ipcTypes";
 import { createBatchOutcomeTracker, type BatchOutcome, type BatchOutcomeTracker } from "./batchOutcomeTracker";
 import { redactSecrets, type MemoryCredentialStore } from "./credentials";
 import type { MainProviderStore } from "./providerStore";
-import { loadReportCoverageIndex, type ReportCoverageTarget } from "./reportCoverageIndex";
+import {
+  loadReportCoverageIndex,
+  type ReportCoverageIndexStore,
+  type ReportCoverageTarget
+} from "./reportCoverageIndex";
 import { planTemplateBatches } from "./templateBatchPlanner";
-import type { TaskTextLogger } from "./taskTextLogger";
+import { serializeModelRequestForTaskLog, type TaskTextLogger } from "./taskTextLogger";
 import {
   BASH_TOOL_SCOPE_DENIED_MESSAGE,
+  classifyToolLoopRoundReason,
   classifyToolExecutionError,
   fingerprintRecoverableToolError,
   READ_TOOL_SCOPE_DENIED_MESSAGE,
-  type ToolErrorClassification
+  TOOL_LOOP_ROUND_REASON_LABELS,
+  type ToolErrorClassification,
+  type ToolLoopRoundReason
 } from "./toolErrorClassification";
 
 interface WindowRunJobInput {
@@ -76,6 +83,7 @@ export interface WindowRunArtifacts {
 export interface WindowRunServiceOptions {
   clock: Clock;
   credentialStore: MemoryCredentialStore;
+  createRulesSemanticHash?: (templates: readonly TemplateDto[]) => string;
   fetch?: FetchLike;
   findExistingReport(input: { bookId: string; fileName: string }): ReportAsset | undefined;
   idGenerator: IdGenerator;
@@ -111,6 +119,9 @@ const EMPTY_USAGE: TokenUsage = {
   cacheMissTokens: 0
 };
 const MARK_NO_UPDATE_TOOL_NAME = "mark_no_update";
+const READ_REPORT_EXCERPT_TOOL_NAME = "read_report_excerpt";
+const UPSERT_REPORT_SECTION_TOOL_NAME = "upsert_report_section";
+const DEFAULT_MAX_READ_BYTES = 1024 * 1024;
 const NO_TOOL_PROTOCOL_ERROR_MESSAGE =
   "tool loop 协议错误：无工具调用时必须返回 NO_UPDATE，或先通过写工具成功写入报告。";
 const NO_TOOL_PROTOCOL_CORRECTION_MESSAGE =
@@ -118,7 +129,13 @@ const NO_TOOL_PROTOCOL_CORRECTION_MESSAGE =
   "如果本窗口没有可写入的新信息，必须精确返回 NO_UPDATE；如果有可写入内容，必须先调用写工具写入正式报告。";
 const BATCH_OUTCOME_CORRECTION_PREFIX = "上一轮尚未为本批次所有选中模板提供处理结果";
 const WRITE_FILE_EXISTING_REPORT_MESSAGE =
-  "已有报告不能用 write_file 覆盖；需先 read_file/grep 查询已有内容，再使用 edit_file/multi_edit 追加或修改。";
+  "已有报告不能用 write_file 覆盖；需先 read_report_excerpt 按关键词查询相关段落，再使用 edit_file/multi_edit 追加或修改。";
+const UPSERT_EXISTING_REPORT_MESSAGE =
+  "已有报告不能直接用 upsert_report_section 修改；必须先在本轮使用 read_report_excerpt 按关键词查询同一个报告文件，再使用 upsert_report_section。";
+const OVERSIZED_REPORT_READ_MESSAGE =
+  "已选旧报告过大，不能直接整读。请提供关键词检索相关段落，改用 read_report_excerpt。";
+const OVERSIZED_REPORT_READ_HINT =
+  "调用 read_report_excerpt，只提供 outputFileName、keywords，可选 maxChars；不要查目录或整读旧报告。";
 const WRITE_FILE_LOSSY_REWRITE_MESSAGE =
   "不能覆盖丢失既有内容，需要使用 edit_file/multi_edit 或包含完整旧内容。";
 const REPORT_CONTENT_INTERNAL_METADATA_MESSAGE = "报告正文不得包含内部运行路径或流程性元数据。";
@@ -150,6 +167,35 @@ interface BashSandbox {
   parentRoot: string;
   reportsRoot: string;
 }
+
+export type ReportInventoryItem = {
+  outputFileName: string;
+  exists: boolean;
+  source: "selected_template";
+};
+
+type WindowCoverageTarget = {
+  template: TemplateDto;
+  target: ReportCoverageTarget;
+};
+
+type WindowCoveragePlan = {
+  skippedCoverageTargets: WindowCoverageTarget[];
+  templatesToProcess: TemplateDto[];
+};
+
+type WindowRunJobContext = {
+  coverageIndex: ReportCoverageIndexStore;
+  rulesSemanticHashByTemplateId: Map<string, string>;
+  coverageSummary: {
+    skippedWindowCount: number;
+    processedWindowCount: number;
+    skippedTemplateTargetCount: number;
+    processedTemplateTargetCount: number;
+    pendingWindowLabels: string[];
+  };
+  coveragePlanByWindowId: Map<string, WindowCoveragePlan>;
+};
 
 function getWindowMetadata(window: JobWindowInput): RuntimeWindowManifestWindow {
   const manifestWindow = window.metadata?.manifestWindow;
@@ -251,6 +297,33 @@ function createCoverageTarget(input: {
   };
 }
 
+function createWindowLabel(window: RuntimeWindowManifestWindow, totalWindowCount: number): string {
+  return `窗口 ${window.index + 1}/${totalWindowCount}`;
+}
+
+function createWindowCoverageTargets(input: {
+  artifacts: WindowRunArtifacts;
+  manifestWindow: RuntimeWindowManifestWindow;
+  rulesSemanticHashByTemplateId: ReadonlyMap<string, string>;
+}): WindowCoverageTarget[] {
+  return input.artifacts.templates.map((template) => {
+    const rulesSemanticHash = input.rulesSemanticHashByTemplateId.get(template.id);
+    if (!rulesSemanticHash) {
+      throw new Error(`Missing rules semantic hash for template ${template.id}`);
+    }
+
+    return {
+      template,
+      target: createCoverageTarget({
+        artifacts: input.artifacts,
+        manifestWindow: input.manifestWindow,
+        rulesSemanticHash,
+        template
+      })
+    };
+  });
+}
+
 function buildTemplatePromptProfiles(templates: readonly TemplateDto[]): TemplatePromptProfile[] {
   return templates.map((template) =>
     buildTemplatePromptProfile({
@@ -266,17 +339,32 @@ function buildTemplatePromptProfiles(templates: readonly TemplateDto[]): Templat
   );
 }
 
-function buildWindowPrompt(input: {
+function buildStableSystemPrompt(input: {
+  toolLoopInstruction: string;
+  windowInstructionLines: readonly string[];
+}): string {
+  return [
+    input.toolLoopInstruction,
+    "",
+    "## 窗口处理规则",
+    "请根据当前窗口文本和选中模板抽取信息，并使用文件工具写入或更新正式模板 Markdown。",
+    ...input.windowInstructionLines
+  ].join("\n");
+}
+
+function buildWindowUserPrompt(input: {
   artifacts: WindowRunArtifacts;
   currentDate: string;
   manifestWindow: RuntimeWindowManifestWindow;
+  reportInventory: readonly ReportInventoryItem[];
   templatePromptProfiles: readonly TemplatePromptProfile[];
   totalWindowCount: number;
   windowText: string;
 }): string {
-  const { artifacts, currentDate, manifestWindow, templatePromptProfiles, totalWindowCount, windowText } = input;
+  const { artifacts, currentDate, manifestWindow, reportInventory, templatePromptProfiles, totalWindowCount, windowText } = input;
   const windowNumber = manifestWindow.index + 1;
   const templateSection = templatePromptProfiles.map(renderTemplatePromptProfileCard).join("\n\n");
+  const reportInventorySection = renderReportInventoryPromptSection(reportInventory);
 
   return [
     `小说：${artifacts.book.displayName}`,
@@ -291,14 +379,29 @@ function buildWindowPrompt(input: {
     `上下文章节标题：${manifestWindow.contextChapterTitles.join("、")}`,
     `提交章节标题：${manifestWindow.submittedChapterTitles.join("、")}`,
     "",
-    "请根据当前窗口文本和选中模板抽取信息，并使用文件工具写入或更新正式模板 Markdown。",
-    ...TOOL_LOOP_DEFAULTS.windowInstructionLines,
+    reportInventorySection,
     "",
     "## 选中模板 Prompt Profile",
     templateSection,
     "",
     "## 当前窗口文本",
     windowText.trim()
+  ].join("\n");
+}
+
+function renderReportInventoryPromptSection(reportInventory: readonly ReportInventoryItem[]): string {
+  const existingReportFileNames = reportInventory
+    .filter((item) => item.exists)
+    .map((item) => item.outputFileName);
+  const missingReportFileNames = reportInventory
+    .filter((item) => !item.exists)
+    .map((item) => item.outputFileName);
+
+  return [
+    "宿主已基于本批次选中模板和 reports 目录提供报告清单，清单只包含本批次允许触达的报告文件。",
+    `已有报告：${existingReportFileNames.length > 0 ? existingReportFileNames.join("、") : "无"}`,
+    `待创建报告：${missingReportFileNames.length > 0 ? missingReportFileNames.join("、") : "无"}`,
+    "不要调用 glob、ls 或 bash 查找这些报告是否存在；需要读已有报告时，后续任务会走关键词检索/相关段落。"
   ].join("\n");
 }
 
@@ -721,6 +824,13 @@ function redactWritableToolArguments(name: string, args: unknown, secrets: reado
     };
   }
 
+  if (name === UPSERT_REPORT_SECTION_TOOL_NAME && typeof args.content === "string") {
+    return {
+      ...args,
+      content: redactSecrets(args.content, secrets)
+    };
+  }
+
   if (name === "multi_edit" && Array.isArray(args.edits)) {
     return {
       ...args,
@@ -821,7 +931,7 @@ function getWriteFileContentArgument(args: unknown): string | undefined {
 }
 
 function isReportWriteTool(name: string): boolean {
-  return name === "write_file" || name === "edit_file" || name === "multi_edit";
+  return name === "write_file" || name === "edit_file" || name === "multi_edit" || name === UPSERT_REPORT_SECTION_TOOL_NAME;
 }
 
 function isBashToolFamily(name: string): boolean {
@@ -839,6 +949,10 @@ function getWritableReportContentFragments(toolCall: ChatCompletionRequestToolCa
 
   if (toolCall.name === "edit_file") {
     return typeof toolCall.arguments.new_string === "string" ? [toolCall.arguments.new_string] : [];
+  }
+
+  if (toolCall.name === UPSERT_REPORT_SECTION_TOOL_NAME) {
+    return typeof toolCall.arguments.content === "string" ? [toolCall.arguments.content] : [];
   }
 
   if (toolCall.name !== "multi_edit" || !Array.isArray(toolCall.arguments.edits)) {
@@ -1145,7 +1259,7 @@ function getReadScopeSecretCheckArguments(toolName: string, executionArguments: 
 function getRecoverableToolErrorTargetArgument(toolName: string, executionArguments: unknown): string | undefined {
   return isDesktopReadScopeTool(toolName)
     ? getReadScopePathArgument(toolName, executionArguments)
-    : getToolPathArgument(executionArguments);
+    : getReportTargetArgument(toolName, executionArguments);
 }
 
 function assertBashToolExecutionScope(input: {
@@ -1221,6 +1335,36 @@ async function fileIsRegularFile(filePath: string): Promise<boolean> {
   }
 }
 
+function getToolOutputFileNameArgument(args: unknown): string | undefined {
+  if (!isPlainRecord(args) || typeof args.outputFileName !== "string") {
+    return undefined;
+  }
+
+  return args.outputFileName;
+}
+
+function getReportTargetArgument(toolName: string, args: unknown): string | undefined {
+  return toolName === UPSERT_REPORT_SECTION_TOOL_NAME
+    ? getToolOutputFileNameArgument(args)
+    : getToolPathArgument(args);
+}
+
+async function createReportInventory(input: {
+  reportsRoot: string;
+  templates: readonly TemplateDto[];
+}): Promise<ReportInventoryItem[]> {
+  const inventory: ReportInventoryItem[] = [];
+  for (const template of input.templates) {
+    const targetReportPath = toSafeReportFilePathForExistenceCheck(input.reportsRoot, template.fileName);
+    inventory.push({
+      outputFileName: template.fileName,
+      exists: targetReportPath !== undefined && (await fileIsRegularFile(targetReportPath)),
+      source: "selected_template"
+    });
+  }
+  return inventory;
+}
+
 function toSafeReportFilePathForExistenceCheck(
   reportsRoot: string,
   reportFileName: string
@@ -1274,6 +1418,24 @@ async function validateToolCallBeforeExecution(input: {
     return;
   }
 
+  if (toolCall.name === READ_REPORT_EXCERPT_TOOL_NAME) {
+    const args = toPlainToolArgumentRecord(toolCall.arguments);
+    const outputFileName = getToolOutputFileNameArgument(args);
+    const secretArguments = [
+      outputFileName,
+      ...(Array.isArray(args?.keywords) ? args.keywords : [])
+    ].filter((value): value is string => typeof value === "string");
+    if (secretArguments.some((argument) => containsKnownSecret(argument, input.secrets))) {
+      throw new Error(`读工具 ${toolCall.name} 的参数包含已知 secret，已拒绝执行。`);
+    }
+    if (outputFileName !== undefined && !input.allowedOutputFileNames.has(outputFileName)) {
+      throw new Error(
+        `工具 ${toolCall.name} 的 outputFileName 必须属于本轮选中模板 outputFileName：${redactSecrets(outputFileName, input.secrets)}`
+      );
+    }
+    return;
+  }
+
   if (isDesktopReadScopeTool(toolCall.name)) {
     const secretArgument = getReadScopeSecretCheckArguments(toolCall.name, toolCall.arguments).find((argument) =>
       containsKnownSecret(argument, input.secrets)
@@ -1288,18 +1450,19 @@ async function validateToolCallBeforeExecution(input: {
     return;
   }
 
-  const pathArgument = getToolPathArgument(toolCall.arguments);
+  const pathArgument = getReportTargetArgument(toolCall.name, toolCall.arguments);
   if (pathArgument === undefined) {
     return;
   }
+  const targetLabel = toolCall.name === UPSERT_REPORT_SECTION_TOOL_NAME ? "outputFileName" : "path";
 
   if (containsKnownSecret(pathArgument, input.secrets)) {
-    throw new Error(`写工具 ${toolCall.name} 的 path 包含已知 secret，已拒绝执行。`);
+    throw new Error(`写工具 ${toolCall.name} 的 ${targetLabel} 包含已知 secret，已拒绝执行。`);
   }
 
   if (!input.allowedOutputFileNames.has(pathArgument)) {
     throw new Error(
-      `写工具 ${toolCall.name} 的 path 必须属于本轮选中模板 outputFileName：${redactSecrets(pathArgument, input.secrets)}`
+      `写工具 ${toolCall.name} 的 ${targetLabel} 必须属于本轮选中模板 outputFileName：${redactSecrets(pathArgument, input.secrets)}`
     );
   }
 
@@ -1314,7 +1477,7 @@ async function validateToolCallBeforeExecution(input: {
     !input.writtenReportFileNames.has(pathArgument)
   ) {
     throw new Error(
-      `写工具 ${toolCall.name} 修改既有报告前，必须先在本轮使用 read_file 或 grep 查询同一个报告文件：${redactSecrets(pathArgument, input.secrets)}`
+      `写工具 ${toolCall.name} 修改既有报告前，必须先在本轮使用 read_report_excerpt 按关键词查询同一个报告文件；小报告需要精确锚点时才用 read_file/grep：${redactSecrets(pathArgument, input.secrets)}`
     );
   }
 }
@@ -1326,11 +1489,19 @@ function recordReportQuery(input: {
   toolCall: ChatCompletionRequestToolCall;
   toolResult: unknown;
 }): void {
+  if (input.toolCall.name === READ_REPORT_EXCERPT_TOOL_NAME) {
+    const outputFileName = getToolOutputFileNameArgument(input.toolCall.arguments);
+    if (outputFileName !== undefined && input.allowedOutputFileNames.has(outputFileName)) {
+      input.queriedReportFileNames.add(outputFileName);
+    }
+    return;
+  }
+
   if (input.toolCall.name !== "read_file" && input.toolCall.name !== "grep") {
     return;
   }
 
-  const pathArgument = getToolPathArgument(input.toolCall.arguments);
+  const pathArgument = getReportTargetArgument(input.toolCall.name, input.toolCall.arguments);
   if (pathArgument === undefined) {
     return;
   }
@@ -1367,7 +1538,7 @@ function recordSuccessfulReportWrite(input: {
   writtenReportFileNames: Set<string>;
   toolCall: ChatCompletionRequestToolCall;
 }): void {
-  const pathArgument = getToolPathArgument(input.toolCall.arguments);
+  const pathArgument = getReportTargetArgument(input.toolCall.name, input.toolCall.arguments);
   if (pathArgument === undefined) {
     return;
   }
@@ -1388,6 +1559,7 @@ function classifyToolErrorForRuntime(name: string, error: unknown): ToolErrorCla
 
 function toRecoverableToolErrorResult(input: {
   classification: ToolErrorClassification;
+  code?: string;
   executionArguments: unknown;
   error: ToolExecutionError;
   hint?: string;
@@ -1402,7 +1574,7 @@ function toRecoverableToolErrorResult(input: {
 
   return {
     error: {
-      code: input.error.code,
+      code: input.code ?? input.error.code,
       message: redactSecrets(input.error.message, input.secrets)
     },
     classification: input.classification.category,
@@ -1418,7 +1590,8 @@ const TOOL_EXECUTION_ERROR_CODES = new Set<string>([
   "INVALID_ARGUMENTS",
   "UNSAFE_PATH",
   "NOT_FOUND",
-  "IO_ERROR"
+  "IO_ERROR",
+  "SECTION_NOT_FOUND"
 ]);
 
 function toToolExecutionErrorCode(code: unknown): ToolExecutionError["code"] {
@@ -1427,11 +1600,17 @@ function toToolExecutionErrorCode(code: unknown): ToolExecutionError["code"] {
     : "INVALID_ARGUMENTS";
 }
 
+function getToolResultErrorCode(toolResult: Record<string, unknown>): string | undefined {
+  const error = isPlainRecord(toolResult.error) ? toolResult.error : {};
+  return typeof error.code === "string" ? error.code : undefined;
+}
+
 function toRecoverableToolResultError(toolResult: Record<string, unknown>): ToolExecutionError {
   const error = isPlainRecord(toolResult.error) ? toolResult.error : {};
   const message = typeof error.message === "string" ? error.message : "可恢复工具错误";
   const output = typeof toolResult.output === "string" ? toolResult.output : undefined;
-  return new ToolExecutionError(message, toToolExecutionErrorCode(error.code), output);
+  const classificationCode = typeof toolResult.classificationCode === "string" ? toolResult.classificationCode : error.code;
+  return new ToolExecutionError(message, toToolExecutionErrorCode(classificationCode), output);
 }
 
 function toClassifiedPreExecutionRecoverableToolResult(input: {
@@ -1446,6 +1625,7 @@ function toClassifiedPreExecutionRecoverableToolResult(input: {
     classification: input.classification,
     executionArguments: input.executionArguments,
     error: input.error,
+    code: getToolResultErrorCode(input.preExecutionResult),
     ...(typeof input.preExecutionResult.hint === "string" ? { hint: input.preExecutionResult.hint } : {}),
     ...(typeof input.preExecutionResult.output === "string" ? { output: input.preExecutionResult.output } : {}),
     ...(typeof input.preExecutionResult.path === "string" ? { path: input.preExecutionResult.path } : {}),
@@ -1478,6 +1658,41 @@ function guardRepeatedRecoverableToolError(input: {
   }
 }
 
+function incrementToolLoopRoundReason(
+  counts: Map<ToolLoopRoundReason, number>,
+  reason: ToolLoopRoundReason | undefined
+): void {
+  if (!reason) {
+    return;
+  }
+  counts.set(reason, (counts.get(reason) ?? 0) + 1);
+}
+
+function toToolLoopRoundReasonLogFields(
+  reason: ToolLoopRoundReason | undefined
+): { 继续原因: string; 继续原因标签: ToolLoopRoundReason; 继续原因文本: string } | Record<string, never> {
+  return reason
+    ? {
+        继续原因标签: reason,
+        继续原因: TOOL_LOOP_ROUND_REASON_LABELS[reason],
+        继续原因文本: `继续原因：${TOOL_LOOP_ROUND_REASON_LABELS[reason]}`
+      }
+    : {};
+}
+
+function toToolLoopReasonCountRecord(
+  counts: ReadonlyMap<ToolLoopRoundReason, number>
+): Partial<Record<ToolLoopRoundReason, number>> {
+  const out: Partial<Record<ToolLoopRoundReason, number>> = {};
+  for (const reason of Object.keys(TOOL_LOOP_ROUND_REASON_LABELS) as ToolLoopRoundReason[]) {
+    const count = counts.get(reason);
+    if (count && count > 0) {
+      out[reason] = count;
+    }
+  }
+  return out;
+}
+
 function createToolNotEnabledRecoverableResult(input: {
   secrets: readonly string[];
   toolCall: ChatCompletionRequestToolCall;
@@ -1494,17 +1709,168 @@ function createToolNotEnabledRecoverableResult(input: {
   };
 }
 
+const REPORT_INVENTORY_ALREADY_PROVIDED_CODE = "REPORT_INVENTORY_ALREADY_PROVIDED";
+const REPORT_INVENTORY_ALREADY_PROVIDED_MESSAGE =
+  "报告清单已提供；请直接根据清单判断已有报告和待创建报告，不要调用 glob、ls 或 bash 查找报告是否存在。";
+
+export function interceptReportDiscoveryToolCall(input: {
+  args: unknown;
+  reportDirectoryPaths?: readonly string[];
+  reportInventory: readonly ReportInventoryItem[];
+  toolName: string;
+}): Record<string, unknown> | undefined {
+  if (!isReportDiscoveryToolCall(input)) {
+    return undefined;
+  }
+
+  return {
+    code: REPORT_INVENTORY_ALREADY_PROVIDED_CODE,
+    classificationCode: "UNSAFE_PATH",
+    error: {
+      code: REPORT_INVENTORY_ALREADY_PROVIDED_CODE,
+      message: REPORT_INVENTORY_ALREADY_PROVIDED_MESSAGE
+    }
+  };
+}
+
+function isReportDiscoveryToolCall(input: {
+  args: unknown;
+  reportDirectoryPaths?: readonly string[];
+  reportInventory: readonly ReportInventoryItem[];
+  toolName: string;
+}): boolean {
+  const args = toPlainToolArgumentRecord(input.args);
+  if (args === undefined) {
+    return false;
+  }
+
+  if (input.toolName === "glob") {
+    return typeof args.pattern === "string" && isReportDiscoveryGlobPattern(args.pattern, input);
+  }
+
+  if (input.toolName === "ls") {
+    return typeof args.path === "string" && isReportDirectoryTarget(args.path, input.reportDirectoryPaths);
+  }
+
+  if (input.toolName === "bash") {
+    return typeof args.command === "string" && isReportDiscoveryBashCommand(args.command, input);
+  }
+
+  return false;
+}
+
+function isReportDiscoveryGlobPattern(
+  pattern: string,
+  input: {
+    reportDirectoryPaths?: readonly string[];
+    reportInventory: readonly ReportInventoryItem[];
+  }
+): boolean {
+  const comparablePattern = normalizeReportDiscoveryComparablePath(pattern);
+  if (isKnownReportOutputTarget(comparablePattern, input.reportInventory)) {
+    return true;
+  }
+
+  if (!isReportsMarkdownGlob(comparablePattern)) {
+    return false;
+  }
+
+  return (
+    comparablePattern.startsWith("reports/") ||
+    (input.reportDirectoryPaths ?? []).some((directoryPath) =>
+      comparablePattern.startsWith(`${normalizeComparableToolPath(directoryPath)}/`)
+    )
+  );
+}
+
+function isReportDiscoveryBashCommand(
+  command: string,
+  input: {
+    reportDirectoryPaths?: readonly string[];
+    reportInventory: readonly ReportInventoryItem[];
+  }
+): boolean {
+  const comparableCommand = normalizeReportDiscoveryComparablePath(command);
+  if (!/\b(?:cat|dir|fd|find|gc|gci|get-childitem|get-content|grep|ls|rg|select-string|type|wc)\b/u.test(comparableCommand)) {
+    return false;
+  }
+
+  return (
+    commandMentionsKnownReportOutput(comparableCommand, input.reportInventory) ||
+    isCurrentReportDirectoryBashDiscoveryCommand(comparableCommand) ||
+    /\breports(?:\/|\b)/iu.test(comparableCommand) ||
+    (input.reportDirectoryPaths ?? []).some((directoryPath) =>
+      comparableCommand.includes(normalizeReportDiscoveryComparablePath(directoryPath))
+    )
+  );
+}
+
+function isCurrentReportDirectoryBashDiscoveryCommand(command: string): boolean {
+  if (/^(?:dir|gci|get-childitem|ls)(?:\s+(?:-[\w-]+|\.))*$/u.test(command)) {
+    return true;
+  }
+
+  if (/^(?:fd|find|grep|rg|select-string)\b/u.test(command) && /(?:\*\.md|\.md\b)/u.test(command)) {
+    return true;
+  }
+
+  return /^wc\b/u.test(command) && /(?:\*\.md|\.md\b)/u.test(command);
+}
+
+function commandMentionsKnownReportOutput(
+  command: string,
+  reportInventory: readonly ReportInventoryItem[]
+): boolean {
+  return reportInventory.some(({ outputFileName }) =>
+    command.includes(normalizeReportDiscoveryComparablePath(outputFileName))
+  );
+}
+
+function isReportsMarkdownGlob(pattern: string): boolean {
+  return /(?:^|\/)reports\/(?:\*\*\/)?\*\.md$/iu.test(pattern);
+}
+
+function isKnownReportOutputTarget(
+  target: string,
+  reportInventory: readonly ReportInventoryItem[]
+): boolean {
+  const comparableTarget = normalizeReportDiscoveryComparablePath(target);
+  return reportInventory.some(({ outputFileName }) => {
+    const comparableOutputFileName = normalizeReportDiscoveryComparablePath(outputFileName);
+    return comparableTarget === comparableOutputFileName || comparableTarget.endsWith(`/${comparableOutputFileName}`);
+  });
+}
+
+function isReportDirectoryTarget(
+  target: string,
+  reportDirectoryPaths: readonly string[] | undefined
+): boolean {
+  const comparableTarget = normalizeReportDiscoveryComparablePath(target);
+  if (comparableTarget === "reports" || comparableTarget.endsWith("/reports")) {
+    return true;
+  }
+
+  return (reportDirectoryPaths ?? []).some(
+    (directoryPath) => comparableTarget === normalizeReportDiscoveryComparablePath(directoryPath)
+  );
+}
+
+function normalizeReportDiscoveryComparablePath(value: string): string {
+  return normalizeComparableToolPath(value).replace(/\/+$/u, "").toLowerCase();
+}
+
 async function createExistingReportWriteRecoverableResult(input: {
   queriedReportFileNames: ReadonlySet<string>;
   reportsRoot: string;
   secrets: readonly string[];
   toolCall: ChatCompletionRequestToolCall;
+  writtenReportFileNames: ReadonlySet<string>;
 }): Promise<Record<string, unknown> | undefined> {
-  if (input.toolCall.name !== "write_file") {
+  if (input.toolCall.name !== "write_file" && input.toolCall.name !== UPSERT_REPORT_SECTION_TOOL_NAME) {
     return undefined;
   }
 
-  const pathArgument = getToolPathArgument(input.toolCall.arguments);
+  const pathArgument = getReportTargetArgument(input.toolCall.name, input.toolCall.arguments);
   if (pathArgument === undefined) {
     return undefined;
   }
@@ -1514,14 +1880,23 @@ async function createExistingReportWriteRecoverableResult(input: {
     return undefined;
   }
 
-  if (!input.queriedReportFileNames.has(pathArgument)) {
+  if (!input.queriedReportFileNames.has(pathArgument) && !input.writtenReportFileNames.has(pathArgument)) {
     return {
       error: {
         code: "INVALID_ARGUMENTS",
-        message: redactSecrets(WRITE_FILE_EXISTING_REPORT_MESSAGE, input.secrets)
+        message: redactSecrets(
+          input.toolCall.name === UPSERT_REPORT_SECTION_TOOL_NAME
+            ? UPSERT_EXISTING_REPORT_MESSAGE
+            : WRITE_FILE_EXISTING_REPORT_MESSAGE,
+          input.secrets
+        )
       },
       path: redactSecrets(pathArgument, input.secrets)
     };
+  }
+
+  if (input.toolCall.name === UPSERT_REPORT_SECTION_TOOL_NAME) {
+    return undefined;
   }
 
   const writeContent = getWriteFileContentArgument(input.toolCall.arguments);
@@ -1543,6 +1918,57 @@ async function createExistingReportWriteRecoverableResult(input: {
   return undefined;
 }
 
+async function createOversizedSelectedReportReadRecoverableResult(input: {
+  allowedOutputFileNames: ReadonlySet<string>;
+  artifacts: WindowRunArtifacts;
+  executionArguments: unknown;
+  reportsRoot: string;
+  secrets: readonly string[];
+  toolCall: ChatCompletionRequestToolCall;
+}): Promise<Record<string, unknown> | undefined> {
+  if (input.toolCall.name !== "read_file") {
+    return undefined;
+  }
+
+  const pathArgument = getToolPathArgument(input.executionArguments);
+  if (pathArgument === undefined) {
+    return undefined;
+  }
+
+  const reportFileName = toQueriedReportFileName(pathArgument, input.artifacts);
+  if (reportFileName === undefined || !input.allowedOutputFileNames.has(reportFileName)) {
+    return undefined;
+  }
+
+  const targetReportPath = toSafeReportFilePathForExistenceCheck(input.reportsRoot, reportFileName);
+  if (targetReportPath === undefined) {
+    return undefined;
+  }
+
+  let stat: Awaited<ReturnType<typeof fs.stat>>;
+  try {
+    stat = await fs.stat(targetReportPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+
+  if (!stat.isFile() || stat.size <= DEFAULT_MAX_READ_BYTES) {
+    return undefined;
+  }
+
+  return {
+    error: {
+      code: "INVALID_ARGUMENTS",
+      message: redactSecrets(OVERSIZED_REPORT_READ_MESSAGE, input.secrets)
+    },
+    hint: redactSecrets(OVERSIZED_REPORT_READ_HINT, input.secrets),
+    path: redactSecrets(reportFileName, input.secrets)
+  };
+}
+
 function createInternalReportContentMetadataRecoverableResult(input: {
   secrets: readonly string[];
   toolCall: ChatCompletionRequestToolCall;
@@ -1557,7 +1983,7 @@ function createInternalReportContentMetadataRecoverableResult(input: {
     return undefined;
   }
 
-  const pathArgument = getToolPathArgument(input.toolCall.arguments);
+  const pathArgument = getReportTargetArgument(input.toolCall.name, input.toolCall.arguments);
 
   return {
     error: {
@@ -1589,7 +2015,7 @@ function createWindowFileIdentifierRecoverableResult(input: {
     return undefined;
   }
 
-  const pathArgument = getToolPathArgument(input.toolCall.arguments);
+  const pathArgument = getReportTargetArgument(input.toolCall.name, input.toolCall.arguments);
 
   return {
     error: {
@@ -1618,7 +2044,7 @@ function createDraftOrTemplateStatusRecoverableResult(input: {
     return undefined;
   }
 
-  const pathArgument = getToolPathArgument(input.toolCall.arguments);
+  const pathArgument = getReportTargetArgument(input.toolCall.name, input.toolCall.arguments);
 
   return {
     error: {
@@ -1636,7 +2062,7 @@ function shouldRecordSuccessfulReportQuery(input: {
 }): boolean {
   return (
     !input.returnedRecoverableToolError &&
-    (input.toolCall.name === "read_file" || input.toolCall.name === "grep")
+    (input.toolCall.name === "read_file" || input.toolCall.name === "grep" || input.toolCall.name === READ_REPORT_EXCERPT_TOOL_NAME)
   );
 }
 
@@ -1645,7 +2071,7 @@ function createBatchOutcomeCorrectionMessage(tracker: BatchOutcomeTracker): stri
   return [
     `上一轮尚未为本批次所有选中模板提供处理结果，缺少 outputFileName：${missingOutputs}。`,
     "下一轮只处理上述缺失 outputFileName；已完成处理结果的输出文件不要继续读取、编辑或重写。",
-    "请对每个缺失 outputFileName 调用 write_file/edit_file/multi_edit 写入正式报告，或调用 mark_no_update 标记本窗口无新增信息。",
+    "请对每个缺失 outputFileName 优先调用 upsert_report_section 或必要时调用 write_file/edit_file/multi_edit 写入正式报告，或调用 mark_no_update 标记本窗口无新增信息。",
     "如果缺失模板没有当前窗口明确证据，立即调用 mark_no_update；不要为了无新增模板继续查询或修改其他报告。",
     "如果本批所有模板都没有可写入的新信息，最终文本必须严格返回 NO_UPDATE。"
   ].join("\n");
@@ -1724,6 +2150,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
   async function executeWindowToolLoop(input: {
     artifacts: WindowRunArtifacts;
     batchIndex: number;
+    batchMaxTemplatesPerCall: number;
     batchTotal: number;
     client: OpenAiCompatibleClient;
     job: WindowRunJobInput;
@@ -1731,6 +2158,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
     modelId: string;
     providerId: string;
     totalWindowCount: number;
+    toolLoopRoundReasonCounts: Map<ToolLoopRoundReason, number>;
     windowText: string;
   }): Promise<{ content: string; outcomes: BatchOutcome[]; usage: TokenUsage }> {
     const reportsRoot = toReportsRoot(input.artifacts);
@@ -1746,6 +2174,10 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         outputFileName: template.fileName
       }))
     );
+    const reportInventory = await createReportInventory({
+      reportsRoot,
+      templates: input.artifacts.templates
+    });
     const templatePromptProfiles = buildTemplatePromptProfiles(input.artifacts.templates);
     const queriedReportFileNames = new Set<string>();
     const writtenReportFileNames = new Set<string>();
@@ -1755,14 +2187,18 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
     const messages: ChatCompletionMessage[] = [
       {
         role: "system",
-        content: TOOL_LOOP_DEFAULTS.systemInstruction
+        content: buildStableSystemPrompt({
+          toolLoopInstruction: TOOL_LOOP_DEFAULTS.systemInstruction,
+          windowInstructionLines: TOOL_LOOP_DEFAULTS.windowInstructionLines
+        })
       },
       {
         role: "user",
-        content: buildWindowPrompt({
+        content: buildWindowUserPrompt({
           artifacts: input.artifacts,
           currentDate: toPromptDate(options.clock.now()),
           manifestWindow: input.manifestWindow,
+          reportInventory,
           templatePromptProfiles,
           totalWindowCount: input.totalWindowCount,
           windowText: input.windowText
@@ -1828,6 +2264,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         规则快照: input.artifacts.rulesSnapshotPath,
         报告目录: path.relative(input.artifacts.project.rootPath, reportsRoot) || reportsRoot,
         批次: `${input.batchIndex + 1}/${input.batchTotal}`,
+        分批策略: `按模板数量分批：每批最多 ${input.batchMaxTemplatesPerCall} 个模板`,
         模板: input.artifacts.templates.map((template) => ({
           模板ID: template.id,
           模板名称: template.name,
@@ -1861,15 +2298,22 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
           });
         }
 
-        await options.taskLogger?.append(["大模型请求", "Prompt"], {
-          供应商: input.providerId,
-          模型: input.modelId,
-          窗口: `${input.manifestWindow.index + 1}/${input.totalWindowCount}`,
-          批次: `${input.batchIndex + 1}/${input.batchTotal}`,
-          轮次: currentRoundIndex,
-          messages,
-          tools: TOOL_SCHEMAS
-        });
+        await options.taskLogger?.append(
+          ["大模型请求", "Prompt"],
+          serializeModelRequestForTaskLog({
+            value: {
+              供应商: input.providerId,
+              模型: input.modelId,
+              窗口: `${input.manifestWindow.index + 1}/${input.totalWindowCount}`,
+              批次: `${input.batchIndex + 1}/${input.batchTotal}`,
+              轮次: currentRoundIndex,
+              messages,
+              tools: TOOL_SCHEMAS
+            },
+            windowFileName: input.manifestWindow.fileName,
+            windowText: input.windowText
+          })
+        );
         const completion = await input.client.chatCompletion({
           providerId: input.providerId,
           modelId: input.modelId,
@@ -1897,7 +2341,15 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
               outcomeTracker.outcomes().length === 0 && completionText !== "NO_UPDATE"
                 ? NO_TOOL_PROTOCOL_CORRECTION_MESSAGE
                 : createBatchOutcomeCorrectionMessage(outcomeTracker);
-            await options.taskLogger?.append(["上下文", "重试"], correctionMessage);
+            const retryReason =
+              correctionMessage === NO_TOOL_PROTOCOL_CORRECTION_MESSAGE
+                ? undefined
+                : "missing_template_outcome";
+            incrementToolLoopRoundReason(input.toolLoopRoundReasonCounts, retryReason);
+            await options.taskLogger?.append(["上下文", "重试"], {
+              原因: correctionMessage,
+              ...toToolLoopRoundReasonLogFields(retryReason)
+            });
             messages.push({
               role: "assistant",
               content: redactSecrets(completion.content, secrets)
@@ -1979,7 +2431,16 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             secrets,
             toolCall
           });
-          if (!toolNotEnabledRecoverableToolResult) {
+          const reportDiscoveryRecoverableToolResult =
+            toolNotEnabledRecoverableToolResult === undefined
+              ? interceptReportDiscoveryToolCall({
+                  args: toolCall.executionArguments,
+                  reportDirectoryPaths: [toProjectRelativeReportsRootPath(input.artifacts), "reports"],
+                  reportInventory,
+                  toolName: toolCall.name
+                })
+              : undefined;
+          if (!toolNotEnabledRecoverableToolResult && !reportDiscoveryRecoverableToolResult) {
             await validateToolCallBeforeExecution({
               allowedOutputFileNames,
               artifacts: input.artifacts,
@@ -1993,8 +2454,10 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
 
           let toolResult: unknown;
           let returnedRecoverableToolError = false;
+          let toolLoopRoundReason: ToolLoopRoundReason | undefined;
           const preExecutionRecoverableToolResult =
             toolNotEnabledRecoverableToolResult ??
+            reportDiscoveryRecoverableToolResult ??
             createInternalReportContentMetadataRecoverableResult({
               secrets,
               toolCall
@@ -2007,15 +2470,32 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
               secrets,
               toolCall
             }) ??
+            (await createOversizedSelectedReportReadRecoverableResult({
+              allowedOutputFileNames,
+              artifacts: input.artifacts,
+              executionArguments: toolCall.executionArguments,
+              reportsRoot,
+              secrets,
+              toolCall
+            })) ??
             (await createExistingReportWriteRecoverableResult({
               queriedReportFileNames,
               reportsRoot,
               secrets,
-              toolCall
+              toolCall,
+              writtenReportFileNames
             }));
           if (preExecutionRecoverableToolResult) {
             const preExecutionRecoverableToolError = toRecoverableToolResultError(preExecutionRecoverableToolResult);
             const classification = classifyToolErrorForRuntime(toolCall.name, preExecutionRecoverableToolError);
+            toolLoopRoundReason = classifyToolLoopRoundReason({
+              allowedOutputFileNames,
+              classification,
+              error: preExecutionRecoverableToolError,
+              executionArguments: toolCall.executionArguments,
+              toolName: toolCall.name
+            });
+            incrementToolLoopRoundReason(input.toolLoopRoundReasonCounts, toolLoopRoundReason);
             guardRepeatedRecoverableToolError({
               counts: recoverableToolErrorCounts,
               error: preExecutionRecoverableToolError,
@@ -2049,6 +2529,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
               toolResult = await executeBuiltinFileTool(toolCall.name, toolCall.executionArguments, {
                 projectRoot: isBashToolFamily(toolCall.name) ? bashSandbox.reportsRoot : input.artifacts.project.rootPath,
                 reportsRoot: isBashToolFamily(toolCall.name) ? bashSandbox.reportsRoot : reportsRoot,
+                allowedReportFileNames: [...allowedOutputFileNames],
                 readAliasRoots: [
                   {
                     token: input.manifestWindow.textPath,
@@ -2079,6 +2560,14 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
                 throw error;
               }
 
+              toolLoopRoundReason = classifyToolLoopRoundReason({
+                allowedOutputFileNames,
+                classification,
+                error,
+                executionArguments: toolCall.executionArguments,
+                toolName: toolCall.name
+              });
+              incrementToolLoopRoundReason(input.toolLoopRoundReasonCounts, toolLoopRoundReason);
               guardRepeatedRecoverableToolError({
                 counts: recoverableToolErrorCounts,
                 error,
@@ -2118,6 +2607,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             工具调用ID: toolCall.id,
             实际执行输入: toolCall.executionArguments,
             是否可恢复错误: returnedRecoverableToolError,
+            ...toToolLoopRoundReasonLogFields(toolLoopRoundReason),
             返回内容: toolResult
           });
           if (shouldRecordSuccessfulReportQuery({ returnedRecoverableToolError, toolCall })) {
@@ -2131,9 +2621,9 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
           }
 
           if (isReportWriteTool(toolCall.name) && !returnedRecoverableToolError) {
-            const reportFileName = getToolPathArgument(toolCall.arguments);
+            const reportFileName = getReportTargetArgument(toolCall.name, toolCall.arguments);
             if (reportFileName === undefined) {
-              throw new Error(`写工具 ${toolCall.name} 未提供报告 path`);
+              throw new Error(`写工具 ${toolCall.name} 未提供报告目标`);
             }
 
             await registerTemplateOutputReport({
@@ -2176,7 +2666,12 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
           outcomeTracker.outcomes().length > 0
         ) {
           const correctionMessage = createBatchOutcomeCorrectionMessage(outcomeTracker);
-          await options.taskLogger?.append(["上下文", "重试"], correctionMessage);
+          const retryReason: ToolLoopRoundReason = "missing_template_outcome";
+          incrementToolLoopRoundReason(input.toolLoopRoundReasonCounts, retryReason);
+          await options.taskLogger?.append(["上下文", "重试"], {
+            原因: correctionMessage,
+            ...toToolLoopRoundReasonLogFields(retryReason)
+          });
           replaceBatchOutcomeCorrectionMessage(messages, correctionMessage);
         }
       }
@@ -2238,9 +2733,74 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
     };
   }
 
+  async function createWindowRunJobContext(input: {
+    artifacts: WindowRunArtifacts;
+    job: WindowRunJobInput;
+    totalWindowCount: number;
+  }): Promise<WindowRunJobContext> {
+    const coverageIndex = await loadReportCoverageIndex({
+      projectRoot: input.artifacts.project.rootPath,
+      relativePath: COVERAGE_INDEX_DEFAULTS.relativePath,
+      corruptionStrategy: COVERAGE_INDEX_DEFAULTS.corruptionStrategy
+    });
+    const createRulesHash = options.createRulesSemanticHash ?? createRulesSemanticHash;
+    const rulesSemanticHashByTemplateId = new Map(
+      input.artifacts.templates.map((template) => [template.id, createRulesHash([template])])
+    );
+    const coveragePlanByWindowId = new Map<string, WindowCoveragePlan>();
+    let skippedWindowCount = 0;
+    let skippedTemplateTargetCount = 0;
+    let processedTemplateTargetCount = 0;
+    const pendingWindowLabels: string[] = [];
+
+    for (const manifestWindow of input.artifacts.runtimeWindowManifest.windows) {
+      const coverageTargets = createWindowCoverageTargets({
+        artifacts: input.artifacts,
+        manifestWindow,
+        rulesSemanticHashByTemplateId
+      });
+      const skippedCoverageTargets = input.job.input.skipAlreadyExtracted
+        ? coverageTargets.filter(({ target }) => coverageIndex.isCovered(target))
+        : [];
+      const skippedOutputFileNames = new Set(
+        skippedCoverageTargets.map(({ template }) => template.fileName)
+      );
+      const templatesToProcess = input.artifacts.templates.filter(
+        (template) => !skippedOutputFileNames.has(template.fileName)
+      );
+
+      coveragePlanByWindowId.set(manifestWindow.windowId, {
+        skippedCoverageTargets,
+        templatesToProcess
+      });
+      skippedTemplateTargetCount += skippedCoverageTargets.length;
+      processedTemplateTargetCount += templatesToProcess.length;
+
+      if (templatesToProcess.length === 0) {
+        skippedWindowCount += 1;
+      } else {
+        pendingWindowLabels.push(createWindowLabel(manifestWindow, input.totalWindowCount));
+      }
+    }
+
+    return {
+      coverageIndex,
+      rulesSemanticHashByTemplateId,
+      coverageSummary: {
+        skippedWindowCount,
+        processedWindowCount: input.totalWindowCount - skippedWindowCount,
+        skippedTemplateTargetCount,
+        processedTemplateTargetCount,
+        pendingWindowLabels
+      },
+      coveragePlanByWindowId
+    };
+  }
+
   function createLlmAdapter(input: {
     artifacts: WindowRunArtifacts;
     client: OpenAiCompatibleClient;
+    context: WindowRunJobContext;
     job: WindowRunJobInput;
     modelId: string;
     providerId: string;
@@ -2250,51 +2810,33 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
       async completeWindow({ window }) {
         const manifestWindow = getWindowMetadata(window);
         let secrets: string[] = [];
+        const toolLoopRoundReasonCounts = new Map<ToolLoopRoundReason, number>();
+        let wroteToolLoopRoundReasonSummary = false;
+
+        const appendToolLoopRoundReasonSummary = async (): Promise<void> => {
+          if (wroteToolLoopRoundReasonSummary) {
+            return;
+          }
+          await options.taskLogger?.append(["上下文", "多轮原因汇总"], {
+            窗口: `${manifestWindow.index + 1}/${input.totalWindowCount}`,
+            原因计数: toToolLoopReasonCountRecord(toolLoopRoundReasonCounts)
+          });
+          wroteToolLoopRoundReasonSummary = true;
+        };
 
         try {
           secrets = await getReportRedactionSecrets(input.job.input.providerConfigId);
-          const windowText = await readWindowText(input.artifacts.project, manifestWindow);
-          const coverageIndex = await loadReportCoverageIndex({
-            projectRoot: input.artifacts.project.rootPath,
-            relativePath: COVERAGE_INDEX_DEFAULTS.relativePath,
-            corruptionStrategy: COVERAGE_INDEX_DEFAULTS.corruptionStrategy
-          });
-          const coverageTargets = input.artifacts.templates.map((template) => ({
-            template,
-            target: createCoverageTarget({
-              artifacts: input.artifacts,
-              manifestWindow,
-              rulesSemanticHash: createRulesSemanticHash([template]),
-              template
-            })
-          }));
-          const skippedCoverageTargets =
-            input.job.input.skipAlreadyExtracted
-              ? coverageTargets.filter(({ target }) => coverageIndex.isCovered(target))
-              : [];
-          const skippedOutputFileNames = new Set(
-            skippedCoverageTargets.map(({ template }) => template.fileName)
-          );
-          const templatesToProcess = input.artifacts.templates.filter(
-            (template) => !skippedOutputFileNames.has(template.fileName)
-          );
+          const coveragePlan = input.context.coveragePlanByWindowId.get(manifestWindow.windowId);
+          if (!coveragePlan) {
+            throw new Error(`Missing coverage plan for window ${manifestWindow.windowId}`);
+          }
 
-          await options.taskLogger?.append(["上下文", "覆盖索引"], {
-            索引路径: COVERAGE_INDEX_DEFAULTS.relativePath,
-            跳过已提取: input.job.input.skipAlreadyExtracted,
-            命中模板: skippedCoverageTargets.map(({ template }) => ({
-              模板ID: template.id,
-              模板名称: template.name,
-              输出文件: template.fileName
-            })),
-            待处理模板: templatesToProcess.map((template) => ({
-              模板ID: template.id,
-              模板名称: template.name,
-              输出文件: template.fileName
-            }))
-          });
-
-          if (templatesToProcess.length === 0) {
+          if (coveragePlan.templatesToProcess.length === 0) {
+            await options.taskLogger?.append(["上下文", "覆盖索引跳过窗口"], {
+              窗口: `${manifestWindow.index + 1}/${input.totalWindowCount}`,
+              窗口文件: manifestWindow.fileName
+            });
+            await appendToolLoopRoundReasonSummary();
             return {
               content: "skipped_covered",
               usage: { ...EMPTY_USAGE },
@@ -2303,12 +2845,14 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             };
           }
 
+          const windowText = await readWindowText(input.artifacts.project, manifestWindow);
+          const templateBatching = DEFAULT_CONFIG.extractionRuleDefaults.templateBatching;
           const templateBatches = planTemplateBatches({
-            templates: templatesToProcess,
-            maxTemplatesPerCall: getDefaultConfig().extractionRuleDefaults.maxFullTemplatesPerCall
+            templates: coveragePlan.templatesToProcess,
+            maxTemplatesPerCall: templateBatching.maxTemplatesPerCall
           });
           const templatesByOutputFileName = new Map(
-            templatesToProcess.map((template) => [template.fileName, template])
+            coveragePlan.templatesToProcess.map((template) => [template.fileName, template])
           );
           const contentParts: string[] = [];
           let usage = { ...EMPTY_USAGE };
@@ -2321,6 +2865,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
                 templates: templateBatch.templates
               },
               batchIndex: templateBatchIndex,
+              batchMaxTemplatesPerCall: templateBatching.maxTemplatesPerCall,
               batchTotal: templateBatches.length,
               client: input.client,
               job: input.job,
@@ -2328,6 +2873,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
               modelId: input.modelId,
               providerId: input.providerId,
               totalWindowCount: input.totalWindowCount,
+              toolLoopRoundReasonCounts,
               windowText
             });
             usage = addUsage(usage, result.usage);
@@ -2339,15 +2885,21 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
               }
 
               const template = templatesByOutputFileName.get(outcome.outputFileName);
+              const rulesSemanticHash = template
+                ? input.context.rulesSemanticHashByTemplateId.get(template.id)
+                : undefined;
               if (!template) {
                 continue;
               }
+              if (!rulesSemanticHash) {
+                throw new Error(`Missing rules semantic hash for template ${template.id}`);
+              }
 
-              coverageIndex.recordCovered({
+              input.context.coverageIndex.recordCovered({
                 ...createCoverageTarget({
                   artifacts: input.artifacts,
                   manifestWindow,
-                  rulesSemanticHash: createRulesSemanticHash([template]),
+                  rulesSemanticHash,
                   template
                 }),
                 status: outcome.status,
@@ -2357,8 +2909,9 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             }
           }
 
+          await appendToolLoopRoundReasonSummary();
           if (coverageRecordCount > 0) {
-            await coverageIndex.save();
+            await input.context.coverageIndex.save();
             await options.taskLogger?.append(["上下文", "覆盖索引更新"], {
               索引路径: COVERAGE_INDEX_DEFAULTS.relativePath,
               窗口: `${manifestWindow.index + 1}/${input.totalWindowCount}`,
@@ -2373,6 +2926,11 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             toolCalls: []
           };
         } catch (error) {
+          try {
+            await appendToolLoopRoundReasonSummary();
+          } catch {
+            // Preserve the original window failure; summary logging is diagnostic only on failure paths.
+          }
           throw new Error(
             `窗口 ${manifestWindow.index + 1}/${input.totalWindowCount}（${manifestWindow.fileName}）执行失败：${toSafeErrorMessage(error, secrets)}`
           );
@@ -2385,11 +2943,27 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
     async runJobWindows({ artifacts, job }) {
       const { client, modelId, providerId } = await createLlmClient(job);
       const runtimeInput = createRuntimeInput({ artifacts, job, modelId });
+      const context = await createWindowRunJobContext({
+        artifacts,
+        job,
+        totalWindowCount: runtimeInput.windows.length
+      });
+      await options.taskLogger?.append(["上下文", "覆盖索引预检"], {
+        索引路径: COVERAGE_INDEX_DEFAULTS.relativePath,
+        跳过已提取: job.input.skipAlreadyExtracted,
+        窗口总数: runtimeInput.windows.length,
+        已覆盖窗口数: context.coverageSummary.skippedWindowCount,
+        待处理窗口数: context.coverageSummary.processedWindowCount,
+        已覆盖模板目标数: context.coverageSummary.skippedTemplateTargetCount,
+        待处理模板目标数: context.coverageSummary.processedTemplateTargetCount,
+        待处理窗口: context.coverageSummary.pendingWindowLabels
+      });
       const runtime = createJobRuntime({
         clock: options.clock,
         llm: createLlmAdapter({
           artifacts,
           client,
+          context,
           job,
           modelId,
           providerId,

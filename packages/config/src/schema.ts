@@ -75,6 +75,8 @@ export interface RawWindowReportDefaults {
 
 export type ToolLoopToolName =
   | "read_file"
+  | "read_report_excerpt"
+  | "upsert_report_section"
   | "grep"
   | "glob"
   | "ls"

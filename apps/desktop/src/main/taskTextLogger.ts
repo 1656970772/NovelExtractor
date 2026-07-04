@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Clock } from "@novel-extractor/domain";
+import type { ChatCompletionMessage, ToolCallArguments, ToolSchema } from "@novel-extractor/llm";
+import { formatBuildInfo, resolveBuildInfo, type BuildInfo } from "./buildInfo";
 import { redactSecrets } from "./credentials";
 import { summarizeTaskLogEntry } from "./taskProgressLog";
 
@@ -18,7 +20,21 @@ interface CreateTaskTextLoggerInput {
   jobId: string;
   projectRoot: string;
   secrets?: readonly string[];
+  appVersion?: string;
   taskInfo: string;
+  buildInfo?: BuildInfo;
+}
+
+export interface ModelRequestTaskLogValue {
+  [key: string]: unknown;
+  messages?: readonly ChatCompletionMessage[];
+  tools?: readonly ToolSchema[];
+}
+
+export interface SerializeModelRequestForTaskLogInput {
+  value: ModelRequestTaskLogValue;
+  windowFileName: string;
+  windowText: string;
 }
 
 const systemClock: Pick<Clock, "now"> = {
@@ -94,6 +110,75 @@ function redactTaskLogText(value: string, secrets: readonly string[]): string {
     .replace(/((?:apiKey|api_key|authorization|password|secret)\s*:\s*)[^\n]+/giu, "$1***")
     .replace(/(authorization\s*:\s*bearer\s+)[^\s,;"]+/giu, "$1***")
     .replace(/\[REDACTED\]/gu, "***");
+}
+
+export function serializeModelRequestForTaskLog(input: SerializeModelRequestForTaskLogInput): Record<string, unknown> {
+  return {
+    ...input.value,
+    messages: input.value.messages
+      ? serializeMessagesForTaskLog({
+          messages: input.value.messages,
+          windowFileName: input.windowFileName,
+          windowText: input.windowText
+        })
+      : input.value.messages,
+    tools: input.value.tools ? serializeToolsForTaskLog(input.value.tools) : input.value.tools
+  };
+}
+
+function serializeMessagesForTaskLog(input: {
+  messages: readonly ChatCompletionMessage[];
+  windowFileName: string;
+  windowText: string;
+}): ChatCompletionMessage[] {
+  return input.messages.map((message) => {
+    const content = replaceWindowTextForLog(message.content, input.windowText, input.windowFileName);
+    if (message.role === "assistant") {
+      return {
+        ...message,
+        content,
+        toolCalls: message.toolCalls?.map((toolCall) => ({
+          ...toolCall,
+          arguments: cloneLogValue(toolCall.arguments) as ToolCallArguments
+        }))
+      };
+    }
+
+    return {
+      ...message,
+      content
+    };
+  });
+}
+
+function replaceWindowTextForLog(content: string, windowText: string, windowFileName: string): string {
+  if (windowText === "" || !content.includes(windowText)) {
+    return content;
+  }
+
+  return content.split(windowText).join(`[窗口原文见 ${windowFileName}]`);
+}
+
+function serializeToolsForTaskLog(tools: readonly ToolSchema[]): Array<{
+  name: string;
+  parameters?: Record<string, unknown>;
+}> {
+  return tools.map((tool) => ({
+    name: tool.function.name,
+    parameters: cloneLogValue(tool.function.parameters) as Record<string, unknown> | undefined
+  }));
+}
+
+function cloneLogValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => cloneLogValue(item));
+  }
+
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cloneLogValue(item)]));
+  }
+
+  return value;
 }
 
 function renderPlainText(value: unknown, depth = 0, seen = new WeakSet<object>()): string {
@@ -214,6 +299,7 @@ export async function createTaskTextLogger(input: CreateTaskTextLoggerInput): Pr
     }
   };
 
+  await appendBoth(["构建信息"], formatBuildInfo(input.buildInfo ?? resolveBuildInfo({ appVersion: input.appVersion })), createdAt);
   await appendBoth(["任务信息"], input.taskInfo, createdAt);
   return logger;
 }

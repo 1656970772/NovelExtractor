@@ -46,6 +46,8 @@ function withToolLoopDefaults(
       "ls",
       "multi_edit",
       "read_file",
+      "read_report_excerpt",
+      "upsert_report_section",
       "wait",
       "write_file",
       "mark_no_update"
