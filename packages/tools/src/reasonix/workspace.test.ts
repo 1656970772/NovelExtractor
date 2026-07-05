@@ -131,25 +131,51 @@ describe("Reasonix workspace parity", () => {
     });
     expect(tools.read_report_excerpt.schema()).toMatchObject({
       type: "object",
-      required: ["outputFileName", "keywords"],
+      required: ["outputFileName", "queries"],
+      additionalProperties: false,
       properties: {
         outputFileName: { type: "string" },
-        keywords: { type: "array", items: { type: "string" } },
-        maxChars: { type: "integer" }
+        queries: {
+          type: "array",
+          minItems: 1,
+          items: {
+            type: "object",
+            required: ["cardName", "fields"],
+            additionalProperties: false,
+            properties: {
+              cardName: { type: "string" },
+              fields: { type: "array", minItems: 1, items: { type: "string" } }
+            }
+          }
+        },
+        maxChars: { type: "integer", minimum: 500, maximum: 20000 }
       }
     });
     expect(tools.upsert_report_section.schema()).toMatchObject({
       type: "object",
-      required: ["outputFileName", "content", "writeMode"],
+      required: ["outputFileName", "updates"],
       additionalProperties: false,
       properties: {
         outputFileName: { type: "string" },
-        sectionId: { type: "string" },
-        content: { type: "string" },
-        writeMode: { enum: ["replace_section", "append_to_section", "append_to_end"] }
+        updates: {
+          type: "array",
+          minItems: 1,
+          items: {
+            type: "object",
+            required: ["cardName", "fieldName", "content"],
+            additionalProperties: false,
+            properties: {
+              cardName: { type: "string" },
+              fieldName: { type: "string" },
+              content: { type: "string" }
+            }
+          }
+        }
       }
     });
     expect(JSON.stringify(tools.upsert_report_section.schema())).not.toContain("old_string");
+    expect(JSON.stringify(tools.upsert_report_section.schema())).not.toContain("sectionId");
+    expect(JSON.stringify(tools.upsert_report_section.schema())).not.toContain("writeMode");
     expect(tools.edit_file.schema()).toMatchObject({
       required: ["path", "old_string", "new_string"],
       properties: {
@@ -236,7 +262,8 @@ describe("Reasonix workspace parity", () => {
     expect(tools.glob.description()).toContain("不要用 glob/ls/bash 查找报告");
     expect(tools.ls.description()).toContain("报告是否存在已由宿主清单提供");
     expect(tools.bash.description()).toContain("不要用 glob/ls/bash 查找报告");
-    expect(tools.read_file.description()).toContain("需要读已有报告时后续任务会走关键词检索/相关段落");
-    expect(tools.read_report_excerpt.description()).toContain("关键词");
+    expect(tools.read_file.description()).toContain("需要读已有报告时后续任务会走卡片字段块读取");
+    expect(tools.read_report_excerpt.description()).toContain("卡片字段块");
+    expect(tools.read_report_excerpt.description()).toContain("cardName");
   });
 });

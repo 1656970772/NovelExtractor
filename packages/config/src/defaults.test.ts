@@ -115,18 +115,13 @@ describe("default config", () => {
   it("provides tool loop defaults for desktop window runs", () => {
     expect(getDefaultConfig().toolLoopDefaults).toEqual({
       enabledToolNames: [
-        "bash",
-        "bash_output",
         "edit_file",
-        "glob",
         "grep",
-        "kill_shell",
         "ls",
         "multi_edit",
         "read_file",
         "read_report_excerpt",
         "upsert_report_section",
-        "wait",
         "write_file",
         "mark_no_update"
       ],
@@ -135,7 +130,7 @@ describe("default config", () => {
         replacement_text_not_found: expect.stringContaining("read_report_excerpt"),
         replacement_text_not_unique: expect.stringContaining("read_report_excerpt"),
         read_tool_target_not_found:
-          "读取目标不存在；请先用 ls/glob 确认可读路径，或改用当前窗口文本、reports 目录或本批选中报告文件名。",
+          "读取目标不存在；请先用 ls 确认可读路径，或改用当前窗口文本、reports 目录或本批选中报告文件名。",
         read_tool_scope_denied:
           "只能读取、搜索、列出或匹配当前窗口文本、当前书籍 reports 目录或本批选中输出报告；请改用窗口文件路径、reports 或选中报告文件名。",
         bash_tool_scope_denied:
@@ -151,7 +146,7 @@ describe("default config", () => {
         edit_target_not_found:
           "目标报告不存在；如果需要创建报告，请改用 write_file 写入完整且合规的报告正文。",
         tool_not_enabled:
-          "只能调用当前请求 tools 清单中列出的工具；如果需要执行 shell 命令，请调用 bash 并把命令放在 command 字段中。",
+          "只能调用当前请求 tools 清单中列出的工具；不要调用未列出的 shell、匹配或报告片段工具。",
         tool_invalid_arguments:
           "工具参数无效；请根据错误消息修正参数后重试，必要时先读取文件确认当前状态。"
       },
@@ -164,9 +159,14 @@ describe("default config", () => {
     expect(getDefaultConfig().toolLoopDefaults.windowInstructionLines.join("\n")).toContain(
       "mark_no_update"
     );
-    expect(getDefaultConfig().toolLoopDefaults.windowInstructionLines.join("\n")).toContain(
-      "upsert_report_section"
-    );
+    const windowInstructions = getDefaultConfig().toolLoopDefaults.windowInstructionLines.join("\n");
+    expect(windowInstructions).toContain("read_report_excerpt");
+    expect(windowInstructions).toContain("upsert_report_section");
+    expect(windowInstructions).toContain("卡片名");
+    expect(windowInstructions).toContain("字段名");
+    expect(windowInstructions).toContain("韩立-角色定位/核心性格/代表行为");
+    expect(windowInstructions).not.toContain("glob");
+    expect(windowInstructions).not.toContain("bash");
   });
 
   it("provides configurable extraction batching defaults", () => {
@@ -251,18 +251,13 @@ describe("default config", () => {
       getDefaultConfig().extractionRuleDefaults.templateBatching.nonMergeableTemplateTags
     ).not.toContain("solo");
     expect(getDefaultConfig().toolLoopDefaults.enabledToolNames).toEqual([
-      "bash",
-      "bash_output",
       "edit_file",
-      "glob",
       "grep",
-      "kill_shell",
       "ls",
       "multi_edit",
       "read_file",
       "read_report_excerpt",
       "upsert_report_section",
-      "wait",
       "write_file",
       "mark_no_update"
     ]);

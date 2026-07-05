@@ -102,6 +102,7 @@ export interface P0IpcHandlersOptions {
   getAppVersion?: () => string;
   estimateRandom?: () => number;
   onJobUpdated?: (job: JobDto) => void;
+  enabledToolNames?: readonly string[];
   shell?: {
     openPath(path: string): Promise<string>;
   };
@@ -1450,6 +1451,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
           );
         },
         providerStore,
+        enabledToolNames: options.enabledToolNames,
         taskLogger,
         async registerReport({ path: reportPath, report }) {
           reportsById.set(report.id, report);

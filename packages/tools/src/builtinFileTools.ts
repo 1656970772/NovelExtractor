@@ -19,11 +19,12 @@ import {
   createKillShellTool,
   createWaitTool
 } from "./reasonix/tools/bashTool";
-import { findRelevantReportExcerpt } from "./reportRelevantExcerpt";
 import {
-  upsertReportSection,
-  type ReportWriteMode
-} from "./reportSectionIndex";
+  readReportFieldBlocks,
+  replaceReportFieldBlocks,
+  type ReportFieldQuery,
+  type ReportFieldUpdate
+} from "./reportFieldBlocks";
 
 export interface ToolExecutionContext {
   projectRoot: string;
@@ -47,7 +48,16 @@ export interface ToolExecutionContext {
 export class ToolExecutionError extends Error {
   constructor(
     message: string,
-    readonly code: "UNKNOWN_TOOL" | "INVALID_ARGUMENTS" | "UNSAFE_PATH" | "NOT_FOUND" | "IO_ERROR" | "SECTION_NOT_FOUND",
+    readonly code:
+      | "UNKNOWN_TOOL"
+      | "INVALID_ARGUMENTS"
+      | "UNSAFE_PATH"
+      | "NOT_FOUND"
+      | "IO_ERROR"
+      | "CARD_NOT_FOUND"
+      | "FIELD_NOT_FOUND"
+      | "FIELD_AMBIGUOUS"
+      | "INVALID_FIELD_CONTENT",
     readonly output?: string
   ) {
     super(message);
@@ -104,15 +114,7 @@ async function executeUpsertReportSection(rawArguments: unknown, context: ToolEx
   if (typeof args.outputFileName !== "string") {
     throw new ToolExecutionError("outputFileName must be a string", "INVALID_ARGUMENTS");
   }
-  if (typeof args.content !== "string") {
-    throw new ToolExecutionError("content must be a string", "INVALID_ARGUMENTS");
-  }
-
-  const writeMode = normalizeReportWriteMode(args.writeMode);
-  const sectionId = typeof args.sectionId === "string" ? args.sectionId : undefined;
-  if ((writeMode === "replace_section" || writeMode === "append_to_section") && (!sectionId || sectionId.trim() === "")) {
-    throw new ToolExecutionError("sectionId must be a non-empty string for replace_section and append_to_section", "INVALID_ARGUMENTS");
-  }
+  const updates = normalizeReportFieldUpdates(args.updates);
 
   const outputFileName = validateFlatReportFileName(args.outputFileName);
   if (context.allowedReportFileNames !== undefined && !context.allowedReportFileNames.includes(outputFileName)) {
@@ -126,41 +128,33 @@ async function executeUpsertReportSection(rawArguments: unknown, context: ToolEx
   await assertExistingReportFileIsSafe(reportPath);
 
   const currentContent = await readReportFileIfExists(reportPath);
-  const result = upsertReportSection({
-    content: currentContent,
-    sectionId,
-    writeMode,
-    nextContent: args.content
-  });
+  const result = replaceReportFieldBlocks({ content: currentContent, updates });
   if (!result.ok) {
     throw new ToolExecutionError(result.message, result.code);
   }
 
   await mkdir(path.dirname(reportPath), { recursive: true });
   await writeFile(reportPath, result.content, "utf8");
-  return `upserted report section ${sectionId ?? "(end)"} in ${outputFileName} with ${writeMode}`;
+  return `updated report fields ${result.updated.map((item) => `${item.cardName}/${item.fieldName}`).join(", ")} in ${outputFileName}`;
 }
 
 function assertAllowedUpsertReportSectionArguments(args: Record<string, unknown>): void {
-  if (Object.prototype.hasOwnProperty.call(args, "old_string")) {
+  if (
+    Object.prototype.hasOwnProperty.call(args, "old_string") ||
+    Object.prototype.hasOwnProperty.call(args, "sectionId") ||
+    Object.prototype.hasOwnProperty.call(args, "writeMode")
+  ) {
     throw new ToolExecutionError(
-      "upsert_report_section does not accept old_string; use section id and writeMode instead.",
+      "字段级更新不接受 old_string/sectionId/writeMode，请提供 outputFileName 和 updates，并在每个 update 中提供 cardName/fieldName/content。",
       "INVALID_ARGUMENTS"
     );
   }
 
-  const allowedKeys = new Set(["outputFileName", "sectionId", "content", "writeMode"]);
+  const allowedKeys = new Set(["outputFileName", "updates"]);
   const extraKeys = Object.keys(args).filter((key) => !allowedKeys.has(key));
   if (extraKeys.length > 0) {
     throw new ToolExecutionError(`upsert_report_section received unsupported argument(s): ${extraKeys.join(", ")}`, "INVALID_ARGUMENTS");
   }
-}
-
-function normalizeReportWriteMode(value: unknown): ReportWriteMode {
-  if (value === "replace_section" || value === "append_to_section" || value === "append_to_end") {
-    return value;
-  }
-  throw new ToolExecutionError("writeMode must be replace_section, append_to_section, or append_to_end", "INVALID_ARGUMENTS");
 }
 
 async function readReportFileIfExists(reportPath: string): Promise<string> {
@@ -198,21 +192,15 @@ async function executeReadReportExcerpt(rawArguments: unknown, context: ToolExec
   if (typeof args.outputFileName !== "string") {
     throw new ToolExecutionError("outputFileName must be a string", "INVALID_ARGUMENTS");
   }
-  if (!Array.isArray(args.keywords)) {
-    throw new ToolExecutionError("keywords must be an array", "INVALID_ARGUMENTS");
-  }
-
   const outputFileName = validateFlatReportFileName(args.outputFileName);
-  const keywords = args.keywords.map((keyword) => (typeof keyword === "string" ? keyword.trim() : ""));
-  if (keywords.length === 0 || keywords.some((keyword) => keyword === "")) {
-    throw new ToolExecutionError("keywords must contain non-empty strings", "INVALID_ARGUMENTS");
-  }
+  const queries = normalizeReportFieldQueries(args.queries);
 
   if (context.allowedReportFileNames !== undefined && !context.allowedReportFileNames.includes(outputFileName)) {
     throw new ToolExecutionError("Path is outside allowed root", "UNSAFE_PATH");
   }
 
   const maxChars = normalizeMaxChars(args.maxChars);
+  assertReportsRootInsideProject(context);
   const reportPath = path.join(context.reportsRoot, outputFileName);
   assertReportPathInsideReportsRoot(context.reportsRoot, reportPath);
   if (fs.existsSync(reportPath)) {
@@ -220,21 +208,67 @@ async function executeReadReportExcerpt(rawArguments: unknown, context: ToolExec
   }
 
   return JSON.stringify(
-    await findRelevantReportExcerpt({
+    readReportFieldBlocks({
       outputFileName,
-      reportPath,
-      keywords,
+      content: await readReportFileIfExists(reportPath),
+      queries,
       maxChars
     })
   );
 }
 
 function assertAllowedReadReportExcerptArguments(args: Record<string, unknown>): void {
-  const allowedKeys = new Set(["outputFileName", "keywords", "maxChars"]);
+  const allowedKeys = new Set(["outputFileName", "queries", "maxChars"]);
   const extraKeys = Object.keys(args).filter((key) => !allowedKeys.has(key));
   if (extraKeys.length > 0) {
     throw new ToolExecutionError(`read_report_excerpt received unsupported argument(s): ${extraKeys.join(", ")}`, "INVALID_ARGUMENTS");
   }
+}
+
+function normalizeReportFieldQueries(value: unknown): ReportFieldQuery[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new ToolExecutionError("queries must be a non-empty array", "INVALID_ARGUMENTS");
+  }
+
+  return value.map((item) => {
+    const record = isPlainRecord(item) ? item : undefined;
+    if (record === undefined || typeof record.cardName !== "string" || !Array.isArray(record.fields)) {
+      throw new ToolExecutionError("queries items must include cardName and fields", "INVALID_ARGUMENTS");
+    }
+
+    const fields = record.fields.map((field) => (typeof field === "string" ? field.trim() : ""));
+    if (record.cardName.trim() === "" || fields.length === 0 || fields.some((field) => field === "")) {
+      throw new ToolExecutionError("queries cardName and fields must be non-empty", "INVALID_ARGUMENTS");
+    }
+
+    return { cardName: record.cardName.trim(), fields };
+  });
+}
+
+function normalizeReportFieldUpdates(value: unknown): ReportFieldUpdate[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new ToolExecutionError("updates must be a non-empty array", "INVALID_ARGUMENTS");
+  }
+
+  return value.map((item) => {
+    const record = isPlainRecord(item) ? item : undefined;
+    if (
+      record === undefined ||
+      typeof record.cardName !== "string" ||
+      typeof record.fieldName !== "string" ||
+      typeof record.content !== "string"
+    ) {
+      throw new ToolExecutionError("updates items must include cardName, fieldName, and content", "INVALID_ARGUMENTS");
+    }
+
+    const cardName = record.cardName.trim();
+    const fieldName = record.fieldName.trim();
+    if (cardName === "" || fieldName === "" || record.content.trim() === "") {
+      throw new ToolExecutionError("updates cardName, fieldName, and content must be non-empty", "INVALID_ARGUMENTS");
+    }
+
+    return { cardName, fieldName, content: record.content };
+  });
 }
 
 function normalizeMaxChars(value: unknown): number | undefined {

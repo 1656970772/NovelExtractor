@@ -27,6 +27,8 @@ const SIMPLE_TOOL_CALL_LABELS: Record<string, string> = {
   "查找报告文件：": "glob",
   "搜索文件：": "grep",
   "列出目录：": "ls",
+  "读取报告字段：": "read_report_excerpt",
+  "更新报告字段：": "upsert_report_section",
   "写入报告：": "write_file",
   "更新报告：": "edit_file",
   "批量更新报告：": "multi_edit",

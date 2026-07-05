@@ -122,9 +122,9 @@ const toolDescriptions: Record<ReasonixToolName, (workspace: Workspace) => strin
     "Read a text file with optional line offset/limit. Output prefixes each line with its 1-based number (e.g. `   42→...`) so subsequent edit_file calls can target exact lines. Use `offset` and `limit` to page through large files; the tool reports total length and pagination hints in a trailer." +
     reportInventoryGuidance(workspace, "read_existing"),
   read_report_excerpt: () =>
-    "按关键词检索本批允许的旧报告，命中时只返回相关段落、相关 Markdown 小节或命中行附近 bounded range；未命中时返回 found=false 并建议 append_to_end。只提供 outputFileName、keywords，可选 maxChars，不要查目录或整读旧报告。",
+    "读取本批允许报告中的卡片字段块。输入 outputFileName 和 queries，每个 query 是 cardName + fields；卡片标题为 ### 卡片名，字段行为 - 字段名：内容，字段下缩进子项会一起返回。不要整读旧报告。",
   upsert_report_section: () =>
-    "Update a Markdown report by stable section id and writeMode without old_string. Use replace_section or append_to_section for existing headings; if Task 7 keywords found no old content, use append_to_end. This tool does not create new section headings implicitly.",
+    "按 cardName + fieldName 替换已有 Markdown 报告字段块。输入 outputFileName 和 updates；content 必须以对应 - 字段名： 开头。不接受 old_string、sectionId 或 writeMode，不隐式创建新卡片或新字段。",
   write_file: () => "Write content to a file at the given path (overwriting existing content). Creates parent directories as needed.",
   edit_file: () =>
     "Replace an exact string in a file with another. old_string must occur exactly once; add surrounding context to disambiguate. Use for targeted edits instead of rewriting the whole file.",
@@ -162,39 +162,57 @@ const toolSchemas: Record<ReasonixToolName, unknown> = {
   read_report_excerpt: {
     type: "object",
     properties: {
-      outputFileName: { type: "string", description: "本批选中模板的平面报告文件名，例如 材料分析.md" },
-      keywords: {
+      outputFileName: { type: "string", description: "本批选中模板的平面报告文件名，例如 NPC性格与代表事件.md" },
+      queries: {
         type: "array",
-        items: { type: "string" },
         minItems: 1,
-        description: "用于检索旧报告相关段落的关键词数组，至少一个非空字符串。"
+        description: "要读取的卡片字段坐标数组。",
+        items: {
+          type: "object",
+          properties: {
+            cardName: { type: "string", description: "三级标题卡片名，例如 韩立" },
+            fields: {
+              type: "array",
+              minItems: 1,
+              items: { type: "string" },
+              description: "字段名数组，例如 [角色定位, 核心性格, 代表行为]"
+            }
+          },
+          required: ["cardName", "fields"],
+          additionalProperties: false
+        }
       },
       maxChars: {
         type: "integer",
-        description: "返回相关段落的最大字符数，默认 4000，允许范围 500-20000。",
+        description: "返回字段块总字符预算，默认 8000，允许范围 500-20000。",
         minimum: 500,
         maximum: 20000
       }
     },
-    required: ["outputFileName", "keywords"],
+    required: ["outputFileName", "queries"],
     additionalProperties: false
   },
   upsert_report_section: {
     type: "object",
     properties: {
-      outputFileName: { type: "string", description: "本批选中模板的平面报告文件名，例如 材料分析.md" },
-      sectionId: {
-        type: "string",
-        description: "buildReportSectionIndex 返回的稳定 section id，例如 材料分析/法器；append_to_end 不需要。"
-      },
-      content: { type: "string", description: "要替换、追加到 section 或追加到报告末尾的 Markdown 正文。" },
-      writeMode: {
-        type: "string",
-        enum: ["replace_section", "append_to_section", "append_to_end"],
-        description: "replace_section 替换命中 section 正文；append_to_section 追加到命中 section；append_to_end 追加到报告末尾。"
+      outputFileName: { type: "string", description: "本批选中模板的平面报告文件名，例如 NPC性格与代表事件.md" },
+      updates: {
+        type: "array",
+        minItems: 1,
+        description: "要替换的字段块数组。",
+        items: {
+          type: "object",
+          properties: {
+            cardName: { type: "string", description: "三级标题卡片名，例如 韩立" },
+            fieldName: { type: "string", description: "字段名，例如 核心性格" },
+            content: { type: "string", description: "完整字段块，必须以 - 字段名： 开头，并包含需要保留或更新的子项。" }
+          },
+          required: ["cardName", "fieldName", "content"],
+          additionalProperties: false
+        }
       }
     },
-    required: ["outputFileName", "content", "writeMode"],
+    required: ["outputFileName", "updates"],
     additionalProperties: false
   },
   write_file: {
@@ -321,7 +339,7 @@ function reportInventoryGuidance(workspace: Workspace, mode: "discovery" | "read
   }
 
   const base = " 报告是否存在已由宿主清单提供；不要用 glob/ls/bash 查找报告。";
-  return mode === "read_existing" ? `${base}需要读已有报告时后续任务会走关键词检索/相关段落。` : base;
+  return mode === "read_existing" ? `${base}需要读已有报告时后续任务会走卡片字段块读取。` : base;
 }
 
 function bashDescription(shell: ReasonixResolvedShell): string {

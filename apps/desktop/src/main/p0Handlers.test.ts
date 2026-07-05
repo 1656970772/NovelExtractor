@@ -29,6 +29,7 @@ const workspaceRoot = findWorkspaceRoot();
 const utf8FixturePath = path.join(workspaceRoot, "e2e", "fixtures", "utf8-novel.txt");
 const gbkFixturePath = path.join(workspaceRoot, "e2e", "fixtures", "gbk-novel.txt");
 const fixedNow = "2026-06-27T00:00:00.000Z";
+const legacyDesktopToolNames = [...reasonixToolOrder, "mark_no_update"];
 
 function requireJobDto(job: JobDto | void): JobDto {
   expect(job).toBeDefined();
@@ -329,6 +330,13 @@ describe("P0 desktop IPC handlers", () => {
         ...p0Options
       } as Parameters<typeof createP0IpcHandlers>[0])
     };
+  }
+
+  function createHandlersWithLegacyTools(p0Options: Record<string, unknown> = {}) {
+    return createHandlers({
+      enabledToolNames: legacyDesktopToolNames,
+      ...p0Options
+    });
   }
 
   it("freezes the total time estimate when a runtime state pauses", () => {
@@ -1856,9 +1864,6 @@ describe("P0 desktop IPC handlers", () => {
       const firstRequestToolNames = firstRequestTools.map((tool) => tool.function?.name);
       const editFileSchema = firstRequestTools.find((tool) => tool.function?.name === "edit_file")?.function?.parameters;
       const multiEditSchema = firstRequestTools.find((tool) => tool.function?.name === "multi_edit")?.function?.parameters;
-      const upsertReportSectionSchema = firstRequestTools.find((tool) => tool.function?.name === "upsert_report_section")
-        ?.function?.parameters;
-      const bashOutputSchema = firstRequestTools.find((tool) => tool.function?.name === "bash_output")?.function?.parameters;
 
       expect(firstSystemPrompt).toContain("你是小说资料抽取助手");
       expect(firstSystemPrompt).toContain("## 窗口处理规则");
@@ -1866,19 +1871,17 @@ describe("P0 desktop IPC handlers", () => {
       expect(firstUserPrompt).toContain("## 选中模板 Prompt Profile");
       expect(firstUserPrompt).toContain("## 当前窗口文本");
       expect(firstUserPrompt).not.toContain("本阶段不做模板路由");
-      expect(firstRequestToolNames).toEqual([...reasonixToolOrder, "mark_no_update"]);
-      expect(upsertReportSectionSchema?.properties).toHaveProperty("outputFileName");
-      expect(upsertReportSectionSchema?.properties).toHaveProperty("sectionId");
-      expect(upsertReportSectionSchema?.properties).toHaveProperty("content");
-      expect(upsertReportSectionSchema?.properties).toHaveProperty("writeMode");
-      expect(upsertReportSectionSchema?.properties).not.toHaveProperty("old_string");
+      expect(firstRequestToolNames).toEqual(getDefaultConfig().toolLoopDefaults.enabledToolNames);
+      expect(firstRequestToolNames).not.toContain("bash");
+      expect(firstRequestToolNames).not.toContain("glob");
+      expect(firstRequestToolNames).toContain("read_report_excerpt");
+      expect(firstRequestToolNames).toContain("upsert_report_section");
       expect(editFileSchema?.properties).toHaveProperty("old_string");
       expect(editFileSchema?.properties).toHaveProperty("new_string");
       expect(editFileSchema?.properties).not.toHaveProperty("oldText");
       expect(editFileSchema?.properties).not.toHaveProperty("newText");
       expect(JSON.stringify(multiEditSchema)).toContain("old_string");
       expect(JSON.stringify(multiEditSchema)).toContain("new_string");
-      expect(JSON.stringify(bashOutputSchema)).toContain("job_id");
       expect(firstRequestJson).toContain(`窗口文件：${firstWindowTextPath}`);
       expect(firstRequestJson).toContain(
         `read_file/grep 如需读取当前窗口文件，必须使用项目相对路径 ${firstWindowTextPath}，不要使用裸文件名 window-0001.txt`
@@ -2786,7 +2789,7 @@ describe("P0 desktop IPC handlers", () => {
 
       expect(mockServer.requests).toHaveLength(6);
       expect(overwriteReplayBody).toContain("已有报告不能用 write_file 覆盖");
-      expect(overwriteReplayBody).toContain("read_file/grep");
+      expect(overwriteReplayBody).toContain("read_report_excerpt");
       expect(readReplayBody).toContain("## 一、七玄门");
       expect(completedJob).toMatchObject({
         id: job.id,
@@ -3796,7 +3799,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -3846,18 +3849,18 @@ describe("P0 desktop IPC handlers", () => {
       expect(mockServer.requests).toHaveLength(4);
       expect(completedJob.status).toBe("completed");
       expect(logText).toContain("继续原因：报告查找方式被拒绝");
-      expect(logText).toContain("继续原因：旧报告需要相关段落");
+      expect(logText).toContain("继续原因：工具参数或路径无效");
       expect(logText).toContain("继续原因：报告锚点未命中");
       expect(logText).toContain("report_discovery_rejected");
-      expect(logText).toContain("old_report_relevant_sections_needed");
+      expect(logText).toContain("tool_arguments_invalid");
       expect(logText).toContain("edit_anchor_failed");
       expect(logText).toContain("窗口 1/1");
       expect(logText).toContain("[上下文][多轮原因汇总]");
       expect(simpleLogText).toContain("继续原因：报告查找方式被拒绝");
-      expect(simpleLogText).toContain("继续原因：旧报告需要相关段落");
+      expect(simpleLogText).toContain("继续原因：工具参数或路径无效");
       expect(simpleLogText).toContain("继续原因：报告锚点未命中");
       expect(simpleLogText).toContain(
-        "窗口 1/1 多轮原因：报告查找方式被拒绝 1 次，旧报告需要相关段落 1 次，报告锚点未命中 1 次"
+        "窗口 1/1 多轮原因：报告查找方式被拒绝 1 次，报告锚点未命中 1 次，工具参数或路径无效 1 次"
       );
     } finally {
       await mockServer.close();
@@ -3913,7 +3916,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -4627,7 +4630,7 @@ describe("P0 desktop IPC handlers", () => {
       expect((await fs.stat(reportPath)).size).toBeGreaterThan(defaultMaxReadBytes);
       expect(Buffer.byteLength(oversizedReport, "utf8")).toBeGreaterThan(defaultMaxReadBytes);
       expect(mockServer.requests).toHaveLength(4);
-      expect(JSON.stringify(mockServer.requests[2].body)).toContain("请提供关键词检索相关段落");
+      expect(JSON.stringify(mockServer.requests[2].body)).toContain("不能直接整读");
       expect(JSON.stringify(mockServer.requests[2].body)).toContain("read_report_excerpt");
       expect(JSON.stringify(mockServer.requests[2].body)).toContain("INVALID_ARGUMENTS");
       expect(JSON.stringify(mockServer.requests[3].body)).toContain("已有报告不能用 write_file 覆盖");
@@ -4638,15 +4641,15 @@ describe("P0 desktop IPC handlers", () => {
     }
   });
 
-  it("guides oversized old report reads to read_report_excerpt and allows editing after excerpt query", async () => {
+  it("guides oversized old report reads to read_report_excerpt and allows field upsert after a field query", async () => {
     const oversizedReport = [
       "# 丹药分析",
       "",
-      "## 法器",
-      "青竹蜂云剑是旧报告中的法器线索。",
+      "### 青竹蜂云剑",
+      "- 线索：青竹蜂云剑是旧报告中的法器线索。",
       "",
-      "## 无关旧段落",
-      "整份报告中无关的大段正文。",
+      "### 无关旧卡片",
+      "- 线索：整份报告中无关的大段正文。",
       "0123456789abcdef\n".repeat(70_000)
     ].join("\n");
     const mockServer = await startMockOpenAiServer({
@@ -4668,14 +4671,14 @@ describe("P0 desktop IPC handlers", () => {
 
         if (requestIndex === 1) {
           const replayBody = JSON.stringify(body);
+          expect(replayBody).toContain("不能直接整读");
           expect(replayBody).toContain("read_report_excerpt");
-          expect(replayBody).toContain("请提供关键词检索相关段落");
           return {
             body: createChatCompletionResponse({
               toolCalls: [
                 createToolCall("call-read-relevant-excerpt", "read_report_excerpt", {
                   outputFileName: "丹药分析.md",
-                  keywords: ["青竹蜂云剑"],
+                  queries: [{ cardName: "青竹蜂云剑", fields: ["线索"] }],
                   maxChars: 1000
                 })
               ]
@@ -4686,15 +4689,20 @@ describe("P0 desktop IPC handlers", () => {
         if (requestIndex === 2) {
           const excerptReplayBody = JSON.stringify(body);
           expect(excerptReplayBody).toContain("青竹蜂云剑");
-          expect(excerptReplayBody).toContain("## 法器");
+          expect(excerptReplayBody).toContain("- 线索：青竹蜂云剑是旧报告中的法器线索。");
           expect(excerptReplayBody).not.toContain("整份报告中无关的大段正文");
           return {
             body: createChatCompletionResponse({
               toolCalls: [
-                createToolCall("call-edit-after-excerpt", "edit_file", {
-                  path: "丹药分析.md",
-                  old_string: "青竹蜂云剑是旧报告中的法器线索。",
-                  new_string: "青竹蜂云剑是旧报告中的法器线索，窗口补充。"
+                createToolCall("call-upsert-after-excerpt", "upsert_report_section", {
+                  outputFileName: "丹药分析.md",
+                  updates: [
+                    {
+                      cardName: "青竹蜂云剑",
+                      fieldName: "线索",
+                      content: "- 线索：青竹蜂云剑是旧报告中的法器线索，窗口补充。"
+                    }
+                  ]
                 })
               ]
             })
@@ -4702,13 +4710,13 @@ describe("P0 desktop IPC handlers", () => {
         }
 
         return {
-          body: createChatCompletionResponse({ content: "旧报告相关段落已更新。" })
+          body: createChatCompletionResponse({ content: "旧报告字段已更新。" })
         };
       }
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -4753,36 +4761,40 @@ describe("P0 desktop IPC handlers", () => {
       expect(mockServer.requests).toHaveLength(4);
       expect(completedJob.status).toBe("completed");
       expect(completedJob.failureReason).toBeUndefined();
-      expect(reportMarkdown).toContain("青竹蜂云剑是旧报告中的法器线索，窗口补充。");
+      expect(reportMarkdown).toContain("- 线索：青竹蜂云剑是旧报告中的法器线索，窗口补充。");
       expect(reportMarkdown).toContain("整份报告中无关的大段正文。");
     } finally {
       await mockServer.close();
     }
   });
 
-  it("requires read_report_excerpt before upserting an existing report section, then updates stable headings", async () => {
+  it("requires read_report_excerpt before upserting an existing report field, then updates the field block", async () => {
     let uploadedBookId = "";
     const upsertArgs = {
       outputFileName: "材料分析.md",
-      sectionId: "材料分析/法器",
-      writeMode: "replace_section",
-      content: "青竹蜂云剑新增描述，可称\"鲤鱼跃龙门\"。\n重复锚点。"
+      updates: [
+        {
+          cardName: "青竹蜂云剑",
+          fieldName: "描述",
+          content: "- 描述：青竹蜂云剑新增描述，可称\"鲤鱼跃龙门\"。\n  - 备注：重复锚点。"
+        }
+      ]
     };
     const excerptArgs = {
       outputFileName: "材料分析.md",
-      keywords: ["青竹蜂云剑"],
+      queries: [{ cardName: "青竹蜂云剑", fields: ["描述"] }],
       maxChars: 500
     };
     const modelToolArgumentsText = JSON.stringify(upsertArgs);
     const initialReport = [
       "# 材料分析",
       "",
-      "## 法器",
-      "旧报告正文已经变化，旧锚点不会命中。",
-      "重复锚点。",
+      "### 青竹蜂云剑",
+      "- 描述：旧报告正文已经变化，旧锚点不会命中。",
+      "  - 备注：重复锚点。",
       "",
-      "## 丹药",
-      "重复锚点。"
+      "### 丹药",
+      "- 描述：重复锚点。"
     ].join("\n");
     const mockServer = await startMockOpenAiServer({
       expectedApiKey: "sk-upsert-report-section",
@@ -4805,8 +4817,8 @@ describe("P0 desktop IPC handlers", () => {
           const replayBody = JSON.stringify(body);
           const reportsRoot = path.join(tempRoot, "projects", "project-a", "assets", "books", uploadedBookId, "reports");
           expect(await fs.readFile(path.join(reportsRoot, "材料分析.md"), "utf8")).toBe(initialReport);
-          expect(replayBody).toContain("read_report_excerpt");
-          expect(replayBody).toContain("同一个报告文件");
+          expect(replayBody).toContain("已有报告不能直接更新字段");
+          expect(replayBody).toContain("按卡片名和字段名读取目标字段块");
           expect(replayBody).toContain("材料分析.md");
           return {
             body: createChatCompletionResponse({
@@ -4836,7 +4848,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-upsert-report-section");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -4884,30 +4896,44 @@ describe("P0 desktop IPC handlers", () => {
       const updatedReport = await fs.readFile(path.join(reportsRoot, "材料分析.md"), "utf8");
       const requestBodies = mockServer.requests.map((request) => JSON.stringify(request.body));
       expect(mockServer.requests).toHaveLength(4);
-      expect(modelToolArgumentsText).toContain("sectionId");
-      expect(modelToolArgumentsText).toContain("writeMode");
+      expect(modelToolArgumentsText).toContain("updates");
+      expect(modelToolArgumentsText).not.toContain("sectionId");
+      expect(modelToolArgumentsText).not.toContain("writeMode");
       expect(modelToolArgumentsText).not.toContain("old_string");
       expect(requestBodies.join("\n")).not.toContain("old_string not found");
       expect(requestBodies.join("\n")).not.toContain("old_string is not unique");
       expect(updatedReport).toContain("可称\"鲤鱼跃龙门\"");
-      expect(updatedReport).toContain("## 丹药\n重复锚点。");
+      expect(updatedReport).toContain("### 丹药\n- 描述：重复锚点。");
     } finally {
       await mockServer.close();
     }
   });
 
-  it("allows consecutive upsert_report_section calls after creating the report in the same round", async () => {
+  it("allows consecutive upsert_report_section calls after reading the target fields in the same round", async () => {
     let uploadedBookId = "";
-    const createReportArgs = {
+    const readFieldsArgs = {
       outputFileName: "材料分析.md",
-      writeMode: "append_to_end",
-      content: "# 材料分析\n\n## 法器\n批次 A"
+      queries: [{ cardName: "青竹蜂云剑", fields: ["描述", "影响"] }]
     };
-    const appendSectionArgs = {
+    const updateDescriptionArgs = {
       outputFileName: "材料分析.md",
-      sectionId: "材料分析/法器",
-      writeMode: "append_to_section",
-      content: "批次 B"
+      updates: [
+        {
+          cardName: "青竹蜂云剑",
+          fieldName: "描述",
+          content: "- 描述：批次 A"
+        }
+      ]
+    };
+    const updateImpactArgs = {
+      outputFileName: "材料分析.md",
+      updates: [
+        {
+          cardName: "青竹蜂云剑",
+          fieldName: "影响",
+          content: "- 影响：批次 B"
+        }
+      ]
     };
     const mockServer = await startMockOpenAiServer({
       expectedApiKey: "sk-consecutive-upsert-report-section",
@@ -4916,8 +4942,9 @@ describe("P0 desktop IPC handlers", () => {
           return {
             body: createChatCompletionResponse({
               toolCalls: [
-                createToolCall("call-create-material-report", "upsert_report_section", createReportArgs),
-                createToolCall("call-append-material-section", "upsert_report_section", appendSectionArgs)
+                createToolCall("call-read-material-fields", "read_report_excerpt", readFieldsArgs),
+                createToolCall("call-update-material-description", "upsert_report_section", updateDescriptionArgs),
+                createToolCall("call-update-material-impact", "upsert_report_section", updateImpactArgs)
               ]
             })
           };
@@ -4932,7 +4959,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-consecutive-upsert-report-section");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -4950,7 +4977,12 @@ describe("P0 desktop IPC handlers", () => {
       });
       uploadedBookId = book.bookId;
       const reportsRoot = path.join(tempRoot, "projects", "project-a", "assets", "books", uploadedBookId, "reports");
-      expect(await pathExists(path.join(reportsRoot, "材料分析.md"))).toBe(false);
+      await fs.mkdir(reportsRoot, { recursive: true });
+      await fs.writeFile(
+        path.join(reportsRoot, "材料分析.md"),
+        "# 材料分析\n\n### 青竹蜂云剑\n- 描述：旧描述\n- 影响：旧影响",
+        "utf8"
+      );
       const template = await contract.invoke(handlers, "templates:save", {
         projectId: "project-a",
         scope: "project",
@@ -4974,9 +5006,7 @@ describe("P0 desktop IPC handlers", () => {
       const requestBodies = mockServer.requests.map((request) => JSON.stringify(request.body));
       const replayText = requestBodies.join("\n");
       expect(completedJob.status).toBe("completed");
-      expect(replayText).not.toContain(
-        "已有报告不能直接用 upsert_report_section 修改；必须先在本轮使用 read_report_excerpt 按关键词查询同一个报告文件，再使用 upsert_report_section。"
-      );
+      expect(replayText).not.toContain("已有报告不能直接更新字段");
       expect(updatedReport).toContain("批次 A");
       expect(updatedReport).toContain("批次 B");
     } finally {
@@ -5728,7 +5758,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -6090,7 +6120,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -6174,7 +6204,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -6269,7 +6299,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -6358,7 +6388,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -6447,7 +6477,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -6533,7 +6563,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -6628,7 +6658,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -6726,7 +6756,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -6831,7 +6861,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -6929,7 +6959,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -7018,7 +7048,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -7758,7 +7788,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -7847,7 +7877,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -8006,7 +8036,6 @@ describe("P0 desktop IPC handlers", () => {
           allowedActions: ["resume", "restart", "delete"]
         });
         expect(failedJob?.failureReason).toContain("read_report_excerpt");
-        expect(failedJob?.failureReason).toContain("read_file/grep");
         expect(reports).toHaveLength(1);
         expect(reportMarkdown).toContain("旧内容。");
         expect(reportMarkdown).not.toContain("新内容。");

@@ -46,8 +46,8 @@ const requiredByTool = {
   ls: undefined,
   multi_edit: ["path", "edits"],
   read_file: ["path"],
-  read_report_excerpt: ["outputFileName", "keywords"],
-  upsert_report_section: ["outputFileName", "content", "writeMode"],
+  read_report_excerpt: ["outputFileName", "queries"],
+  upsert_report_section: ["outputFileName", "updates"],
   wait: undefined,
   write_file: ["path", "content"]
 } as const;
@@ -78,8 +78,8 @@ const protocolDescriptionSnippets = {
   ls: ["List the entries of a directory", "recursive=true"],
   multi_edit: ["Apply a list of edits", "atomically"],
   read_file: ["Read a text file", "pagination hints"],
-  read_report_excerpt: ["关键词", "相关段落"],
-  upsert_report_section: ["section id", "old_string"],
+  read_report_excerpt: ["卡片字段块", "cardName", "fields"],
+  upsert_report_section: ["字段块", "cardName", "fieldName"],
   wait: ["Block until background jobs finish", "Omit job_ids"],
   write_file: ["Write content to a file", "overwriting existing content"]
 } as const;

@@ -157,29 +157,24 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
   },
   toolLoopDefaults: {
     enabledToolNames: [
-      "bash",
-      "bash_output",
       "edit_file",
-      "glob",
       "grep",
-      "kill_shell",
       "ls",
       "multi_edit",
       "read_file",
       "read_report_excerpt",
       "upsert_report_section",
-      "wait",
       "write_file",
       "mark_no_update"
     ],
     maxRepeatedRecoverableToolErrors: 3,
     recoverableToolErrorHints: {
       replacement_text_not_found:
-        "old_string 必须精确匹配文件中的原文；更新既有报告优先用 read_report_excerpt 按关键词读取相关段落，再用 grep/read_file 找到必要的准确锚点；若已读取且需要整体更新，可用 write_file 提交完整保留旧内容的新版报告。",
+        "old_string 必须精确匹配文件中的原文；更新既有报告优先改用 read_report_excerpt 按卡片字段读取，再用 upsert_report_section 替换同一字段。",
       replacement_text_not_unique:
-        "old_string 在文件中匹配到多处；请先用 read_report_excerpt 按关键词读取相关段落，再用 grep/read_file 找到目标段落并加入足够上下文，或用 write_file 提交完整保留旧内容的新版报告。",
+        "old_string 在文件中匹配到多处；更新既有报告优先改用 read_report_excerpt 按卡片字段读取，再用 upsert_report_section 替换同一字段。",
       read_tool_target_not_found:
-        "读取目标不存在；请先用 ls/glob 确认可读路径，或改用当前窗口文本、reports 目录或本批选中报告文件名。",
+        "读取目标不存在；请先用 ls 确认可读路径，或改用当前窗口文本、reports 目录或本批选中报告文件名。",
       read_tool_scope_denied:
         "只能读取、搜索、列出或匹配当前窗口文本、当前书籍 reports 目录或本批选中输出报告；请改用窗口文件路径、reports 或选中报告文件名。",
       bash_tool_scope_denied:
@@ -195,7 +190,7 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
       edit_target_not_found:
         "目标报告不存在；如果需要创建报告，请改用 write_file 写入完整且合规的报告正文。",
       tool_not_enabled:
-        "只能调用当前请求 tools 清单中列出的工具；如果需要执行 shell 命令，请调用 bash 并把命令放在 command 字段中。",
+        "只能调用当前请求 tools 清单中列出的工具；不要调用未列出的 shell、匹配或报告片段工具。",
       tool_invalid_arguments:
         "工具参数无效；请根据错误消息修正参数后重试，必要时先读取文件确认当前状态。"
     },
@@ -212,7 +207,8 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
       MATERIAL_RESOURCE_COVERAGE_RULE,
       PUBLIC_REPORT_METADATA_RULE,
       TEMPLATE_EXAMPLE_EVIDENCE_RULE,
-      "更新既有报告前，必须先在本轮使用 read_report_excerpt 按关键词查询同一个报告文件的相关段落；常规报告更新优先使用 upsert_report_section 的 sectionId/writeMode，不要提供 old_string；只有当前窗口文本或小报告需要精确行号时才使用 read_file/grep 和 edit_file/multi_edit。",
+      "更新既有报告前，优先用 read_report_excerpt 按“卡片名-字段名/字段名”坐标读取目标字段块；字段块确认后用 upsert_report_section 按 cardName + fieldName 直接替换字段块，不要整读旧报告，不要用 old_string。",
+      "字段坐标示例：韩立-角色定位/核心性格/代表行为；工具调用时拆成 cardName=韩立，fields=[角色定位,核心性格,代表行为]。",
       "如果本批次只有部分模板无新增信息，必须对这些模板调用 mark_no_update，并继续为其他模板写入或更新报告。",
       "如果当前窗口没有可写入的新信息，且未执行写工具，最终文本必须严格返回 NO_UPDATE。"
     ]

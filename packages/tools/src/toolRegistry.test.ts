@@ -93,39 +93,66 @@ describe("P0 tool registry", () => {
       type: "object",
       properties: {
         outputFileName: { type: "string" },
-        keywords: { type: "array", items: { type: "string" } },
-        maxChars: { type: "integer" }
+        queries: {
+          type: "array",
+          minItems: 1,
+          items: {
+            type: "object",
+            required: ["cardName", "fields"],
+            additionalProperties: false,
+            properties: {
+              cardName: { type: "string" },
+              fields: { type: "array", minItems: 1, items: { type: "string" } }
+            }
+          }
+        },
+        maxChars: { type: "integer", minimum: 500, maximum: 20000 }
       },
-      required: ["outputFileName", "keywords"],
+      required: ["outputFileName", "queries"],
       additionalProperties: false
     });
     expect(tools[7].parameters).toMatchObject({
       type: "object",
       properties: {
         outputFileName: { type: "string" },
-        sectionId: { type: "string" },
-        content: { type: "string" },
-        writeMode: { enum: ["replace_section", "append_to_section", "append_to_end"] }
+        updates: {
+          type: "array",
+          minItems: 1,
+          items: {
+            type: "object",
+            required: ["cardName", "fieldName", "content"],
+            additionalProperties: false,
+            properties: {
+              cardName: { type: "string" },
+              fieldName: { type: "string" },
+              content: { type: "string" }
+            }
+          }
+        }
       },
-      required: ["outputFileName", "content", "writeMode"],
+      required: ["outputFileName", "updates"],
       additionalProperties: false
     });
     expect(JSON.stringify(tools[7].parameters)).not.toContain("old_string");
+    expect(JSON.stringify(tools[7].parameters)).not.toContain("sectionId");
+    expect(JSON.stringify(tools[7].parameters)).not.toContain("writeMode");
   });
 
-  it("describes read_report_excerpt as keyword-based report excerpt reading", () => {
+  it("describes read_report_excerpt as card field block reading", () => {
     const [tool] = getEnabledTools(["read_report_excerpt"]);
 
-    expect(tool.description).toContain("关键词");
-    expect(tool.description).toContain("相关段落");
+    expect(tool.description).toContain("卡片字段块");
+    expect(tool.description).toContain("cardName");
+    expect(tool.description).toContain("fields");
   });
 
-  it("describes upsert_report_section as section-based report writing without old_string", () => {
+  it("describes upsert_report_section as field-block writing without old_string", () => {
     const [tool] = getEnabledTools(["upsert_report_section"]);
 
-    expect(tool.description).toContain("section id");
+    expect(tool.description).toContain("字段块");
+    expect(tool.description).toContain("fieldName");
     expect(tool.description).toContain("old_string");
-    expect(tool.description).toContain("append_to_end");
+    expect(tool.description).toContain("sectionId");
   });
 
   it("describes mark_no_update as recording an outcome without writing a report", () => {
@@ -148,7 +175,7 @@ describe("P0 tool registry", () => {
     expect(tools.find((tool) => tool.name === "ls")?.description).toContain("不要用 glob/ls/bash 查找报告");
     expect(tools.find((tool) => tool.name === "bash")?.description).toContain("不要用 glob/ls/bash 查找报告");
     expect(tools.find((tool) => tool.name === "read_file")?.description).toContain(
-      "需要读已有报告时后续任务会走关键词检索/相关段落"
+      "需要读已有报告时后续任务会走卡片字段块读取"
     );
   });
 

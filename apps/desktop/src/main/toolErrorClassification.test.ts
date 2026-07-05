@@ -95,19 +95,27 @@ describe("tool error classification", () => {
     });
   });
 
-  it("classifies upsert_report_section SECTION_NOT_FOUND as recoverable by the model", () => {
-    expect(
-      classify(
-        "upsert_report_section",
-        new ToolExecutionError(
-          "SECTION_NOT_FOUND: Task 7 关键词未命中新内容改用 append_to_end；需要创建新标题要等后续 create_section 能力，本任务不隐式创建 section。",
-          "SECTION_NOT_FOUND" as never
-        )
-      )
-    ).toMatchObject({
+  it.each([
+    ["CARD_NOT_FOUND", "CARD_NOT_FOUND: 未找到卡片 韩立"],
+    ["FIELD_NOT_FOUND", "FIELD_NOT_FOUND: 未找到字段 韩立/核心性格"],
+    ["FIELD_AMBIGUOUS", "FIELD_AMBIGUOUS: 字段重复 韩立/核心性格"],
+    ["INVALID_FIELD_CONTENT", "INVALID_FIELD_CONTENT: content 必须以 - 核心性格： 开头"]
+  ] as const)("classifies upsert_report_section %s as recoverable by the model", (code, message) => {
+    expect(classify("upsert_report_section", new ToolExecutionError(message, code))).toMatchObject({
       category: "recoverable_by_model",
       recoverableByModel: true,
       reason: "tool_invalid_arguments"
+    });
+  });
+
+  it("classifies field report tool argument messages as recoverable by the model", () => {
+    expect(classify("read_report_excerpt", new ToolExecutionError("queries must be a non-empty array", "INVALID_ARGUMENTS"))).toMatchObject({
+      category: "recoverable_by_model",
+      reason: "tool_schema_invalid_arguments"
+    });
+    expect(classify("upsert_report_section", new ToolExecutionError("updates must be a non-empty array", "INVALID_ARGUMENTS"))).toMatchObject({
+      category: "recoverable_by_model",
+      reason: "tool_schema_invalid_arguments"
     });
   });
 
@@ -168,7 +176,7 @@ describe("tool error classification", () => {
         allowedOutputFileNames: new Set(["丹药分析.md"]),
         error: largeReportReadError
       })
-    ).toBe("old_report_relevant_sections_needed");
+    ).toBe("old_report_field_blocks_needed");
     expect(
       classifyToolLoopRoundReason({
         toolName: "edit_file",
@@ -290,6 +298,6 @@ describe("tool error classification", () => {
         allowedOutputFileNames: new Set(["丹药分析.md"]),
         error: largeReportReadError
       })
-    ).toBe("old_report_relevant_sections_needed");
+    ).toBe("old_report_field_blocks_needed");
   });
 });

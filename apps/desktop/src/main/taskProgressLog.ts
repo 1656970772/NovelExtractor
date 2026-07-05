@@ -15,7 +15,7 @@ type ToolSummary = {
 
 const TOOL_LOOP_ROUND_REASON_ORDER: ToolLoopRoundReason[] = [
   "report_discovery_rejected",
-  "old_report_relevant_sections_needed",
+  "old_report_field_blocks_needed",
   "edit_anchor_failed",
   "tool_arguments_invalid",
   "missing_template_outcome",
@@ -42,6 +42,16 @@ const TOOL_SUMMARIES: Record<string, ToolSummary> = {
     call: "列出目录",
     result: "列出完成",
     target: toolPath
+  },
+  read_report_excerpt: {
+    call: "读取报告字段",
+    result: "报告字段读取完成",
+    target: toolOutputFileName
+  },
+  upsert_report_section: {
+    call: "更新报告字段",
+    result: "报告字段更新完成",
+    target: toolOutputFileName
   },
   write_file: {
     call: "写入报告",
@@ -211,6 +221,11 @@ function toolPath(value: unknown): string {
 function toolPattern(value: unknown): string {
   const args = rawToolValue(value);
   return fileName(args?.pattern ?? args?.path ?? args?.job_id);
+}
+
+function toolOutputFileName(value: unknown): string {
+  const args = rawToolValue(value);
+  return fileName(args?.outputFileName, "未指定报告");
 }
 
 function toolJobId(value: unknown): string {

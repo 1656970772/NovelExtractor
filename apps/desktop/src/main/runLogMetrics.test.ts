@@ -215,4 +215,13 @@ tools:
     });
     expect(metrics.fullReportReadCount).toBe(0);
   });
+
+  it("counts simple field report tool labels without exposing internal names", () => {
+    const metrics = parseRunLogMetrics("12:00:00 读取报告字段：NPC性格与代表事件.md\n12:00:01 更新报告字段：NPC性格与代表事件.md");
+
+    expect(metrics.toolCallCountByName).toMatchObject({
+      read_report_excerpt: 1,
+      upsert_report_section: 1
+    });
+  });
 });

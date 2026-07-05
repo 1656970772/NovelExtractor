@@ -91,6 +91,7 @@ export interface WindowRunServiceOptions {
   providerStore: MainProviderStore;
   registerReport(input: { path: string; report: ReportAsset }): Promise<void> | void;
   taskLogger?: TaskTextLogger;
+  enabledToolNames?: readonly string[];
 }
 
 export interface WindowRunService {
@@ -108,9 +109,7 @@ const DEFAULT_CONFIG = getDefaultConfig();
 const TOOL_LOOP_DEFAULTS = DEFAULT_CONFIG.toolLoopDefaults;
 const TEMPLATE_PROMPT_PROFILE_DEFAULTS = DEFAULT_CONFIG.templatePromptProfileDefaults;
 const COVERAGE_INDEX_DEFAULTS = DEFAULT_CONFIG.coverageIndexDefaults;
-const ENABLED_TOOL_NAMES = TOOL_LOOP_DEFAULTS.enabledToolNames;
-const ENABLED_TOOL_NAME_SET = new Set<string>(ENABLED_TOOL_NAMES);
-const TOOL_SCHEMAS = getEnabledTools([...ENABLED_TOOL_NAMES]).map(toLlmToolSchema);
+const DEFAULT_ENABLED_TOOL_NAMES = TOOL_LOOP_DEFAULTS.enabledToolNames;
 const EMPTY_USAGE: TokenUsage = {
   inputTokens: 0,
   outputTokens: 0,
@@ -129,13 +128,13 @@ const NO_TOOL_PROTOCOL_CORRECTION_MESSAGE =
   "如果本窗口没有可写入的新信息，必须精确返回 NO_UPDATE；如果有可写入内容，必须先调用写工具写入正式报告。";
 const BATCH_OUTCOME_CORRECTION_PREFIX = "上一轮尚未为本批次所有选中模板提供处理结果";
 const WRITE_FILE_EXISTING_REPORT_MESSAGE =
-  "已有报告不能用 write_file 覆盖；需先 read_report_excerpt 按关键词查询相关段落，再使用 edit_file/multi_edit 追加或修改。";
+  "已有报告不能用 write_file 覆盖；请先用 read_report_excerpt 按卡片名和字段名读取目标字段块，再用 upsert_report_section 替换同一字段。";
 const UPSERT_EXISTING_REPORT_MESSAGE =
-  "已有报告不能直接用 upsert_report_section 修改；必须先在本轮使用 read_report_excerpt 按关键词查询同一个报告文件，再使用 upsert_report_section。";
+  "已有报告不能直接更新字段；请先用 read_report_excerpt 按卡片名和字段名读取目标字段块，再用 upsert_report_section 替换同一字段。";
 const OVERSIZED_REPORT_READ_MESSAGE =
-  "已选旧报告过大，不能直接整读。请提供关键词检索相关段落，改用 read_report_excerpt。";
+  "已选旧报告过大，不能直接整读。请用 read_report_excerpt 按卡片名和字段名读取目标字段块。";
 const OVERSIZED_REPORT_READ_HINT =
-  "调用 read_report_excerpt，只提供 outputFileName、keywords，可选 maxChars；不要查目录或整读旧报告。";
+  "不要整读旧报告；按 cardName + fields 拆成更小的 queries 读取需要的字段块，内容太多时分多次读取。";
 const WRITE_FILE_LOSSY_REWRITE_MESSAGE =
   "不能覆盖丢失既有内容，需要使用 edit_file/multi_edit 或包含完整旧内容。";
 const REPORT_CONTENT_INTERNAL_METADATA_MESSAGE = "报告正文不得包含内部运行路径或流程性元数据。";
@@ -401,7 +400,7 @@ function renderReportInventoryPromptSection(reportInventory: readonly ReportInve
     "宿主已基于本批次选中模板和 reports 目录提供报告清单，清单只包含本批次允许触达的报告文件。",
     `已有报告：${existingReportFileNames.length > 0 ? existingReportFileNames.join("、") : "无"}`,
     `待创建报告：${missingReportFileNames.length > 0 ? missingReportFileNames.join("、") : "无"}`,
-    "不要调用 glob、ls 或 bash 查找这些报告是否存在；需要读已有报告时，后续任务会走关键词检索/相关段落。"
+    "不要再调用目录或 shell 类工具查找这些报告是否存在；需要读已有报告时，直接使用允许的文件读取或搜索工具。"
   ].join("\n");
 }
 
@@ -824,11 +823,29 @@ function redactWritableToolArguments(name: string, args: unknown, secrets: reado
     };
   }
 
-  if (name === UPSERT_REPORT_SECTION_TOOL_NAME && typeof args.content === "string") {
-    return {
+  if (name === UPSERT_REPORT_SECTION_TOOL_NAME) {
+    const redactedArgs = {
       ...args,
-      content: redactSecrets(args.content, secrets)
+      ...(typeof args.content === "string" ? { content: redactSecrets(args.content, secrets) } : {})
     };
+
+    if (Array.isArray(args.updates)) {
+      return {
+        ...redactedArgs,
+        updates: args.updates.map((update) => {
+          if (!isPlainRecord(update) || typeof update.content !== "string") {
+            return update;
+          }
+
+          return {
+            ...update,
+            content: redactSecrets(update.content, secrets)
+          };
+        })
+      };
+    }
+
+    return redactedArgs;
   }
 
   if (name === "multi_edit" && Array.isArray(args.edits)) {
@@ -952,7 +969,7 @@ function getWritableReportContentFragments(toolCall: ChatCompletionRequestToolCa
   }
 
   if (toolCall.name === UPSERT_REPORT_SECTION_TOOL_NAME) {
-    return typeof toolCall.arguments.content === "string" ? [toolCall.arguments.content] : [];
+    return getUpsertReportSectionContentFragments(toolCall.arguments);
   }
 
   if (toolCall.name !== "multi_edit" || !Array.isArray(toolCall.arguments.edits)) {
@@ -962,6 +979,17 @@ function getWritableReportContentFragments(toolCall: ChatCompletionRequestToolCa
   return toolCall.arguments.edits.flatMap((edit) =>
     isPlainRecord(edit) && typeof edit.new_string === "string" ? [edit.new_string] : []
   );
+}
+
+function getUpsertReportSectionContentFragments(args: Record<string, unknown>): string[] {
+  const fragments = typeof args.content === "string" ? [args.content] : [];
+  if (!Array.isArray(args.updates)) {
+    return fragments;
+  }
+
+  return fragments.concat(args.updates.flatMap((update) =>
+    isPlainRecord(update) && typeof update.content === "string" ? [update.content] : []
+  ));
 }
 
 function findInternalReportContentMetadata(contentFragments: readonly string[]): string | undefined {
@@ -1057,6 +1085,21 @@ function normalizeWriteToolExecutionArguments(input: {
 }): unknown {
   if (!isReportWriteTool(input.toolCall.name) && input.toolCall.name !== MARK_NO_UPDATE_TOOL_NAME) {
     return input.toolCall.arguments;
+  }
+
+  if (
+    input.toolCall.name === UPSERT_REPORT_SECTION_TOOL_NAME &&
+    isPlainRecord(input.toolCall.arguments) &&
+    typeof input.toolCall.arguments.outputFileName === "string"
+  ) {
+    return {
+      ...input.toolCall.arguments,
+      outputFileName: toAllowedWriteToolOutputFileName({
+        allowedOutputFileNames: input.allowedOutputFileNames,
+        artifacts: input.artifacts,
+        pathArgument: input.toolCall.arguments.outputFileName
+      })
+    };
   }
 
   if (!isPlainRecord(input.toolCall.arguments) || typeof input.toolCall.arguments.path !== "string") {
@@ -1343,10 +1386,73 @@ function getToolOutputFileNameArgument(args: unknown): string | undefined {
   return args.outputFileName;
 }
 
+function getReadReportExcerptFieldArguments(args: unknown): string[] {
+  if (!isPlainRecord(args) || !Array.isArray(args.queries)) {
+    return [];
+  }
+
+  return args.queries.flatMap((query) => {
+    if (!isPlainRecord(query) || typeof query.cardName !== "string" || !Array.isArray(query.fields)) {
+      return [];
+    }
+
+    return [query.cardName, ...query.fields.filter((field): field is string => typeof field === "string")];
+  });
+}
+
 function getReportTargetArgument(toolName: string, args: unknown): string | undefined {
   return toolName === UPSERT_REPORT_SECTION_TOOL_NAME
     ? getToolOutputFileNameArgument(args)
     : getToolPathArgument(args);
+}
+
+function collectReadReportFieldKeys(args: unknown): string[] {
+  const outputFileName = getToolOutputFileNameArgument(args);
+  if (!outputFileName || !isPlainRecord(args) || !Array.isArray(args.queries)) {
+    return [];
+  }
+
+  return args.queries.flatMap((query) => {
+    if (!isPlainRecord(query) || typeof query.cardName !== "string" || !Array.isArray(query.fields)) {
+      return [];
+    }
+
+    const cardName = query.cardName;
+    return query.fields.flatMap((field) =>
+      typeof field === "string" ? [createReportFieldKey(outputFileName, cardName, field)] : []
+    );
+  });
+}
+
+function collectUpsertReportFieldKeys(args: unknown): string[] {
+  const outputFileName = getToolOutputFileNameArgument(args);
+  if (!outputFileName || !isPlainRecord(args) || !Array.isArray(args.updates)) {
+    return [];
+  }
+
+  return args.updates.flatMap((update) => {
+    if (!isPlainRecord(update) || typeof update.cardName !== "string" || typeof update.fieldName !== "string") {
+      return [];
+    }
+
+    return [createReportFieldKey(outputFileName, update.cardName, update.fieldName)];
+  });
+}
+
+function createReportFieldKey(outputFileName: string, cardName: string, fieldName: string): string {
+  return [
+    normalizeReportFieldKeyPart(outputFileName),
+    normalizeReportFieldKeyPart(cardName),
+    normalizeReportFieldKeyPart(fieldName)
+  ].join("\u0000");
+}
+
+function normalizeReportFieldKeyPart(value: string): string {
+  return value.trim().normalize("NFC");
+}
+
+function describeReportFieldKey(key: string): string {
+  return key.split("\u0000").join("/");
 }
 
 async function createReportInventory(input: {
@@ -1388,6 +1494,7 @@ function toSafeReportFilePathForExistenceCheck(
 async function validateToolCallBeforeExecution(input: {
   allowedOutputFileNames: ReadonlySet<string>;
   artifacts: WindowRunArtifacts;
+  enabledToolNameSet: ReadonlySet<string>;
   queriedReportFileNames: ReadonlySet<string>;
   reportsRoot: string;
   secrets: readonly string[];
@@ -1396,7 +1503,7 @@ async function validateToolCallBeforeExecution(input: {
 }): Promise<void> {
   const { toolCall } = input;
 
-  if (!ENABLED_TOOL_NAME_SET.has(toolCall.name)) {
+  if (!input.enabledToolNameSet.has(toolCall.name)) {
     throw new Error(`Tool is not enabled: ${toolCall.name}`);
   }
 
@@ -1423,6 +1530,7 @@ async function validateToolCallBeforeExecution(input: {
     const outputFileName = getToolOutputFileNameArgument(args);
     const secretArguments = [
       outputFileName,
+      ...getReadReportExcerptFieldArguments(args),
       ...(Array.isArray(args?.keywords) ? args.keywords : [])
     ].filter((value): value is string => typeof value === "string");
     if (secretArguments.some((argument) => containsKnownSecret(argument, input.secrets))) {
@@ -1477,7 +1585,7 @@ async function validateToolCallBeforeExecution(input: {
     !input.writtenReportFileNames.has(pathArgument)
   ) {
     throw new Error(
-      `写工具 ${toolCall.name} 修改既有报告前，必须先在本轮使用 read_report_excerpt 按关键词查询同一个报告文件；小报告需要精确锚点时才用 read_file/grep：${redactSecrets(pathArgument, input.secrets)}`
+      `写工具 ${toolCall.name} 不能直接修改既有报告；请先用 read_report_excerpt 按卡片名和字段名读取目标字段块，再用 upsert_report_section 替换同一字段：${redactSecrets(pathArgument, input.secrets)}`
     );
   }
 }
@@ -1485,6 +1593,7 @@ async function validateToolCallBeforeExecution(input: {
 function recordReportQuery(input: {
   artifacts: WindowRunArtifacts;
   allowedOutputFileNames: ReadonlySet<string>;
+  queriedReportFieldKeys: Set<string>;
   queriedReportFileNames: Set<string>;
   toolCall: ChatCompletionRequestToolCall;
   toolResult: unknown;
@@ -1492,7 +1601,9 @@ function recordReportQuery(input: {
   if (input.toolCall.name === READ_REPORT_EXCERPT_TOOL_NAME) {
     const outputFileName = getToolOutputFileNameArgument(input.toolCall.arguments);
     if (outputFileName !== undefined && input.allowedOutputFileNames.has(outputFileName)) {
-      input.queriedReportFileNames.add(outputFileName);
+      for (const fieldKey of collectReadReportFieldKeys(input.toolCall.arguments)) {
+        input.queriedReportFieldKeys.add(fieldKey);
+      }
     }
     return;
   }
@@ -1591,7 +1702,10 @@ const TOOL_EXECUTION_ERROR_CODES = new Set<string>([
   "UNSAFE_PATH",
   "NOT_FOUND",
   "IO_ERROR",
-  "SECTION_NOT_FOUND"
+  "CARD_NOT_FOUND",
+  "FIELD_NOT_FOUND",
+  "FIELD_AMBIGUOUS",
+  "INVALID_FIELD_CONTENT"
 ]);
 
 function toToolExecutionErrorCode(code: unknown): ToolExecutionError["code"] {
@@ -1694,10 +1808,11 @@ function toToolLoopReasonCountRecord(
 }
 
 function createToolNotEnabledRecoverableResult(input: {
+  enabledToolNameSet: ReadonlySet<string>;
   secrets: readonly string[];
   toolCall: ChatCompletionRequestToolCall;
 }): Record<string, unknown> | undefined {
-  if (ENABLED_TOOL_NAME_SET.has(input.toolCall.name)) {
+  if (input.enabledToolNameSet.has(input.toolCall.name)) {
     return undefined;
   }
 
@@ -1711,7 +1826,7 @@ function createToolNotEnabledRecoverableResult(input: {
 
 const REPORT_INVENTORY_ALREADY_PROVIDED_CODE = "REPORT_INVENTORY_ALREADY_PROVIDED";
 const REPORT_INVENTORY_ALREADY_PROVIDED_MESSAGE =
-  "报告清单已提供；请直接根据清单判断已有报告和待创建报告，不要调用 glob、ls 或 bash 查找报告是否存在。";
+  "报告清单已提供；请直接根据清单判断已有报告和待创建报告，不要再调用目录或 shell 类工具查找报告是否存在。";
 
 export function interceptReportDiscoveryToolCall(input: {
   args: unknown;
@@ -1860,6 +1975,7 @@ function normalizeReportDiscoveryComparablePath(value: string): string {
 }
 
 async function createExistingReportWriteRecoverableResult(input: {
+  queriedReportFieldKeys: ReadonlySet<string>;
   queriedReportFileNames: ReadonlySet<string>;
   reportsRoot: string;
   secrets: readonly string[];
@@ -1880,23 +1996,32 @@ async function createExistingReportWriteRecoverableResult(input: {
     return undefined;
   }
 
+  if (input.toolCall.name === UPSERT_REPORT_SECTION_TOOL_NAME) {
+    const missingFieldKeys = collectUpsertReportFieldKeys(input.toolCall.arguments).filter(
+      (fieldKey) => !input.queriedReportFieldKeys.has(fieldKey)
+    );
+    if (missingFieldKeys.length > 0) {
+      return {
+        error: {
+          code: "INVALID_ARGUMENTS",
+          message: redactSecrets(UPSERT_EXISTING_REPORT_MESSAGE, input.secrets)
+        },
+        missingFields: missingFieldKeys.map((fieldKey) => redactSecrets(describeReportFieldKey(fieldKey), input.secrets)),
+        path: redactSecrets(pathArgument, input.secrets)
+      };
+    }
+
+    return undefined;
+  }
+
   if (!input.queriedReportFileNames.has(pathArgument) && !input.writtenReportFileNames.has(pathArgument)) {
     return {
       error: {
         code: "INVALID_ARGUMENTS",
-        message: redactSecrets(
-          input.toolCall.name === UPSERT_REPORT_SECTION_TOOL_NAME
-            ? UPSERT_EXISTING_REPORT_MESSAGE
-            : WRITE_FILE_EXISTING_REPORT_MESSAGE,
-          input.secrets
-        )
+        message: redactSecrets(WRITE_FILE_EXISTING_REPORT_MESSAGE, input.secrets)
       },
       path: redactSecrets(pathArgument, input.secrets)
     };
-  }
-
-  if (input.toolCall.name === UPSERT_REPORT_SECTION_TOOL_NAME) {
-    return undefined;
   }
 
   const writeContent = getWriteFileContentArgument(input.toolCall.arguments);
@@ -2071,7 +2196,7 @@ function createBatchOutcomeCorrectionMessage(tracker: BatchOutcomeTracker): stri
   return [
     `上一轮尚未为本批次所有选中模板提供处理结果，缺少 outputFileName：${missingOutputs}。`,
     "下一轮只处理上述缺失 outputFileName；已完成处理结果的输出文件不要继续读取、编辑或重写。",
-    "请对每个缺失 outputFileName 优先调用 upsert_report_section 或必要时调用 write_file/edit_file/multi_edit 写入正式报告，或调用 mark_no_update 标记本窗口无新增信息。",
+    "请对每个缺失 outputFileName 调用 write_file/edit_file/multi_edit 写入正式报告，或调用 mark_no_update 标记本窗口无新增信息。",
     "如果缺失模板没有当前窗口明确证据，立即调用 mark_no_update；不要为了无新增模板继续查询或修改其他报告。",
     "如果本批所有模板都没有可写入的新信息，最终文本必须严格返回 NO_UPDATE。"
   ].join("\n");
@@ -2099,6 +2224,10 @@ function replaceBatchOutcomeCorrectionMessage(
 }
 
 export function createWindowRunService(options: WindowRunServiceOptions): WindowRunService {
+  const enabledToolNames = options.enabledToolNames ?? DEFAULT_ENABLED_TOOL_NAMES;
+  const enabledToolNameSet = new Set<string>(enabledToolNames);
+  const toolSchemas = getEnabledTools([...enabledToolNames]).map(toLlmToolSchema);
+
   const llmCredentialStore: LlmCredentialStore = {
     async resolveApiKey(ref) {
       return options.credentialStore.readApiKey(ref) ?? null;
@@ -2179,6 +2308,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
       templates: input.artifacts.templates
     });
     const templatePromptProfiles = buildTemplatePromptProfiles(input.artifacts.templates);
+    const queriedReportFieldKeys = new Set<string>();
     const queriedReportFileNames = new Set<string>();
     const writtenReportFileNames = new Set<string>();
     const bashJobManager = new BashJobManager();
@@ -2308,7 +2438,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
               批次: `${input.batchIndex + 1}/${input.batchTotal}`,
               轮次: currentRoundIndex,
               messages,
-              tools: TOOL_SCHEMAS
+              tools: toolSchemas
             },
             windowFileName: input.manifestWindow.fileName,
             windowText: input.windowText
@@ -2318,15 +2448,15 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
           providerId: input.providerId,
           modelId: input.modelId,
           messages,
-          tools: TOOL_SCHEMAS
+          tools: toolSchemas
         });
         const usageDelta = mapUsage(completion.normalizedUsage);
         usage = addUsage(usage, usageDelta);
 
         await options.taskLogger?.append(["大模型返回"], {
           轮次: currentRoundIndex,
-          正文: completion.content,
-          工具调用: completion.toolCalls,
+          正文: redactSecrets(completion.content, secrets),
+          工具调用: redactJsonValue(completion.toolCalls, secrets),
           Token使用: usageDelta
         });
 
@@ -2424,10 +2554,11 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             轮次: currentRoundIndex,
             工具调用ID: toolCall.id,
             模型原始输入: toolCall.replayArguments,
-            实际执行输入: toolCall.executionArguments
+            实际执行输入: redactJsonValue(toolCall.executionArguments, secrets)
           });
 
           const toolNotEnabledRecoverableToolResult = createToolNotEnabledRecoverableResult({
+            enabledToolNameSet,
             secrets,
             toolCall
           });
@@ -2444,6 +2575,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             await validateToolCallBeforeExecution({
               allowedOutputFileNames,
               artifacts: input.artifacts,
+              enabledToolNameSet,
               queriedReportFileNames,
               reportsRoot,
               secrets,
@@ -2479,6 +2611,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
               toolCall
             })) ??
             (await createExistingReportWriteRecoverableResult({
+              queriedReportFieldKeys,
               queriedReportFileNames,
               reportsRoot,
               secrets,
@@ -2605,7 +2738,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
           await options.taskLogger?.append(["工具返回", toolCall.name], {
             轮次: currentRoundIndex,
             工具调用ID: toolCall.id,
-            实际执行输入: toolCall.executionArguments,
+            实际执行输入: redactJsonValue(toolCall.executionArguments, secrets),
             是否可恢复错误: returnedRecoverableToolError,
             ...toToolLoopRoundReasonLogFields(toolLoopRoundReason),
             返回内容: toolResult
@@ -2614,6 +2747,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             recordReportQuery({
               allowedOutputFileNames,
               artifacts: input.artifacts,
+              queriedReportFieldKeys,
               queriedReportFileNames,
               toolCall,
               toolResult

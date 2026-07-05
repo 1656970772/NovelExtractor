@@ -167,6 +167,23 @@ describe("builtin file tools", () => {
     expect(fs.existsSync(path.join(outsideReportsRoot, "逃逸.md"))).toBe(false);
   });
 
+  it("rejects read_report_excerpt when reports root resolves outside project root", async () => {
+    const context = makeContext();
+    const outsideReportsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "novel-tools-outside-read-reports-"));
+    fs.writeFileSync(path.join(outsideReportsRoot, "NPC性格与代表事件.md"), "### 韩立\n- 核心性格：外部内容\n", "utf8");
+
+    await expect(
+      executeBuiltinFileTool(
+        "read_report_excerpt",
+        { outputFileName: "NPC性格与代表事件.md", queries: [{ cardName: "韩立", fields: ["核心性格"] }] },
+        { ...context, reportsRoot: outsideReportsRoot, allowedReportFileNames: ["NPC性格与代表事件.md"] }
+      )
+    ).rejects.toMatchObject({
+      name: "ToolExecutionError",
+      code: "UNSAFE_PATH"
+    });
+  });
+
   it("rejects grep files larger than maxReadBytes", async () => {
     const context = makeContext();
     fs.writeFileSync(path.join(context.projectRoot, "chapters", "大文件.txt"), "0123456789", "utf8");
@@ -203,64 +220,36 @@ describe("builtin file tools", () => {
     );
   });
 
-  it("reads only relevant report excerpts by outputFileName and keywords", async () => {
+  it("read_report_excerpt returns selected card field blocks by structured coordinates", async () => {
     const context = makeContext();
     fs.writeFileSync(
-      path.join(context.reportsRoot, "材料分析.md"),
-      [
-        "# 材料分析",
-        "",
-        "## 无关旧段落",
-        "整份报告中无关的大段正文。",
-        "",
-        "## 法器",
-        "青竹蜂云剑是旧报告中的法器线索。",
-        "需要保留这个相关段落。"
-      ].join("\n"),
+      path.join(context.reportsRoot, "NPC性格与代表事件.md"),
+      ["### 韩立", "- 角色定位：主角", "- 核心性格：谨慎", "  - 证据：先观察", "- 代表行为：缩到车厢边角"].join("\n"),
       "utf8"
     );
 
     const result = await executeBuiltinFileTool(
       "read_report_excerpt",
-      { outputFileName: "材料分析.md", keywords: ["青竹蜂云剑"], maxChars: 500 },
-      { ...context, allowedReportFileNames: ["材料分析.md"] }
+      { outputFileName: "NPC性格与代表事件.md", queries: [{ cardName: "韩立", fields: ["核心性格", "代表行为"] }] },
+      { ...context, allowedReportFileNames: ["NPC性格与代表事件.md"] }
     );
 
-    expect(result).toContain("\"found\":true");
-    expect(result).toContain("青竹蜂云剑");
-    expect(result).toContain("## 法器");
-    expect(result).not.toContain("整份报告中无关的大段正文");
+    const parsed = JSON.parse(result);
+    expect(parsed.cards[0].fields[0]).toMatchObject({ fieldName: "核心性格", found: true });
+    expect(parsed.cards[0].fields[0].content).toContain("证据：先观察");
+    expect(parsed.cards[0].fields[0].content).not.toContain("- 代表行为：");
   });
 
-  it("returns sectionId in read_report_excerpt output for a matched duplicate heading section", async () => {
+  it("read_report_excerpt returns found=false for missing reports and fields", async () => {
     const context = makeContext();
-    fs.writeFileSync(
-      path.join(context.reportsRoot, "材料分析.md"),
-      ["# 材料分析", "", "## 法器", "青竹蜂云剑 A", "", "## 法器", "青竹蜂云剑 B"].join("\n"),
-      "utf8"
-    );
 
     const result = await executeBuiltinFileTool(
       "read_report_excerpt",
-      { outputFileName: "材料分析.md", keywords: ["青竹蜂云剑 B"], maxChars: 500 },
-      { ...context, allowedReportFileNames: ["材料分析.md"] }
+      { outputFileName: "NPC性格与代表事件.md", queries: [{ cardName: "韩立", fields: ["核心性格"] }] },
+      { ...context, allowedReportFileNames: ["NPC性格与代表事件.md"] }
     );
 
-    expect(result).toContain("\"sectionId\":\"材料分析/法器#2\"");
-    expect(result).toContain("青竹蜂云剑 B");
-    expect(result).not.toContain("青竹蜂云剑 A");
-  });
-
-  it("returns append_to_end without range reads when report keywords are not found", async () => {
-    const context = makeContext();
-
-    await expect(
-      executeBuiltinFileTool(
-        "read_report_excerpt",
-        { outputFileName: "丹药分析.md", keywords: ["青竹蜂云剑"] },
-        { ...context, allowedReportFileNames: ["丹药分析.md"] }
-      )
-    ).resolves.toContain("\"recommendedWriteMode\":\"append_to_end\"");
+    expect(JSON.parse(result).cards[0]).toMatchObject({ cardName: "韩立", found: false });
   });
 
   it("rejects read_report_excerpt for unselected or unsafe report names", async () => {
@@ -269,13 +258,17 @@ describe("builtin file tools", () => {
     await expect(
       executeBuiltinFileTool(
         "read_report_excerpt",
-        { outputFileName: "其他.md", keywords: ["凝气丹"] },
+        { outputFileName: "其他.md", queries: [{ cardName: "韩立", fields: ["核心性格"] }] },
         { ...context, allowedReportFileNames: ["丹药分析.md"] }
       )
     ).rejects.toMatchObject({ code: "UNSAFE_PATH" });
 
     await expect(
-      executeBuiltinFileTool("read_report_excerpt", { outputFileName: "../丹药分析.md", keywords: ["凝气丹"] }, context)
+      executeBuiltinFileTool(
+        "read_report_excerpt",
+        { outputFileName: "../丹药分析.md", queries: [{ cardName: "韩立", fields: ["核心性格"] }] },
+        context
+      )
     ).rejects.toMatchObject({ code: "UNSAFE_PATH" });
   });
 
@@ -287,7 +280,7 @@ describe("builtin file tools", () => {
         "read_report_excerpt",
         {
           outputFileName: "丹药分析.md",
-          keywords: ["凝气丹"],
+          queries: [{ cardName: "韩立", fields: ["核心性格"] }],
           path: "../outside.md"
         },
         context
@@ -295,51 +288,49 @@ describe("builtin file tools", () => {
     ).rejects.toMatchObject({ code: "INVALID_ARGUMENTS" });
   });
 
-  it("reads the report file at most once when read_report_excerpt finds a keyword", async () => {
+  it("reads the report file at most once when read_report_excerpt returns field blocks", async () => {
     const context = makeContext();
     fs.writeFileSync(
-      path.join(context.reportsRoot, "材料分析.md"),
-      [
-        "# 材料分析",
-        "",
-        "## 法器",
-        "青竹蜂云剑是旧报告中的法器线索。",
-        "需要保留这个相关段落。"
-      ].join("\n"),
+      path.join(context.reportsRoot, "NPC性格与代表事件.md"),
+      ["### 韩立", "- 核心性格：谨慎"].join("\n"),
       "utf8"
     );
     await executeBuiltinFileTool(
       "read_report_excerpt",
-      { outputFileName: "材料分析.md", keywords: ["青竹蜂云剑"], maxChars: 500 },
-      { ...context, allowedReportFileNames: ["材料分析.md"] }
+      { outputFileName: "NPC性格与代表事件.md", queries: [{ cardName: "韩立", fields: ["核心性格"] }] },
+      { ...context, allowedReportFileNames: ["NPC性格与代表事件.md"] }
     );
 
-    const reportReadCount = readFileMock.mock.calls.filter(([filePath]) => path.normalize(String(filePath)) === path.join(context.reportsRoot, "材料分析.md")).length;
+    const reportReadCount = readFileMock.mock.calls.filter(([filePath]) => path.normalize(String(filePath)) === path.join(context.reportsRoot, "NPC性格与代表事件.md")).length;
     expect(reportReadCount).toBeLessThanOrEqual(1);
   });
 
-  it("upserts a report section by outputFileName and section id", async () => {
+  it("upsert_report_section replaces selected field blocks without old_string", async () => {
     const context = makeContext();
-    fs.writeFileSync(path.join(context.reportsRoot, "材料分析.md"), "# 材料分析\n\n## 法器\n旧内容\n", "utf8");
+    fs.writeFileSync(path.join(context.reportsRoot, "NPC性格与代表事件.md"), "### 韩立\n- 核心性格：谨慎\n- 代表行为：旧行为\n", "utf8");
 
     const result = await executeBuiltinFileTool(
       "upsert_report_section",
       {
-        outputFileName: "材料分析.md",
-        sectionId: "材料分析/法器",
-        writeMode: "replace_section",
-        content: "新内容"
+        outputFileName: "NPC性格与代表事件.md",
+        updates: [
+          {
+            cardName: "韩立",
+            fieldName: "核心性格",
+            content: "- 核心性格：谨慎、隐忍\n  - 证据：当前窗口"
+          }
+        ]
       },
-      { ...context, allowedReportFileNames: ["材料分析.md"] }
+      { ...context, allowedReportFileNames: ["NPC性格与代表事件.md"] }
     );
 
-    expect(result).toContain("upserted report section");
-    expect(fs.readFileSync(path.join(context.reportsRoot, "材料分析.md"), "utf8")).toBe(
-      "# 材料分析\n\n## 法器\n新内容\n"
+    expect(result).toContain("updated report fields 韩立/核心性格 in NPC性格与代表事件.md");
+    expect(fs.readFileSync(path.join(context.reportsRoot, "NPC性格与代表事件.md"), "utf8")).toBe(
+      "### 韩立\n- 核心性格：谨慎、隐忍\n  - 证据：当前窗口\n- 代表行为：旧行为\n"
     );
   });
 
-  it("includes sectionId in SECTION_NOT_FOUND errors for upsert_report_section", async () => {
+  it("includes field coordinate in FIELD_NOT_FOUND errors for upsert_report_section", async () => {
     const context = makeContext();
 
     await expect(
@@ -347,15 +338,13 @@ describe("builtin file tools", () => {
         "upsert_report_section",
         {
           outputFileName: "丹药分析.md",
-          sectionId: "丹药分析/不存在",
-          writeMode: "replace_section",
-          content: "新内容"
+          updates: [{ cardName: "韩立", fieldName: "核心性格", content: "- 核心性格：新内容" }]
         },
         { ...context, allowedReportFileNames: ["丹药分析.md"] }
       )
     ).rejects.toMatchObject({
-      code: "SECTION_NOT_FOUND",
-      message: expect.stringContaining("sectionId=丹药分析/不存在")
+      code: "CARD_NOT_FOUND",
+      message: expect.stringContaining("韩立")
     });
   });
 
@@ -369,8 +358,7 @@ describe("builtin file tools", () => {
         "upsert_report_section",
         {
           outputFileName: "新报告.md",
-          writeMode: "append_to_end",
-          content: "# 新报告\n\n内容"
+          updates: [{ cardName: "韩立", fieldName: "核心性格", content: "- 核心性格：新" }]
         },
         { ...context, reportsRoot: outsideReportsRoot, allowedReportFileNames: ["新报告.md"] }
       )
@@ -393,8 +381,7 @@ describe("builtin file tools", () => {
         "upsert_report_section",
         {
           outputFileName: "新报告.md",
-          writeMode: "append_to_end",
-          content: "# 新报告\n\n内容"
+          updates: [{ cardName: "韩立", fieldName: "核心性格", content: "- 核心性格：新" }]
         },
         { ...context, reportsRoot: linkedReportsRoot, allowedReportFileNames: ["新报告.md"] }
       )
@@ -413,16 +400,14 @@ describe("builtin file tools", () => {
         "upsert_report_section",
         {
           outputFileName: "丹药分析.md",
-          sectionId: "丹药分析",
-          writeMode: "replace_section",
-          content: "新内容",
+          updates: [{ cardName: "韩立", fieldName: "核心性格", content: "- 核心性格：新" }],
           old_string: "旧内容"
         },
         { ...context, allowedReportFileNames: ["丹药分析.md"] }
       )
     ).rejects.toMatchObject({
       code: "INVALID_ARGUMENTS",
-      message: expect.stringMatching(/section id|writeMode/u)
+      message: expect.stringContaining("字段级更新不接受 old_string/sectionId/writeMode")
     });
 
     await expect(
@@ -430,9 +415,7 @@ describe("builtin file tools", () => {
         "upsert_report_section",
         {
           outputFileName: "丹药分析.md",
-          sectionId: "丹药分析",
-          writeMode: "replace_section",
-          content: "新内容",
+          updates: [{ cardName: "韩立", fieldName: "核心性格", content: "- 核心性格：新" }],
           unsupported: true
         },
         { ...context, allowedReportFileNames: ["丹药分析.md"] }
@@ -444,9 +427,7 @@ describe("builtin file tools", () => {
         "upsert_report_section",
         {
           outputFileName: "其他.md",
-          sectionId: "其他",
-          writeMode: "replace_section",
-          content: "新内容"
+          updates: [{ cardName: "韩立", fieldName: "核心性格", content: "- 核心性格：新" }]
         },
         { ...context, allowedReportFileNames: ["丹药分析.md"] }
       )
@@ -455,28 +436,24 @@ describe("builtin file tools", () => {
 
   it("re-reads the latest report content for consecutive upsert_report_section calls", async () => {
     const context = makeContext();
-    const reportPath = path.join(context.reportsRoot, "材料分析.md");
-    fs.writeFileSync(reportPath, "# 材料分析\n\n## 法器\n旧内容\n", "utf8");
+    const reportPath = path.join(context.reportsRoot, "NPC性格与代表事件.md");
+    fs.writeFileSync(reportPath, "### 韩立\n- 核心性格：旧性格\n- 代表行为：旧行为\n", "utf8");
 
     await executeBuiltinFileTool(
       "upsert_report_section",
       {
-        outputFileName: "材料分析.md",
-        sectionId: "材料分析/法器",
-        writeMode: "append_to_section",
-        content: "批次 A 内容"
+        outputFileName: "NPC性格与代表事件.md",
+        updates: [{ cardName: "韩立", fieldName: "核心性格", content: "- 核心性格：批次 A 内容" }]
       },
-      { ...context, allowedReportFileNames: ["材料分析.md"] }
+      { ...context, allowedReportFileNames: ["NPC性格与代表事件.md"] }
     );
     await executeBuiltinFileTool(
       "upsert_report_section",
       {
-        outputFileName: "材料分析.md",
-        sectionId: "材料分析/法器",
-        writeMode: "append_to_section",
-        content: "批次 B 内容"
+        outputFileName: "NPC性格与代表事件.md",
+        updates: [{ cardName: "韩立", fieldName: "代表行为", content: "- 代表行为：批次 B 内容" }]
       },
-      { ...context, allowedReportFileNames: ["材料分析.md"] }
+      { ...context, allowedReportFileNames: ["NPC性格与代表事件.md"] }
     );
 
     const finalReport = fs.readFileSync(reportPath, "utf8");

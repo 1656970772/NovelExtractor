@@ -24,7 +24,7 @@ export type RecoverableToolErrorReason =
 
 export type ToolLoopRoundReason =
   | "report_discovery_rejected"
-  | "old_report_relevant_sections_needed"
+  | "old_report_field_blocks_needed"
   | "edit_anchor_failed"
   | "tool_arguments_invalid"
   | "missing_template_outcome"
@@ -48,7 +48,7 @@ export interface ToolErrorClassification {
 
 export const TOOL_LOOP_ROUND_REASON_LABELS: Record<ToolLoopRoundReason, string> = {
   report_discovery_rejected: "报告查找方式被拒绝",
-  old_report_relevant_sections_needed: "旧报告需要相关段落",
+  old_report_field_blocks_needed: "旧报告需要字段块",
   edit_anchor_failed: "报告锚点未命中",
   tool_arguments_invalid: "工具参数或路径无效",
   missing_template_outcome: "缺失模板处理结果",
@@ -76,10 +76,17 @@ const GREP_BUDGET_ERROR_MESSAGES = new Set([
 const TOOL_SCHEMA_STRING_ARGUMENT_ERROR_MESSAGES = new Set([
   "path must be a string",
   "content must be a string",
+  "outputFileName must be a string",
   "pattern must be a string",
   "old_string must be a string",
   "new_string must be a string",
   "reason must be a string"
+]);
+const FIELD_REPORT_ARGUMENT_ERROR_CODES = new Set([
+  "CARD_NOT_FOUND",
+  "FIELD_NOT_FOUND",
+  "FIELD_AMBIGUOUS",
+  "INVALID_FIELD_CONTENT"
 ]);
 
 export function classifyToolExecutionError(input: {
@@ -165,7 +172,7 @@ export function classifyToolExecutionError(input: {
     return recoverable("tool_invalid_arguments", hints);
   }
 
-  if (error.code === "SECTION_NOT_FOUND") {
+  if (FIELD_REPORT_ARGUMENT_ERROR_CODES.has(error.code)) {
     return recoverable("tool_invalid_arguments", hints);
   }
 
@@ -235,7 +242,7 @@ export function classifyToolLoopRoundReason(input: {
     isOldReportRelevantSectionError(input.error) &&
     isAllowedOutputTarget(input.executionArguments, input.allowedOutputFileNames)
   ) {
-    return "old_report_relevant_sections_needed";
+    return "old_report_field_blocks_needed";
   }
 
   if (
@@ -304,11 +311,7 @@ function isReportsDirectoryTarget(target: string): boolean {
 }
 
 function isOldReportRelevantSectionError(error: ToolExecutionError | undefined): boolean {
-  return (
-    error !== undefined &&
-    (GREP_BUDGET_ERROR_MESSAGES.has(error.message) ||
-      (error.message.includes("read_report_excerpt") && error.message.includes("关键词检索相关段落")))
-  );
+  return error !== undefined && GREP_BUDGET_ERROR_MESSAGES.has(error.message);
 }
 
 function recoverable(
@@ -379,7 +382,17 @@ function isRecoverableSchemaInvalidArguments(error: ToolExecutionError): boolean
     error.message === "edits must not be empty" ||
     error.message === TOOL_ARGUMENTS_MUST_BE_OBJECT_MESSAGE ||
     TOOL_SCHEMA_STRING_ARGUMENT_ERROR_MESSAGES.has(error.message) ||
+    isFieldReportSchemaInvalidArgumentsMessage(error.message) ||
     error.message.startsWith(UNEXPECTED_TOOL_ARGUMENT_MESSAGE_PREFIX)
+  );
+}
+
+function isFieldReportSchemaInvalidArgumentsMessage(message: string): boolean {
+  return (
+    message.startsWith("queries ") ||
+    message.startsWith("updates ") ||
+    message === "maxChars must be a number" ||
+    message.startsWith("字段级更新不接受 ")
   );
 }
 
