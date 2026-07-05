@@ -11,7 +11,7 @@ if (!appCssPath) {
   throw new Error("Cannot find desktop app.css");
 }
 
-const appCss = readFileSync(appCssPath, "utf8");
+const appCss = readFileSync(appCssPath, "utf8").replace(/\r\n/g, "\n");
 
 function getRuleBody(selector: string): string {
   const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
