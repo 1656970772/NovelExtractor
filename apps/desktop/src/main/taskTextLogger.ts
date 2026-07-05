@@ -37,6 +37,12 @@ export interface SerializeModelRequestForTaskLogInput {
   windowText: string;
 }
 
+export interface ReplaceWindowTextReferencesForTaskLogInput {
+  value: unknown;
+  windowFileName: string;
+  windowText: string;
+}
+
 const systemClock: Pick<Clock, "now"> = {
   now: () => new Date().toISOString()
 };
@@ -141,6 +147,13 @@ export function serializeModelRequestForTaskLog(input: SerializeModelRequestForT
   };
 }
 
+export function replaceWindowTextReferencesForTaskLog(input: ReplaceWindowTextReferencesForTaskLogInput): unknown {
+  return replaceWindowTextReferencesInValue(input.value, {
+    windowFileName: input.windowFileName,
+    windowText: input.windowText
+  });
+}
+
 function serializeMessagesForTaskLog(input: {
   messages: readonly ChatCompletionMessage[];
   windowFileName: string;
@@ -166,12 +179,82 @@ function serializeMessagesForTaskLog(input: {
   });
 }
 
+function replaceWindowTextReferencesInValue(
+  value: unknown,
+  input: { windowFileName: string; windowText: string }
+): unknown {
+  if (typeof value === "string") {
+    return replaceWindowTextForLog(value, input.windowText, input.windowFileName);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => replaceWindowTextReferencesInValue(item, input));
+  }
+
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, replaceWindowTextReferencesInValue(item, input)])
+    );
+  }
+
+  return value;
+}
+
 function replaceWindowTextForLog(content: string, windowText: string, windowFileName: string): string {
-  if (windowText === "" || !content.includes(windowText)) {
+  const reference = `[窗口原文见 ${windowFileName}]`;
+  const candidates = windowTextReferenceCandidates(windowText);
+  if (candidates.length === 0) {
     return content;
   }
 
-  return content.split(windowText).join(`[窗口原文见 ${windowFileName}]`);
+  let output = content;
+  for (const candidate of candidates) {
+    output = output.split(candidate).join(reference);
+  }
+
+  const readFilePlainText = parseFullReadFileWindowText(output);
+  if (
+    readFilePlainText !== undefined &&
+    candidates.some((candidate) => comparableWindowText(candidate) === comparableWindowText(readFilePlainText))
+  ) {
+    return reference;
+  }
+
+  return output;
+}
+
+function windowTextReferenceCandidates(windowText: string): string[] {
+  const normalized = normalizeLineEndings(windowText);
+  return [...new Set([normalized, normalized.trimEnd(), normalized.trim()])].filter((candidate) => candidate !== "");
+}
+
+function normalizeLineEndings(value: string): string {
+  return value.replace(/\r\n/gu, "\n").replace(/\r/gu, "\n");
+}
+
+function comparableWindowText(value: string): string {
+  return normalizeLineEndings(value).trimEnd();
+}
+
+function parseFullReadFileWindowText(content: string): string | undefined {
+  const lines = normalizeLineEndings(content).split("\n");
+  while (lines.at(-1) === "") {
+    lines.pop();
+  }
+  if (lines.length === 0 || lines.some((line) => line.startsWith("[more lines below;"))) {
+    return undefined;
+  }
+
+  const textLines: string[] = [];
+  for (const line of lines) {
+    const match = /^\s*\d+→(.*)$/u.exec(line);
+    if (!match) {
+      return undefined;
+    }
+    textLines.push(match[1] ?? "");
+  }
+
+  return textLines.join("\n");
 }
 
 function serializeToolsForTaskLog(tools: readonly ToolSchema[]): Array<{

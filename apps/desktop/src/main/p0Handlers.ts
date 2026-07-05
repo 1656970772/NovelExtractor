@@ -1380,12 +1380,15 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     const taskLogger = await createTaskLoggerForJob(job);
     const initialRunJob = withRunOptions(job, runOptions);
     const initialTotalWindowCount = estimateRuntimeWindowCount(requireBook(job.bookId), initialRunJob.input);
+    const shouldRestartFromScratch = runOptions?.skipAlreadyExtracted === false;
+    const shouldStartNewVisibleTimer =
+      shouldRestartFromScratch || job.status === "paused" || job.status === "failed";
     const runningStartedAt =
-      runOptions?.skipAlreadyExtracted === false
+      shouldStartNewVisibleTimer
         ? clock.now()
         : (job.timing?.startedAt ?? clock.now());
     const initialWindowEstimateMs =
-      runOptions?.skipAlreadyExtracted === false
+      shouldRestartFromScratch
         ? createInitialWindowEstimateMs()
         : (job.timing?.initialWindowEstimateMs ?? createInitialWindowEstimateMs());
     let runningJob = await updateJob(job, {

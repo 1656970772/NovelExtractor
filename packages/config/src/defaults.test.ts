@@ -59,9 +59,9 @@ describe("default config", () => {
   it("forbids using whole-book or future-chapter prior knowledge in extraction rules", () => {
     const config = getDefaultConfig();
     const antiPriorKnowledgeRule =
-      "禁止使用模型对作品全书、后续章节、未读窗口或常识剧情的先验知识；只能写当前窗口文本明示或当前已有报告已证实的事实；涉及未来真相、真实身份、夺舍、寿元、后续影响等当前窗口未说明内容，必须写原文未说明或不写。";
+      "禁止使用作品全书、后续章节、未读窗口或常识先验补写信息；只能写当前窗口文本明示或当前已有报告已证实的事实；当前未证实的内容必须写原文未说明或不写。";
     const metadataSourceRule =
-      "资料来源、参考范围、更新日期等元信息只能根据实际使用的当前窗口、已读取报告和当前运行日期填写；不得遗漏已使用窗口、不得声称未读取来源，更新日期不得晚于当前运行日期。";
+      "资料来源、参考范围、更新日期等元信息必须根据实际使用的当前窗口、已读取报告和当前运行日期填写；不得遗漏已使用窗口，更新日期不得晚于当前运行日期。";
 
     expect(config.extractionRuleDefaults.ruleSections.commonExtractionRules).toEqual(
       expect.arrayContaining([antiPriorKnowledgeRule])
@@ -72,30 +72,45 @@ describe("default config", () => {
     expect(config.extractionRuleDefaults.ruleSections.commonExtractionRules).toEqual(
       expect.arrayContaining([metadataSourceRule])
     );
-    expect(config.toolLoopDefaults.windowInstructionLines).toEqual(
-      expect.arrayContaining([metadataSourceRule])
-    );
+
+    const windowInstructions = config.toolLoopDefaults.windowInstructionLines.join("\n");
+    expect(windowInstructions).not.toContain(metadataSourceRule);
+    expect(windowInstructions).not.toContain("未来真相");
+    expect(windowInstructions).not.toContain("真实身份");
+    expect(windowInstructions).not.toContain("夺舍");
+    expect(windowInstructions).not.toContain("寿元");
   });
 
-  it("requires unnamed material resources and public source metadata in extraction prompts", () => {
+  it("keeps evidence and public source metadata rules out of window tool-loop prompts", () => {
     const config = getDefaultConfig();
-    const materialResourceRule =
-      "材料分析类或资源类模板中，未命名但能由原文稳定描述的材料、药草、药汁、药物、灵液、资源产出源也应记录，不得仅因没有专名或呈现为成品形态就直接 NO_UPDATE；特殊容器或物件若在当前窗口明示为资源产出源、材料载体或关键性质/功能载体，也应作为资源/产出源记录，未知效果或用途写原文未说明。";
+    const evidenceRule =
+      "只有当前窗口文本或已读取报告能稳定证明的条目才写入正式报告；缺少专名、用途、效果或后续结果时，写原文未说明或不写，不得把模板示例或常识推测当作事实。";
     const publicMetadataRule =
-      "正式报告的资料来源、参考范围等公开元数据只能写窗口编号、章节范围、章节名或原文范围；不得写 runs/job、assets/books、本机绝对路径、AppData 项目路径等内部运行/项目路径，也不得写后续窗口等流程性措辞。";
+      "正式报告中的资料来源、参考范围等公开元数据只能写窗口编号、章节范围、章节名或原文范围；不得暴露内部运行路径、项目路径、窗口文件名或流程性状态。";
 
     expect(config.extractionRuleDefaults.ruleSections.commonExtractionRules).toEqual(
-      expect.arrayContaining([materialResourceRule, publicMetadataRule])
+      expect.arrayContaining([evidenceRule, publicMetadataRule])
     );
-    expect(config.toolLoopDefaults.windowInstructionLines).toEqual(
-      expect.arrayContaining([materialResourceRule, publicMetadataRule])
-    );
+
+    const windowInstructions = config.toolLoopDefaults.windowInstructionLines.join("\n");
+    expect(windowInstructions).not.toContain(evidenceRule);
+    expect(windowInstructions).not.toContain(publicMetadataRule);
+    expect(windowInstructions).not.toContain("材料分析类");
+    expect(windowInstructions).not.toContain("药草");
+    expect(windowInstructions).not.toContain("药汁");
+    expect(windowInstructions).not.toContain("药物");
+    expect(windowInstructions).not.toContain("灵液");
+    expect(windowInstructions).not.toContain("资源产出源");
+    expect(windowInstructions).not.toContain("特殊容器");
+    expect(windowInstructions).not.toContain("runs/job");
+    expect(windowInstructions).not.toContain("assets/books");
+    expect(windowInstructions).not.toContain("AppData");
   });
 
   it("forbids unsupported template examples and common system terms in final reports", () => {
     const config = getDefaultConfig();
     const templateEvidenceRule =
-      "模板示例、字段说明、示例事件链和通用体系词只作为格式参考；修仙世界/修仙界、法修/武修、灵石/灵草/矿产等词不得因为出现在模板中就写入正式报告，只有当前窗口原文或已读取既有报告明确证实时才可写；长期余波、可参考点等分析字段不得用模板泛化话术推导未来影响，当前窗口未说明的后续影响必须写原文未说明或不写。";
+      "模板示例、字段说明、示例事件链和通用术语只作为格式参考；只有当前窗口原文或已读取既有报告明确证实时才可写入正式报告，未证实的分析结论必须写原文未说明或不写。";
 
     expect(config.extractionRuleDefaults.ruleSections.commonExtractionRules).toEqual(
       expect.arrayContaining([templateEvidenceRule])
@@ -103,6 +118,27 @@ describe("default config", () => {
     expect(config.toolLoopDefaults.windowInstructionLines).toEqual(
       expect.arrayContaining([templateEvidenceRule])
     );
+
+    const windowInstructions = config.toolLoopDefaults.windowInstructionLines.join("\n");
+    expect(windowInstructions).not.toContain("修仙世界");
+    expect(windowInstructions).not.toContain("修仙界");
+    expect(windowInstructions).not.toContain("法修");
+    expect(windowInstructions).not.toContain("武修");
+    expect(windowInstructions).not.toContain("灵石");
+    expect(windowInstructions).not.toContain("灵草");
+    expect(windowInstructions).not.toContain("矿产");
+    expect(windowInstructions).not.toContain("长期余波、可参考点");
+  });
+
+  it("requires card-style report body structure in window tool-loop prompts", () => {
+    const windowInstructions = getDefaultConfig().toolLoopDefaults.windowInstructionLines.join("\n");
+
+    expect(windowInstructions).not.toContain("本阶段不做模板路由：当前请求只处理本批次列出的选中模板。");
+    expect(windowInstructions).not.toContain("正式报告不得复制模板标题、状态：模板、前置声明、参考范围、示例或占位案例。");
+    expect(windowInstructions).toContain("正式报告正文必须按模板案例的卡片样式组织");
+    expect(windowInstructions).toContain("### 卡片名");
+    expect(windowInstructions).toContain("- 字段名：内容说明");
+    expect(windowInstructions).toContain("不要写成无卡片或无字段名的连续正文");
   });
 
   it("provides raw window report naming defaults", () => {

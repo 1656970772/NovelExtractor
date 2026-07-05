@@ -1319,6 +1319,95 @@ describe("P0 desktop IPC handlers", () => {
     }
   });
 
+  it("starts the visible elapsed timer from resume time after a failed persisted job", async () => {
+    const resumeStartedAt = "2026-07-02T12:00:00.000Z";
+    let now = "2026-07-02T10:00:00.000Z";
+    const updatedJobs: JobDto[] = [];
+    const mockServer = await startMockOpenAiServer({
+      expectedApiKey: "sk-resume-timer",
+      respond: () => ({
+        body: createChatCompletionResponse({
+          content: "NO_UPDATE"
+        })
+      })
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-resume-timer");
+    const providerStore = createProviderStore(
+      createProviderConfig({
+        apiKeyRef,
+        baseUrl: mockServer.baseUrl
+      })
+    );
+    const clock = { now: () => now };
+    const handlers = createHandlers({ credentialStore, providerStore, clock });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: utf8FixturePath,
+        displayName: "凡人修仙传.txt"
+      });
+      const job = requireJobDto(
+        await contract.invoke(handlers, "jobs:create", {
+          bookId: book.bookId,
+          templateIds: ["pill-analysis"],
+          providerConfigId: "provider-1",
+          modelId: "mock-model",
+          singleRunChapterCount: 2,
+          extractionChapterCount: 2,
+          overlapChapterCount: 1,
+          skipAlreadyExtracted: true
+        })
+      );
+      const runtimePath = path.join(tempRoot, "projects", "project-a", "state", "project-runtime.json");
+      const rawRuntime = JSON.parse(await fs.readFile(runtimePath, "utf8")) as {
+        jobs: ProjectRuntimeJobRecord[];
+      };
+      rawRuntime.jobs = rawRuntime.jobs.map((storedJob) =>
+        storedJob.id === job.id
+          ? {
+              ...storedJob,
+              status: "failed",
+              progressText: "任务失败",
+              failureReason: "mock failure",
+              progress: {
+                completedWindowCount: 0,
+                totalWindowCount: 1
+              },
+              timing: {
+                startedAt: "2026-07-02T10:00:00.000Z",
+                completedAt: "2026-07-02T10:05:00.000Z",
+                estimatedTotalMs: 300000
+              }
+            }
+          : storedJob
+      );
+      await fs.writeFile(runtimePath, `${JSON.stringify(rawRuntime, null, 2)}\n`, "utf8");
+
+      now = resumeStartedAt;
+      const restartedHandlers = createHandlers({
+        credentialStore,
+        providerStore,
+        clock,
+        onJobUpdated: (updatedJob: JobDto) => updatedJobs.push(updatedJob)
+      });
+      await contract.invoke(restartedHandlers, "projectRuntime:get", {
+        projectId: "project-a"
+      });
+
+      await contract.invoke(restartedHandlers, "jobs:resume", { jobId: job.id });
+
+      const runningJob = updatedJobs.find((updatedJob) => updatedJob.status === "running");
+      expect(runningJob?.timing).toMatchObject({
+        startedAt: resumeStartedAt,
+        elapsedMs: 0
+      });
+    } finally {
+      await mockServer.close();
+    }
+  });
+
   it("reports unknown estimate state for failed jobs with stale remaining estimates", async () => {
     const contract = createIpcContract();
     const handlers = createHandlers();
@@ -1867,7 +1956,10 @@ describe("P0 desktop IPC handlers", () => {
 
       expect(firstSystemPrompt).toContain("你是小说资料抽取助手");
       expect(firstSystemPrompt).toContain("## 窗口处理规则");
-      expect(firstSystemPrompt).toContain("本阶段不做模板路由");
+      expect(firstSystemPrompt).not.toContain("本阶段不做模板路由");
+      expect(firstSystemPrompt).toContain("正式报告正文必须按模板案例的卡片样式组织");
+      expect(firstSystemPrompt).toContain("### 卡片名");
+      expect(firstSystemPrompt).toContain("- 字段名：内容说明");
       expect(firstUserPrompt).toContain("## 选中模板 Prompt Profile");
       expect(firstUserPrompt).toContain("## 当前窗口文本");
       expect(firstUserPrompt).not.toContain("本阶段不做模板路由");
@@ -1882,13 +1974,14 @@ describe("P0 desktop IPC handlers", () => {
       expect(editFileSchema?.properties).not.toHaveProperty("newText");
       expect(JSON.stringify(multiEditSchema)).toContain("old_string");
       expect(JSON.stringify(multiEditSchema)).toContain("new_string");
-      expect(firstRequestJson).toContain(`窗口文件：${firstWindowTextPath}`);
-      expect(firstRequestJson).toContain(
-        `read_file/grep 如需读取当前窗口文件，必须使用项目相对路径 ${firstWindowTextPath}，不要使用裸文件名 window-0001.txt`
-      );
+      expect(firstRequestJson).not.toContain(`窗口文件：${firstWindowTextPath}`);
+      expect(firstRequestJson).not.toContain("read_file/grep 如需读取当前窗口文件");
+      expect(firstRequestJson).not.toContain("不要使用裸文件名 window-0001.txt");
       expect(firstRequestJson).toContain("窗口序号：1/2");
       expect(firstRequestJson).toContain("丹药分析模板");
       expect(firstRequestJson).toContain("材料分析模板");
+      expect(firstRequestJson).toContain("# 第一章 初入坊市");
+      expect(firstRequestJson).toContain("凝气丹的主材是青灵草、白玉砂和一滴寒潭水");
       expect(JSON.stringify(mockServer.requests[2].body)).toContain("窗口序号：2/2");
       expect(assistantToolCallMessage).toMatchObject({
         role: "assistant"
@@ -1903,11 +1996,10 @@ describe("P0 desktop IPC handlers", () => {
       expect(JSON.stringify(mockServer.requests[0].body)).toContain("提交章节范围：1-2");
       expect(JSON.stringify(mockServer.requests[0].body)).toContain("当前运行日期：2026-06-27");
       expect(JSON.stringify(mockServer.requests[0].body)).toContain(
-        "禁止使用模型对作品全书、后续章节、未读窗口或常识剧情的先验知识；只能写当前窗口文本明示或当前已有报告已证实的事实；涉及未来真相、真实身份、夺舍、寿元、后续影响等当前窗口未说明内容，必须写原文未说明或不写。"
+        "禁止使用作品全书、后续章节、未读窗口或常识先验补写信息；只能写当前窗口文本明示或当前已有报告已证实的事实；当前未证实的内容必须写原文未说明或不写。"
       );
-      expect(JSON.stringify(mockServer.requests[0].body)).toContain(
-        "资料来源、参考范围、更新日期等元信息只能根据实际使用的当前窗口、已读取报告和当前运行日期填写；不得遗漏已使用窗口、不得声称未读取来源，更新日期不得晚于当前运行日期。"
-      );
+      expect(JSON.stringify(mockServer.requests[0].body)).not.toContain("资料来源、参考范围、更新日期等元信息必须根据实际使用");
+      expect(JSON.stringify(mockServer.requests[0].body)).not.toContain("涉及未来真相、真实身份、夺舍、寿元");
       expect(JSON.stringify(mockServer.requests[0].body)).toContain("第一章 初入坊市");
       expect(JSON.stringify(mockServer.requests[0].body)).toContain("第二章 丹房夜火");
       expect(JSON.stringify(mockServer.requests[0].body)).not.toContain("第三章 试炼归来");
@@ -9041,11 +9133,12 @@ describe("P0 desktop IPC handlers", () => {
       const promptText = prompt as string;
 
       expect(promptText).toContain("# 人物关系模板");
-      expect(systemPromptText).toContain("状态：模板");
+      expect(systemPromptText).not.toContain("状态：模板");
       expect(systemPromptText).toContain("模板正文只作为结构、字段和写作规则参考，不是正式报告正文。");
-      expect(systemPromptText).toContain(
-        "正式报告不得复制模板标题、状态：模板、前置声明、参考范围、示例或占位案例。"
-      );
+      expect(systemPromptText).not.toContain("正式报告不得复制模板标题、状态：模板、前置声明、参考范围、示例或占位案例。");
+      expect(systemPromptText).toContain("正式报告正文必须按模板案例的卡片样式组织");
+      expect(systemPromptText).toContain("### 卡片名");
+      expect(systemPromptText).toContain("- 字段名：内容说明");
       expect(systemPromptText).toContain(
         "正式报告标题必须使用 outputFileName 去掉扩展名后的报告名，不要保留或添加“模板”。"
       );
@@ -9054,7 +9147,7 @@ describe("P0 desktop IPC handlers", () => {
     }
   });
 
-  it("includes material resource and public report metadata rules in actual tool-loop prompts", async () => {
+  it("keeps selected metadata and evidence rules out of actual tool-loop prompts", async () => {
     const mockServer = await startMockOpenAiServer();
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
@@ -9104,12 +9197,15 @@ describe("P0 desktop IPC handlers", () => {
       const systemPromptText = systemPrompt as string;
       const promptText = prompt as string;
 
-      expect(systemPromptText).toContain(
-        "未命名但能由原文稳定描述的材料、药草、药汁、药物、灵液、资源产出源也应记录"
-      );
-      expect(systemPromptText).toContain("不得仅因没有专名或呈现为成品形态就直接 NO_UPDATE");
-      expect(systemPromptText).toContain("正式报告的资料来源、参考范围等公开元数据只能写窗口编号、章节范围、章节名或原文范围");
-      expect(systemPromptText).toContain("不得写 runs/job、assets/books、本机绝对路径、AppData 项目路径等内部运行/项目路径");
+      expect(systemPromptText).not.toContain("只有当前窗口文本或已读取报告能稳定证明");
+      expect(systemPromptText).not.toContain("资料来源、参考范围、更新日期等元信息必须根据实际使用");
+      expect(systemPromptText).not.toContain("正式报告中的资料来源、参考范围等公开元数据");
+      expect(systemPromptText).not.toContain("材料分析类");
+      expect(systemPromptText).not.toContain("药草");
+      expect(systemPromptText).not.toContain("灵液");
+      expect(systemPromptText).not.toContain("runs/job");
+      expect(systemPromptText).not.toContain("assets/books");
+      expect(systemPromptText).not.toContain("AppData");
       expect(promptText).toContain("记录作品中的材料、资源与产出源。");
     } finally {
       await mockServer.close();
@@ -9173,9 +9269,13 @@ describe("P0 desktop IPC handlers", () => {
       const systemPromptText = systemPrompt as string;
       const promptText = prompt as string;
 
-      expect(systemPromptText).toContain("模板示例、字段说明、示例事件链和通用体系词只作为格式参考");
-      expect(systemPromptText).toContain("不得因为出现在模板中就写入正式报告");
-      expect(systemPromptText).toContain("长期余波、可参考点等分析字段不得用模板泛化话术推导未来影响");
+      expect(systemPromptText).toContain("模板示例、字段说明、示例事件链和通用术语只作为格式参考");
+      expect(systemPromptText).toContain("只有当前窗口原文或已读取既有报告明确证实时才可写入正式报告");
+      expect(systemPromptText).toContain("未证实的分析结论必须写原文未说明或不写");
+      expect(systemPromptText).not.toContain("修仙世界");
+      expect(systemPromptText).not.toContain("法修");
+      expect(systemPromptText).not.toContain("灵石");
+      expect(systemPromptText).not.toContain("长期余波、可参考点");
       expect(promptText).toContain("**长期余波：** 示例事件链可写修仙界长期影响。");
     } finally {
       await mockServer.close();

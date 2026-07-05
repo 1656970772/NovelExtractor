@@ -422,6 +422,93 @@ describe("window run report inventory", () => {
 });
 
 describe("window run Reasonix tool loop integration", () => {
+  it("redacts full current-window read_file results from detailed logs only", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-read-log-redaction-"));
+    scratchDirs.push(projectRoot);
+    const reportsRoot = path.join(projectRoot, "assets", "books", "book-1", "reports");
+    const windowTextPath = path.join(projectRoot, "runs", "job-1", "windows", "window-0001.txt");
+    const outputFileName = "人物.md";
+    const requestBodies: Record<string, unknown>[] = [];
+    const append = vi.fn(async () => {});
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+    const providerConfig = createProviderConfig(apiKeyRef);
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requestBodies.push(body);
+
+      if (requestBodies.length === 1) {
+        return new Response(
+          JSON.stringify(createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-read-current-window", "read_file", {
+                path: "window-0001.txt"
+              })
+            ]
+          })),
+          { headers: { "Content-Type": "application/json" }, status: 200 }
+        );
+      }
+
+      if (requestBodies.length === 2) {
+        return new Response(
+          JSON.stringify(createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-mark-no-update", "mark_no_update", {
+                path: outputFileName,
+                reason: "当前窗口无新增。"
+              })
+            ]
+          })),
+          { headers: { "Content-Type": "application/json" }, status: 200 }
+        );
+      }
+
+      return new Response(
+        JSON.stringify(createChatCompletionResponse({ content: "窗口完成。" })),
+        { headers: { "Content-Type": "application/json" }, status: 200 }
+      );
+    });
+
+    await fs.mkdir(path.dirname(windowTextPath), { recursive: true });
+    await fs.mkdir(reportsRoot, { recursive: true });
+    await fs.writeFile(windowTextPath, "第一章\n\n主角整理旧资料。", "utf8");
+
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      fetch,
+      findExistingReport: () => undefined,
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeState: async () => {},
+      providerStore: createProviderStore(providerConfig),
+      registerReport: () => {},
+      taskLogger: { append, setSecrets: vi.fn() } as any
+    });
+
+    const result = await service.runJobWindows({
+      artifacts: createWindowArtifacts({
+        projectRoot,
+        templates: [createTemplate({ id: "template-1", name: "人物", fileName: outputFileName })]
+      }),
+      job: createWindowRunJob({ templateIds: ["template-1"] })
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(requestBodies).toHaveLength(3);
+    expect(JSON.stringify(requestBodies[1])).toContain("1→第一章");
+    expect(JSON.stringify(requestBodies[1])).toContain("3→主角整理旧资料。");
+
+    const detailedLogCalls = JSON.stringify(append.mock.calls);
+    expect(detailedLogCalls).toContain("[窗口原文见 window-0001.txt]");
+    expect(detailedLogCalls).not.toContain("1→第一章");
+    expect(detailedLogCalls).not.toContain("3→主角整理旧资料。");
+    expect(detailedLogCalls).not.toContain("主角整理旧资料。");
+  }, 20000);
+
   it("requires read_report_excerpt to read the same card field before field upsert on an existing report", async () => {
     const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-field-upsert-"));
     scratchDirs.push(projectRoot);

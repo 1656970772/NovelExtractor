@@ -49,7 +49,11 @@ import {
   type ReportCoverageTarget
 } from "./reportCoverageIndex";
 import { planTemplateBatches } from "./templateBatchPlanner";
-import { serializeModelRequestForTaskLog, type TaskTextLogger } from "./taskTextLogger";
+import {
+  replaceWindowTextReferencesForTaskLog,
+  serializeModelRequestForTaskLog,
+  type TaskTextLogger
+} from "./taskTextLogger";
 import {
   BASH_TOOL_SCOPE_DENIED_MESSAGE,
   classifyToolLoopRoundReason,
@@ -371,8 +375,6 @@ function buildWindowUserPrompt(input: {
     "规则与模板要求已内嵌在本请求；不要读取运行级规则快照文件。",
     `当前运行日期：${currentDate}`,
     `窗口序号：${windowNumber}/${totalWindowCount}`,
-    `窗口文件：${manifestWindow.textPath}`,
-    `read_file/grep 如需读取当前窗口文件，必须使用项目相对路径 ${manifestWindow.textPath}，不要使用裸文件名 ${manifestWindow.fileName}`,
     `上下文章节范围：${manifestWindow.contextChapterRange}`,
     `提交章节范围：${manifestWindow.submittedChapterRange}`,
     `上下文章节标题：${manifestWindow.contextChapterTitles.join("、")}`,
@@ -2741,7 +2743,11 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             实际执行输入: redactJsonValue(toolCall.executionArguments, secrets),
             是否可恢复错误: returnedRecoverableToolError,
             ...toToolLoopRoundReasonLogFields(toolLoopRoundReason),
-            返回内容: toolResult
+            返回内容: replaceWindowTextReferencesForTaskLog({
+              value: toolResult,
+              windowFileName: input.manifestWindow.fileName,
+              windowText: input.windowText
+            })
           });
           if (shouldRecordSuccessfulReportQuery({ returnedRecoverableToolError, toolCall })) {
             recordReportQuery({

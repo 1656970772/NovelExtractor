@@ -128,7 +128,7 @@ describe("task text logger", () => {
         role: "tool",
         toolCallId: "call-read-window",
         name: "read_file",
-        content: "工具返回内容保留"
+        content: "1→这里是很长很长的窗口原文。\n2→第二行仍然属于窗口原文。\n"
       }
     ];
     const tools: ToolSchema[] = [
@@ -178,7 +178,7 @@ describe("task text logger", () => {
     expect(content).toContain("[窗口原文见 window-0005.txt]");
     expect(content).toContain("模板说明保留");
     expect(content).toContain("结尾指令保留");
-    expect(content).toContain("工具返回内容保留");
+    expect(content).not.toContain("1→这里是很长很长的窗口原文");
     expect(content).not.toContain("这里是很长很长的窗口原文");
     expect(content).toContain("tools:");
     expect(content).toContain("name: read_file");
