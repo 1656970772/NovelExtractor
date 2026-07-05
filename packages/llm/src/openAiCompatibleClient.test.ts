@@ -613,6 +613,82 @@ describe("OpenAiCompatibleClient", () => {
     expect(connection).toEqual({ ok: false, error: "socket closed for Bearer sk-***" });
   });
 
+  it("retries terminated fetch failures with default retry options before returning a chat completion", async () => {
+    let attempts = 0;
+    const fetchMock = vi.fn(async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new Error("terminated");
+      }
+
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "重试后完成" } }],
+          usage: { total_tokens: 9 }
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    });
+    const client = new OpenAiCompatibleClient(
+      createProvider(),
+      { resolveApiKey: async () => "sk-retry-secret" },
+      { fetch: fetchMock }
+    );
+
+    const result = await client.chatCompletion({
+      providerId: "deepseek-user",
+      modelId: "novel-analysis",
+      messages: [{ role: "user", content: "hello" }]
+    });
+
+    expect(result.content).toBe("重试后完成");
+    expect(result.usage).toEqual({ total_tokens: 9 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries terminated response body read failures before returning a chat completion", async () => {
+    let attempts = 0;
+    const fetchMock = vi.fn(async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          text: async () => {
+            throw new Error("terminated");
+          }
+        } as unknown as Response;
+      }
+
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "正文读取重试后完成" } }],
+          usage: { total_tokens: 11 }
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    });
+    const client = new OpenAiCompatibleClient(
+      createProvider(),
+      { resolveApiKey: async () => "sk-retry-body-secret" },
+      {
+        fetch: fetchMock,
+        retry: { maxAttempts: 2, initialDelayMs: 0, maxDelayMs: 0 }
+      }
+    );
+
+    const result = await client.chatCompletion({
+      providerId: "deepseek-user",
+      modelId: "novel-analysis",
+      messages: [{ role: "user", content: "hello" }]
+    });
+
+    expect(result.content).toBe("正文读取重试后完成");
+    expect(result.usage).toEqual({ total_tokens: 11 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("redacts secrets from response body read failures", async () => {
     const apiKey = "plain" + "secret12345";
     const client = new OpenAiCompatibleClient(

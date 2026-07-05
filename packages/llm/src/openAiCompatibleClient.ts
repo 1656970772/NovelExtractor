@@ -89,8 +89,16 @@ export type CredentialStore = Pick<DomainCredentialStore, "resolveApiKey">;
 
 export type FetchLike = typeof fetch;
 
+export interface OpenAiCompatibleRetryOptions {
+  maxAttempts: number;
+  initialDelayMs: number;
+  maxDelayMs: number;
+  transientErrorMessages: string[];
+}
+
 export interface OpenAiCompatibleClientOptions {
   fetch?: FetchLike;
+  retry?: Partial<OpenAiCompatibleRetryOptions>;
 }
 
 interface OpenAiCompatibleResponseBody {
@@ -323,6 +331,74 @@ function formatHttpError(
   return `OpenAI-compatible request failed with HTTP ${response.status} ${response.statusText}: ${bodyText}`;
 }
 
+const DEFAULT_RETRY_OPTIONS: OpenAiCompatibleRetryOptions = {
+  maxAttempts: 2,
+  initialDelayMs: 250,
+  maxDelayMs: 1000,
+  transientErrorMessages: [
+    "terminated",
+    "fetch failed",
+    "network error",
+    "socket hang up",
+    "ECONNRESET",
+    "ETIMEDOUT",
+    "EPIPE",
+    "UND_ERR"
+  ]
+};
+
+function normalizeRetryOptions(
+  options: Partial<OpenAiCompatibleRetryOptions> | undefined
+): OpenAiCompatibleRetryOptions {
+  const maxAttempts = options?.maxAttempts ?? DEFAULT_RETRY_OPTIONS.maxAttempts;
+  const initialDelayMs = options?.initialDelayMs ?? DEFAULT_RETRY_OPTIONS.initialDelayMs;
+  const maxDelayMs = options?.maxDelayMs ?? DEFAULT_RETRY_OPTIONS.maxDelayMs;
+
+  return {
+    maxAttempts: Math.max(1, Math.floor(maxAttempts)),
+    initialDelayMs: Math.max(0, Math.floor(initialDelayMs)),
+    maxDelayMs: Math.max(0, Math.floor(maxDelayMs)),
+    transientErrorMessages:
+      options?.transientErrorMessages ?? DEFAULT_RETRY_OPTIONS.transientErrorMessages
+  };
+}
+
+function isRetryableRequestError(
+  error: unknown,
+  retryOptions: OpenAiCompatibleRetryOptions
+): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  if (error.message.startsWith("OpenAI-compatible request failed with HTTP")) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+
+  return retryOptions.transientErrorMessages.some((fragment) =>
+    message.includes(fragment.toLowerCase())
+  );
+}
+
+function retryDelayMs(
+  failedAttemptIndex: number,
+  retryOptions: OpenAiCompatibleRetryOptions
+): number {
+  const delay = retryOptions.initialDelayMs * 2 ** Math.max(0, failedAttemptIndex - 1);
+
+  return Math.min(delay, retryOptions.maxDelayMs);
+}
+
+async function waitForRetry(delayMs: number): Promise<void> {
+  if (delayMs <= 0) {
+    return;
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
 export class OpenAiCompatibleClient {
   constructor(
     private readonly provider: OpenAiCompatibleProviderDefinition,
@@ -373,6 +449,29 @@ export class OpenAiCompatibleClient {
       body.tools = request.tools;
     }
 
+    const retryOptions = normalizeRetryOptions(this.options.retry);
+
+    for (let attempt = 1; attempt <= retryOptions.maxAttempts; attempt += 1) {
+      try {
+        return await this.sendChatCompletionOnce(body, apiKey, redactionOptions);
+      } catch (error) {
+        const hasMoreAttempts = attempt < retryOptions.maxAttempts;
+        if (!hasMoreAttempts || !isRetryableRequestError(error, retryOptions)) {
+          throw error;
+        }
+
+        await waitForRetry(retryDelayMs(attempt, retryOptions));
+      }
+    }
+
+    throw new Error("OpenAI-compatible request retry loop exited unexpectedly");
+  }
+
+  private async sendChatCompletionOnce(
+    body: Record<string, unknown>,
+    apiKey: string,
+    redactionOptions: RedactSecretsOptions
+  ): Promise<ChatCompletionResult> {
     let response: Response;
     try {
       response = await getFetch(this.options)(completionUrl(this.provider.baseUrl), {
