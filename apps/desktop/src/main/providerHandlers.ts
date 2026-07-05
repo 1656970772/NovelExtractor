@@ -2,6 +2,7 @@ import { getProviderPresets } from "@novel-extractor/config";
 import type { ProviderConfig } from "@novel-extractor/domain";
 import type { DesktopIpcHandlers } from "./ipc";
 import type { ProviderViewDto, SaveProviderDto } from "../shared/ipcTypes";
+import { fetchModelsFromProvider, type FetchModelsFromProviderInput } from "./modelFetchService";
 import {
   createMemoryCredentialStore,
   createProviderView,
@@ -9,10 +10,14 @@ import {
 } from "./credentials";
 import { createMemoryProviderStore, type MainProviderStore } from "./providerStore";
 
-type ProviderHandlers = Pick<DesktopIpcHandlers, "providers:save" | "providers:list">;
+type ProviderHandlers = Pick<
+  DesktopIpcHandlers,
+  "providers:save" | "providers:list" | "providers:fetchModels"
+>;
 
 export interface ProviderIpcHandlersOptions {
   credentialStore?: MemoryCredentialStore;
+  modelFetch?: Pick<FetchModelsFromProviderInput, "fetch">;
   providerStore?: MainProviderStore;
   providerIdFactory?: () => string;
 }
@@ -28,13 +33,49 @@ function findModelDisplayName(input: SaveProviderDto): string {
   return presetModel?.displayName ?? input.modelName;
 }
 
-function createModelConfig(input: SaveProviderDto): ProviderConfig["models"][number] {
-  return {
-    id: input.modelName,
-    displayName: findModelDisplayName(input),
-    enabled: input.enabled,
-    isDefault: input.defaultModel
-  };
+function createModelConfigs(input: SaveProviderDto): ProviderConfig["models"] {
+  const defaultModelId = input.modelName.trim();
+  const submittedModelIds = new Set<string>();
+  const submittedModels =
+    input.models?.flatMap((model) => {
+      const id = model.id.trim();
+      if (!id || submittedModelIds.has(id)) {
+        return [];
+      }
+      submittedModelIds.add(id);
+      const displayName = model.displayName.trim() || id;
+      return [
+        {
+          id,
+          displayName,
+          enabled: model.enabled,
+          isDefault: id === defaultModelId
+        }
+      ];
+    }) ?? [];
+
+  if (submittedModels.length) {
+    return submittedModels;
+  }
+
+  const preset = getProviderPresets().find((candidate) => candidate.id === input.presetId);
+  if (preset && !preset.allowsUserModels && preset.models.length > 0) {
+    return preset.models.map((model) => ({
+      id: model.id,
+      displayName: model.displayName,
+      enabled: input.enabled,
+      isDefault: model.id === defaultModelId
+    }));
+  }
+
+  return [
+    {
+      id: defaultModelId,
+      displayName: findModelDisplayName({ ...input, modelName: defaultModelId }),
+      enabled: input.enabled,
+      isDefault: input.defaultModel
+    }
+  ];
 }
 
 function toProviderView(provider: ProviderConfig): ProviderViewDto {
@@ -88,9 +129,33 @@ export function createProviderIpcHandlers(
         displayName: input.displayName,
         kind: input.kind,
         baseUrl: input.baseUrl,
-        models: [createModelConfig(input)],
+        models: createModelConfigs(input),
         enabled: input.enabled,
         apiKeyRef
+      });
+    },
+    "providers:fetchModels": async (input) => {
+      const trimmedApiKey = input.apiKey?.trim();
+      let apiKey = trimmedApiKey;
+      if (!apiKey && input.providerId) {
+        const existingProvider = (await providerStore.listProviderConfigs()).find(
+          (provider) => provider.id === input.providerId
+        );
+        apiKey = existingProvider?.apiKeyRef
+          ? credentialStore.readApiKey(existingProvider.apiKeyRef)
+          : undefined;
+      }
+      if (!apiKey) {
+        throw new Error("API Key is required to fetch models");
+      }
+
+      return fetchModelsFromProvider({
+        baseUrl: input.baseUrl,
+        apiKey,
+        modelsUrl: input.modelsUrl,
+        isFullUrl: input.isFullUrl,
+        userAgent: input.userAgent,
+        fetch: options.modelFetch?.fetch
       });
     },
     "providers:list": async () =>

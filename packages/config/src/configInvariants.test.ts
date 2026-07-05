@@ -94,6 +94,26 @@ describe("config invariants", () => {
     expectInvariantViolation(config, /model id/i);
   });
 
+  it("requires official provider presets to keep cc-switch protocol metadata", () => {
+    const missingFormat = getDefaultConfig();
+    delete (missingFormat.providerPresets[0] as unknown as Record<string, unknown>).apiFormat;
+    expectInvariantViolation(missingFormat, /provider api format/i);
+
+    const missingBaseCandidate = getDefaultConfig();
+    missingBaseCandidate.providerPresets[0].endpointCandidates = ["https://mirror.example.com/v1"];
+    expectInvariantViolation(missingBaseCandidate, /endpoint candidates/i);
+
+    const invalidReasoning = getDefaultConfig();
+    (invalidReasoning.providerPresets[0] as unknown as Record<string, unknown>).reasoning = {
+      supportsThinking: true,
+      supportsEffort: true,
+      thinkingParam: "",
+      effortParam: "reasoning_effort",
+      outputFormat: "reasoning_content"
+    };
+    expectInvariantViolation(invalidReasoning, /provider reasoning/i);
+  });
+
   it("requires template names and default output file names to be non-empty", () => {
     const missingName = getDefaultConfig();
     missingName.builtInTemplates[0].name = "";

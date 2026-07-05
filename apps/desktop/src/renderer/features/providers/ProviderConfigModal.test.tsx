@@ -1,10 +1,15 @@
 /* @vitest-environment jsdom */
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ProviderViewDto, SaveProviderDto } from "../../../shared/ipcTypes";
+import type {
+  FetchedProviderModelDto,
+  FetchProviderModelsDto,
+  ProviderViewDto,
+  SaveProviderDto
+} from "../../../shared/ipcTypes";
 import { ProviderConfigModal } from "./ProviderConfigModal";
 import { UserMenu } from "./UserMenu";
 
@@ -32,6 +37,9 @@ function renderModal(
   overrides: Partial<ComponentProps<typeof ProviderConfigModal>> = {}
 ) {
   const onSaveProvider = vi.fn<(input: SaveProviderDto) => Promise<void> | void>();
+  const onFetchProviderModels = vi.fn<
+    (input: FetchProviderModelsDto) => Promise<FetchedProviderModelDto[]>
+  >().mockResolvedValue([]);
   const props: ComponentProps<typeof ProviderConfigModal> = {
     open: true,
     providers: [providerView],
@@ -39,12 +47,13 @@ function renderModal(
     saveState: "idle",
     onClose: vi.fn(),
     onSaveProvider,
+    onFetchProviderModels,
     ...overrides
   };
 
   render(<ProviderConfigModal {...props} />);
 
-  return { onSaveProvider, props };
+  return { onFetchProviderModels: props.onFetchProviderModels, onSaveProvider, props };
 }
 
 describe("ProviderConfigModal and UserMenu", () => {
@@ -68,16 +77,133 @@ describe("ProviderConfigModal and UserMenu", () => {
     expect(screen.queryByRole("button", { name: "设置" })).not.toBeInTheDocument();
   });
 
-  it("shows only the configured provider modes in a centered dialog", () => {
+  it("shows all P1 provider modes in a centered dialog", () => {
     renderModal();
 
     const dialog = screen.getByRole("dialog", { name: "大模型配置" });
     expect(dialog).toHaveClass("provider-modal");
-    expect(within(dialog).getByRole("radio", { name: "DeepSeek" })).toBeInTheDocument();
-    expect(
-      within(dialog).getByRole("radio", { name: "自定义 OpenAI-compatible" })
-    ).toBeInTheDocument();
-    expect(within(dialog).getAllByRole("radio")).toHaveLength(2);
+    expect(within(dialog).getByRole("radio", { name: "Kimi" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("radio", { name: "MiniMax" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("radio", { name: "Xiaomi MiMo" })).toBeInTheDocument();
+    expect(within(dialog).getAllByRole("radio")).toHaveLength(11);
+  });
+
+  it("shows Xiaomi MiMo preset models with locked Base URL", async () => {
+    const user = userEvent.setup();
+    renderModal();
+
+    await user.click(screen.getByRole("radio", { name: "Xiaomi MiMo" }));
+
+    const modelSelect = screen.getByLabelText("模型名");
+    expect(modelSelect).toHaveDisplayValue("MiMo V2.5 Pro");
+    expect(within(modelSelect).getByRole("option", { name: "MiMo V2.5 Pro" })).toBeInTheDocument();
+    expect(within(modelSelect).getByRole("option", { name: "MiMo V2.5" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Base URL")).toHaveAttribute("readonly");
+  });
+
+  it("shows provider metadata links and protocol label", () => {
+    renderModal();
+
+    expect(screen.getByRole("link", { name: "官网" })).toHaveAttribute(
+      "href",
+      "https://platform.deepseek.com"
+    );
+    expect(screen.getByRole("link", { name: "API key" })).toHaveAttribute(
+      "href",
+      "https://platform.deepseek.com/api_keys"
+    );
+    expect(screen.getByText("openai_chat")).toBeInTheDocument();
+  });
+
+  it("fetches provider models, merges live models, and saves the selected live model", async () => {
+    const user = userEvent.setup();
+    const { onFetchProviderModels, onSaveProvider } = renderModal({
+      providers: [],
+      onFetchProviderModels: vi.fn().mockResolvedValue([{ id: "deepseek-live" }])
+    });
+
+    await user.type(screen.getByLabelText("API key"), "  test-api-key  ");
+    await user.click(screen.getByRole("button", { name: "获取模型列表" }));
+
+    expect(onFetchProviderModels).toHaveBeenCalledWith({
+      presetId: "deepseek",
+      baseUrl: "https://api.deepseek.com",
+      apiKey: "test-api-key",
+      modelsUrl: "https://api.deepseek.com/models"
+    });
+
+    const modelSelect = screen.getByLabelText("模型名");
+    expect(await within(modelSelect).findByRole("option", { name: "deepseek-live" })).toBeInTheDocument();
+
+    await user.selectOptions(modelSelect, "deepseek-live");
+    await user.click(screen.getByRole("button", { name: "保存配置" }));
+
+    expect(onSaveProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelName: "deepseek-live",
+        models: expect.arrayContaining([
+          expect.objectContaining({
+            id: "deepseek-v4-flash",
+            isDefault: false
+          }),
+          expect.objectContaining({
+            id: "deepseek-live",
+            displayName: "deepseek-live",
+            enabled: true,
+            isDefault: true
+          })
+        ])
+      })
+    );
+  });
+
+  it("does not merge stale fetched models after switching presets", async () => {
+    const user = userEvent.setup();
+    let resolveFetch: ((models: FetchedProviderModelDto[]) => void) | undefined;
+
+    renderModal({
+      providers: [],
+      onFetchProviderModels: vi.fn(
+        () =>
+          new Promise<FetchedProviderModelDto[]>((resolve) => {
+            resolveFetch = resolve;
+          })
+      )
+    });
+
+    await user.click(screen.getByRole("button", { name: "获取模型列表" }));
+    await user.click(screen.getByRole("radio", { name: "自定义 OpenAI-compatible" }));
+
+    await act(async () => {
+      resolveFetch?.([{ id: "deepseek-live" }]);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("模型名")).toHaveValue("");
+    });
+    expect(screen.queryByRole("option", { name: "deepseek-live" })).not.toBeInTheDocument();
+  });
+
+  it("uses a model combobox for custom providers after fetching live models", async () => {
+    const user = userEvent.setup();
+    const { onFetchProviderModels } = renderModal({
+      providers: [],
+      onFetchProviderModels: vi.fn().mockResolvedValue([{ id: "custom-live-model" }])
+    });
+
+    await user.click(screen.getByRole("radio", { name: "自定义 OpenAI-compatible" }));
+    await user.type(screen.getByLabelText("Base URL"), "https://llm.example.test/v1");
+    await user.click(screen.getByRole("button", { name: "获取模型列表" }));
+
+    expect(onFetchProviderModels).toHaveBeenCalledWith({
+      presetId: "custom-openai-compatible",
+      baseUrl: "https://llm.example.test/v1",
+      apiKey: undefined,
+      modelsUrl: undefined
+    });
+
+    const modelSelect = await screen.findByRole("combobox", { name: "模型名" });
+    expect(within(modelSelect).getByRole("option", { name: "custom-live-model" })).toBeInTheDocument();
   });
 
   it("disables save and cancel while saving", () => {
@@ -123,6 +249,7 @@ describe("ProviderConfigModal and UserMenu", () => {
         providerState="loading"
         saveState="idle"
         onClose={vi.fn()}
+        onFetchProviderModels={vi.fn().mockResolvedValue([])}
         onSaveProvider={vi.fn()}
       />
     );
@@ -137,6 +264,7 @@ describe("ProviderConfigModal and UserMenu", () => {
         providerError="读取大模型配置失败"
         saveState="idle"
         onClose={vi.fn()}
+        onFetchProviderModels={vi.fn().mockResolvedValue([])}
         onSaveProvider={vi.fn()}
       />
     );
@@ -149,6 +277,7 @@ describe("ProviderConfigModal and UserMenu", () => {
         providerState="ready"
         saveState="idle"
         onClose={vi.fn()}
+        onFetchProviderModels={vi.fn().mockResolvedValue([])}
         onSaveProvider={vi.fn()}
       />
     );

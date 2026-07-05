@@ -1,11 +1,17 @@
 import { getProviderPresets } from "@novel-extractor/config";
 import type { ProviderPreset } from "@novel-extractor/config";
-import type { ProviderViewDto, SaveProviderDto } from "../../../shared/ipcTypes";
+import type {
+  FetchedProviderModelDto,
+  ProviderModelDto,
+  ProviderViewDto,
+  SaveProviderDto
+} from "../../../shared/ipcTypes";
 import type { ExtractionModel } from "../extraction/extractionViewModel";
 
 export type ProviderPresetId = SaveProviderDto["presetId"];
 export type ProviderSaveState = "idle" | "saving" | "error";
 export type ProviderResourceState = "ready" | "loading" | "error";
+export type ProviderModelFetchState = "idle" | "loading" | "error";
 
 export interface ProviderFormState {
   providerId?: string;
@@ -14,7 +20,10 @@ export interface ProviderFormState {
   kind: SaveProviderDto["kind"];
   baseUrl: string;
   apiKey: string;
+  models: ProviderModelDto[];
   modelName: string;
+  modelFetchState: ProviderModelFetchState;
+  modelFetchError?: string;
   defaultModel: boolean;
   enabled: boolean;
 }
@@ -43,6 +52,38 @@ function getDefaultModelName(preset: ProviderPreset): string {
   return preset.models.find((model) => model.id)?.id ?? "";
 }
 
+function createPresetModelDtos(preset: ProviderPreset): ProviderModelDto[] {
+  const defaultModelName = getDefaultModelName(preset);
+
+  return preset.models.map((model) => ({
+    id: model.id,
+    displayName: model.displayName,
+    enabled: true,
+    isDefault: model.id === defaultModelName
+  }));
+}
+
+function resolveModelName(models: readonly ProviderModelDto[], modelName: string): string {
+  const trimmedModelName = modelName.trim();
+  if (models.some((model) => model.id === trimmedModelName)) {
+    return trimmedModelName;
+  }
+
+  return models[0]?.id ?? trimmedModelName;
+}
+
+export function syncDefaultModelFlags(
+  models: readonly ProviderModelDto[],
+  modelName: string
+): ProviderModelDto[] {
+  const defaultModelName = resolveModelName(models, modelName);
+
+  return models.map((model) => ({
+    ...model,
+    isDefault: model.id === defaultModelName
+  }));
+}
+
 export function createProviderFormState(
   presetId: ProviderPresetId = "deepseek",
   presets = getProviderPresets()
@@ -55,7 +96,9 @@ export function createProviderFormState(
     kind: preset.kind,
     baseUrl: preset.baseUrl ?? "",
     apiKey: "",
+    models: createPresetModelDtos(preset),
     modelName: getDefaultModelName(preset),
+    modelFetchState: "idle",
     defaultModel: true,
     enabled: true
   };
@@ -100,6 +143,24 @@ export function validateProviderForm(state: ProviderFormState): ProviderFormVali
 }
 
 export function buildSaveProviderDto(state: ProviderFormState): SaveProviderDto {
+  const modelName =
+    state.models.length > 0
+      ? resolveModelName(state.models, state.modelName)
+      : state.modelName.trim();
+  const models =
+    state.models.length > 0
+      ? syncDefaultModelFlags(state.models, modelName)
+      : modelName
+        ? [
+            {
+              id: modelName,
+              displayName: modelName,
+              enabled: true,
+              isDefault: true
+            }
+          ]
+        : [];
+
   return {
     providerId: state.providerId,
     presetId: state.presetId,
@@ -107,9 +168,44 @@ export function buildSaveProviderDto(state: ProviderFormState): SaveProviderDto 
     kind: state.kind,
     baseUrl: state.baseUrl.trim(),
     apiKey: state.apiKey.trim() || undefined,
-    modelName: state.modelName.trim(),
+    modelName,
     defaultModel: state.defaultModel,
-    enabled: state.enabled
+    enabled: state.enabled,
+    models
+  };
+}
+
+export function mergeFetchedModelsIntoForm(
+  state: ProviderFormState,
+  fetchedModels: readonly FetchedProviderModelDto[]
+): ProviderFormState {
+  const existingModelsById = new Map(state.models.map((model) => [model.id, model]));
+  const nextModels = [...state.models];
+
+  for (const fetchedModel of fetchedModels) {
+    const id = fetchedModel.id.trim();
+    if (!id || existingModelsById.has(id)) {
+      continue;
+    }
+
+    const model: ProviderModelDto = {
+      id,
+      displayName: id,
+      enabled: true,
+      isDefault: false
+    };
+    existingModelsById.set(id, model);
+    nextModels.push(model);
+  }
+
+  const modelName = resolveModelName(nextModels, state.modelName);
+
+  return {
+    ...state,
+    models: syncDefaultModelFlags(nextModels, modelName),
+    modelName,
+    modelFetchState: "idle",
+    modelFetchError: undefined
   };
 }
 

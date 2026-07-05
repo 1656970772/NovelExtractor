@@ -190,6 +190,48 @@ describe("task text logger", () => {
     expect(content).not.toContain("非常长的工具说明文本");
   });
 
+  it("logs the current-window prompt section as a window file reference even when text matching would be brittle", async () => {
+    const windowText = "第一章 山边小村\r\n这里是当前窗口原文，不能出现在日志里。";
+    const messages: ChatCompletionMessage[] = [
+      {
+        role: "user",
+        content: [
+          "模板说明保留。",
+          "",
+          "## 当前窗口文本",
+          windowText,
+          "",
+          "这行模拟后续对话内容。"
+        ].join("\n")
+      }
+    ];
+    const originalMessages = JSON.parse(JSON.stringify(messages));
+
+    const loggedRequest = serializeModelRequestForTaskLog({
+      value: {
+        messages
+      },
+      windowFileName: "window-0001.txt",
+      windowText
+    });
+
+    expect(messages).toEqual(originalMessages);
+    expect(loggedRequest.messages).toEqual([
+      {
+        role: "user",
+        content: [
+          "模板说明保留。",
+          "",
+          "## 当前窗口文本",
+          "[窗口原文见 window-0001.txt]",
+          "",
+          "这行模拟后续对话内容。"
+        ].join("\n")
+      }
+    ]);
+    expect(JSON.stringify(loggedRequest)).not.toContain("这里是当前窗口原文");
+  });
+
   it("replaces paginated current-window read_file results with the window file reference", () => {
     const windowText = [
       "第一章",

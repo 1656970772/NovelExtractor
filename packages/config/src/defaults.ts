@@ -1,4 +1,5 @@
 import { defineNovelExtractorConfig, type NovelExtractorConfig } from "./schema";
+import { createCcSwitchProviderPresets } from "./ccSwitchProviderPresets";
 
 type DeepReadonly<T> = T extends (...args: unknown[]) => unknown
   ? T
@@ -68,42 +69,7 @@ const TEMPLATE_EXAMPLE_EVIDENCE_RULE =
   "模板示例、字段说明、示例事件链和通用术语只作为格式参考；只有当前窗口原文或已读取既有报告明确证实时才可写入正式报告，未证实的分析结论必须写原文未说明或不写。";
 
 const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
-  providerPresets: [
-    {
-      id: "deepseek",
-      displayName: "DeepSeek",
-      kind: "openai-compatible",
-      baseUrl: "https://api.deepseek.com",
-      authScheme: "bearer",
-      models: [
-        {
-          id: "deepseek-v4-flash",
-          displayName: "DeepSeek V4 Flash",
-          supportsTools: true,
-          supportsReasoning: false,
-          usageMapping: "openai-compatible"
-        },
-        {
-          id: "deepseek-v4-pro",
-          displayName: "DeepSeek V4 Pro",
-          supportsTools: true,
-          supportsReasoning: true,
-          usageMapping: "openai-compatible"
-        }
-      ],
-      defaultModelPolicy: "first-enabled",
-      allowsUserModels: false
-    },
-    {
-      id: "custom-openai-compatible",
-      displayName: "自定义 OpenAI-compatible",
-      kind: "openai-compatible",
-      authScheme: "bearer",
-      models: [],
-      defaultModelPolicy: "user-required",
-      allowsUserModels: true
-    }
-  ],
+  providerPresets: createCcSwitchProviderPresets(),
   builtInTemplates: [
     {
       id: "pill-analysis",

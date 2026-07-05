@@ -6,9 +6,13 @@ import type {
   JobDto,
   JobLogDto,
   JobStatus,
+  FetchProviderModelsDto,
+  FetchedProviderModelDto,
+  ProviderModelDto,
   ProjectDto,
   ProjectRuntimeDto,
   ProviderKind,
+  ProviderPresetId,
   ProviderViewDto,
   ReportDto,
   SafeMarkdownPreviewDto,
@@ -68,6 +72,7 @@ function createHandlers(): DesktopIpcHandlers {
     "settings:chooseProjectDirectory": async () => "D:\\NovelExtractorProjects",
     "providers:save": async () => undefined,
     "providers:list": async () => [],
+    "providers:fetchModels": async () => [],
     "books:uploadTxt": async (input) => ({
       bookId: "book-1",
       displayName: input.displayName ?? "book",
@@ -130,7 +135,7 @@ class FakeIpcMain implements IpcMainLike {
 }
 
 describe("desktop IPC contract", () => {
-  it("exposes only P0 channels", () => {
+  it("exposes desktop IPC channels", () => {
     expect(createIpcContract().channels).toEqual([
       "project:create",
       "project:list",
@@ -139,6 +144,7 @@ describe("desktop IPC contract", () => {
       "settings:chooseProjectDirectory",
       "providers:save",
       "providers:list",
+      "providers:fetchModels",
       "books:uploadTxt",
       "books:listReports",
       "projectRuntime:get",
@@ -203,12 +209,12 @@ describe("desktop IPC contract", () => {
     ).resolves.toMatchObject({ displayName: "仙途资料" });
   });
 
-  it("exports the P0 DTO types from the shared IPC module", () => {
+  it("exports the desktop DTO types from the shared IPC module", () => {
     const providerKind: ProviderKind = "openai-compatible";
     const status: JobStatus = "running";
     const providerView: ProviderViewDto = {
       id: "provider-1",
-      presetId: "deepseek",
+      presetId: "kimi",
       displayName: "DeepSeek",
       kind: providerKind,
       baseUrl: "https://api.deepseek.com",
@@ -230,9 +236,22 @@ describe("desktop IPC contract", () => {
       projectStorageDirectory?: string;
     }>();
     expectTypeOf<SaveProviderDto>().toMatchTypeOf<{
-      presetId: "deepseek" | "custom-openai-compatible";
+      presetId: ProviderPresetId;
       kind: ProviderKind;
       apiKey?: string;
+      models?: ProviderModelDto[];
+    }>();
+    expectTypeOf<FetchProviderModelsDto>().toMatchTypeOf<{
+      presetId: ProviderPresetId;
+      baseUrl: string;
+      apiKey?: string;
+      modelsUrl?: string;
+      isFullUrl?: boolean;
+      userAgent?: string;
+    }>();
+    expectTypeOf<FetchedProviderModelDto>().toMatchTypeOf<{
+      id: string;
+      ownedBy?: string;
     }>();
     expectTypeOf<UploadTxtDto>().toMatchTypeOf<{ projectId: string; filePath: string }>();
     expectTypeOf<BookUploadResultDto>().toMatchTypeOf<{

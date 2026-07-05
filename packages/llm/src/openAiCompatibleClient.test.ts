@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CredentialStore as DomainCredentialStore } from "@novel-extractor/domain";
-import { OpenAiCompatibleClient, type CredentialStore } from "./openAiCompatibleClient";
+import {
+  OpenAiCompatibleClient,
+  type CredentialStore,
+  type FetchLike
+} from "./openAiCompatibleClient";
 import type { OpenAiCompatibleProviderDefinition } from "./providerRegistry";
 
 function createProvider(): OpenAiCompatibleProviderDefinition {
@@ -11,6 +15,7 @@ function createProvider(): OpenAiCompatibleProviderDefinition {
     kind: "openai-compatible",
     baseUrl: "https://api.deepseek.com",
     authScheme: "bearer",
+    apiFormat: "openai_chat",
     apiKeyRef: { id: "key-1", providerConfigId: "deepseek-user" },
     allowsUserModels: false,
     models: [
@@ -24,6 +29,21 @@ function createProvider(): OpenAiCompatibleProviderDefinition {
         usageMapping: "openai-compatible"
       }
     ]
+  };
+}
+
+function createResponsesProvider(): OpenAiCompatibleProviderDefinition {
+  return {
+    id: "minimax-user",
+    presetId: "minimax",
+    displayName: "MiniMax",
+    kind: "openai-compatible",
+    baseUrl: "https://api.minimaxi.com/v1",
+    authScheme: "bearer",
+    apiFormat: "openai_responses",
+    apiKeyRef: { id: "key-1", providerConfigId: "minimax-user" },
+    allowsUserModels: false,
+    models: []
   };
 }
 
@@ -491,6 +511,136 @@ describe("OpenAiCompatibleClient", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses /responses for cc-switch native Responses presets", async () => {
+    const calls: Array<{ url: string; body: unknown }> = [];
+    const fetcher: FetchLike = async (url, init) => {
+      calls.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+      return new Response(
+        JSON.stringify({
+          output: [
+            {
+              type: "message",
+              content: [{ type: "output_text", text: "完成" }]
+            },
+            {
+              type: "function_call",
+              call_id: "call-write",
+              name: "write_file",
+              arguments: "{\"path\":\"丹药分析.md\",\"content\":\"# 丹药分析\"}"
+            }
+          ],
+          usage: {
+            input_tokens: 10,
+            output_tokens: 5,
+            total_tokens: 15
+          }
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    };
+
+    const client = new OpenAiCompatibleClient(
+      createResponsesProvider(),
+      { resolveApiKey: async () => "test-minimax-api-key" },
+      { fetch: fetcher }
+    );
+
+    const result = await client.chatCompletion({
+      providerId: "minimax-user",
+      modelId: "MiniMax-M3",
+      messages: [{ role: "user", content: "提取窗口 1" }],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "write_file",
+            parameters: { type: "object" }
+          }
+        }
+      ]
+    });
+
+    expect(calls[0].url).toBe("https://api.minimaxi.com/v1/responses");
+    expect(calls[0].body).toMatchObject({
+      model: "MiniMax-M3",
+      input: [{ role: "user", content: "提取窗口 1" }],
+      tools: [
+        {
+          type: "function",
+          name: "write_file",
+          parameters: { type: "object" }
+        }
+      ]
+    });
+    expect(result.content).toBe("完成");
+    expect(result.normalizedUsage).toMatchObject({
+      inputTokens: 10,
+      outputTokens: 5,
+      totalTokens: 15
+    });
+    expect(result.toolCalls).toEqual([
+      {
+        id: "call-write",
+        name: "write_file",
+        arguments: { path: "丹药分析.md", content: "# 丹药分析" }
+      }
+    ]);
+  });
+
+  it("serializes Responses function-call history for tool follow-up rounds", async () => {
+    const fetcher: FetchLike = async (_url, init) => {
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        model: "MiniMax-M3",
+        input: [
+          { role: "user", content: "提取窗口 1" },
+          {
+            type: "function_call",
+            call_id: "call-write",
+            name: "write_file",
+            arguments: "{\"content\":\"# 丹药分析\",\"path\":\"丹药分析.md\"}"
+          },
+          {
+            type: "function_call_output",
+            call_id: "call-write",
+            output: "{\"ok\":true}"
+          }
+        ]
+      });
+      return new Response(JSON.stringify({ output_text: "继续" }), { status: 200 });
+    };
+
+    const client = new OpenAiCompatibleClient(
+      createResponsesProvider(),
+      { resolveApiKey: async () => "test-minimax-api-key" },
+      { fetch: fetcher }
+    );
+
+    await client.chatCompletion({
+      providerId: "minimax-user",
+      modelId: "MiniMax-M3",
+      messages: [
+        { role: "user", content: "提取窗口 1" },
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              id: "call-write",
+              name: "write_file",
+              arguments: { path: "丹药分析.md", content: "# 丹药分析" }
+            }
+          ]
+        },
+        {
+          role: "tool",
+          toolCallId: "call-write",
+          name: "write_file",
+          content: "{\"ok\":true}"
+        }
+      ]
+    });
   });
 
   it("does not call fetch when the API key reference is missing", async () => {

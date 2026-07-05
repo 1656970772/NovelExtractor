@@ -39,6 +39,7 @@ function installDesktopApiMock() {
     chooseProjectDirectory: vi.fn().mockResolvedValue("D:\\NovelExtractorProjects"),
     saveProvider: vi.fn().mockResolvedValue(undefined),
     listProviders: vi.fn().mockResolvedValue([]),
+    fetchProviderModels: vi.fn().mockResolvedValue([]),
     uploadTxt: vi.fn(),
     listReports: vi.fn(),
     previewReport: vi.fn(),
@@ -193,6 +194,25 @@ describe("desktop workbench shell", () => {
     await user.click(screen.getByRole("button", { name: "大模型配置" }));
 
     expect(await screen.findByRole("dialog", { name: "大模型配置" })).toBeInTheDocument();
+  });
+
+  it("routes provider model fetches through the desktop api", async () => {
+    const user = userEvent.setup();
+    const api = installDesktopApiMock();
+    api.fetchProviderModels.mockResolvedValue([{ id: "deepseek-live" }]);
+    render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
+
+    await user.click(screen.getByRole("button", { name: "大模型配置" }));
+    expect(await screen.findByRole("dialog", { name: "大模型配置" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "获取模型列表" }));
+
+    await waitFor(() => {
+      expect(api.fetchProviderModels).toHaveBeenCalledWith({
+        presetId: "deepseek",
+        baseUrl: "https://api.deepseek.com",
+        modelsUrl: "https://api.deepseek.com/models"
+      });
+    });
   });
 
   it("switches between workbench pages from navigation", async () => {

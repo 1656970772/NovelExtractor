@@ -2,7 +2,29 @@ import { assertValidConfigInvariants } from "./configInvariants";
 
 export type ProviderKind = "openai-compatible";
 
-export type ProviderPresetId = "deepseek" | "custom-openai-compatible";
+export type ProviderApiFormat = "openai_chat" | "openai_responses";
+
+export interface ProviderReasoningCapability {
+  supportsThinking: boolean;
+  supportsEffort: boolean;
+  thinkingParam: "thinking";
+  effortParam: "reasoning_effort" | "none";
+  effortValueMode?: "deepseek";
+  outputFormat: "reasoning_content";
+}
+
+export type ProviderPresetId =
+  | "deepseek"
+  | "zhipu-glm"
+  | "zhipu-glm-en"
+  | "qwen-bailian"
+  | "kimi"
+  | "kimi-for-coding"
+  | "minimax"
+  | "minimax-en"
+  | "xiaomi-mimo"
+  | "xiaomi-mimo-token-plan"
+  | "custom-openai-compatible";
 
 export interface ModelOption {
   id: string;
@@ -10,6 +32,9 @@ export interface ModelOption {
   contextWindow?: number;
   supportsTools: boolean;
   supportsReasoning: boolean;
+  supportsParallelToolCalls?: boolean;
+  inputModalities?: Array<"text" | "image">;
+  baseInstructions?: string;
   usageMapping: "openai-compatible";
 }
 
@@ -18,6 +43,14 @@ export interface ProviderPreset {
   displayName: string;
   kind: ProviderKind;
   baseUrl?: string;
+  websiteUrl?: string;
+  apiKeyUrl?: string;
+  modelsUrl?: string;
+  endpointCandidates?: string[];
+  apiFormat: ProviderApiFormat;
+  reasoning?: ProviderReasoningCapability;
+  icon?: string;
+  iconColor?: string;
   authScheme: "bearer";
   models: ModelOption[];
   defaultModelPolicy: "first-enabled" | "user-required";

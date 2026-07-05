@@ -1,4 +1,8 @@
-import type { ProviderPreset } from "@novel-extractor/config";
+import type {
+  ProviderApiFormat,
+  ProviderPreset,
+  ProviderReasoningCapability
+} from "@novel-extractor/config";
 import type { ApiKeyRef, ProviderConfig } from "@novel-extractor/domain";
 
 export interface ModelRef {
@@ -13,6 +17,10 @@ export interface LlmModelDefinition {
   isDefault: boolean;
   supportsTools: boolean;
   supportsReasoning: boolean;
+  contextWindow?: number;
+  supportsParallelToolCalls?: boolean;
+  inputModalities?: Array<"text" | "image">;
+  baseInstructions?: string;
   usageMapping: "openai-compatible";
 }
 
@@ -23,6 +31,8 @@ export interface OpenAiCompatibleProviderDefinition {
   kind: "openai-compatible";
   baseUrl: string;
   authScheme: "bearer";
+  apiFormat: ProviderApiFormat;
+  reasoning?: ProviderReasoningCapability;
   apiKeyRef?: ApiKeyRef;
   allowsUserModels: boolean;
   models: LlmModelDefinition[];
@@ -60,6 +70,10 @@ function createPresetModelDefinition(
     isDefault: preset.defaultModelPolicy === "first-enabled" && modelIndex === 0,
     supportsTools: model.supportsTools,
     supportsReasoning: model.supportsReasoning,
+    contextWindow: model.contextWindow,
+    supportsParallelToolCalls: model.supportsParallelToolCalls,
+    inputModalities: model.inputModalities ? [...model.inputModalities] : undefined,
+    baseInstructions: model.baseInstructions,
     usageMapping: model.usageMapping
   };
 }
@@ -82,6 +96,8 @@ export function createPresetProviderDefinition(
     kind: preset.kind,
     baseUrl: preset.baseUrl,
     authScheme: preset.authScheme,
+    apiFormat: preset.apiFormat,
+    reasoning: preset.reasoning ? { ...preset.reasoning } : undefined,
     allowsUserModels: preset.allowsUserModels,
     models: preset.models.map((_model, index) => createPresetModelDefinition(preset, index))
   };
@@ -110,6 +126,10 @@ function createConfiguredModelDefinition(
     isDefault: modelConfig.isDefault,
     supportsTools: presetModel?.supportsTools ?? false,
     supportsReasoning: presetModel?.supportsReasoning ?? false,
+    contextWindow: presetModel?.contextWindow,
+    supportsParallelToolCalls: presetModel?.supportsParallelToolCalls,
+    inputModalities: presetModel?.inputModalities ? [...presetModel.inputModalities] : undefined,
+    baseInstructions: presetModel?.baseInstructions,
     usageMapping: presetModel?.usageMapping ?? "openai-compatible"
   };
 }
@@ -132,6 +152,8 @@ function createConfiguredProviderDefinition(
     kind: providerConfig.kind,
     baseUrl,
     authScheme: preset.authScheme,
+    apiFormat: preset.apiFormat,
+    reasoning: preset.reasoning ? { ...preset.reasoning } : undefined,
     apiKeyRef: providerConfig.apiKeyRef,
     allowsUserModels: preset.allowsUserModels,
     models: providerConfig.models

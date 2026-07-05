@@ -2016,6 +2016,28 @@ p {
   color: var(--app-color-ink);
 }
 
+.provider-form__metadata,
+.provider-form__model-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.provider-form__metadata {
+  color: var(--app-color-ink-muted);
+  font-size: 12px;
+}
+
+.provider-form__metadata a {
+  color: var(--app-color-accent);
+  text-decoration: none;
+}
+
+.provider-form__metadata a:hover {
+  text-decoration: underline;
+}
+
 .provider-form__field {
   display: grid;
   gap: 6px;

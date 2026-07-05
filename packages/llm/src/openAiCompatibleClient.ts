@@ -111,6 +111,12 @@ interface OpenAiCompatibleResponseBody {
   usage?: unknown;
 }
 
+interface OpenAiResponsesResponseBody {
+  output_text?: unknown;
+  output?: unknown;
+  usage?: unknown;
+}
+
 interface OpenAiCompatibleRequestToolCall {
   id: string;
   type: "function";
@@ -133,6 +139,35 @@ type OpenAiCompatibleRequestMessage =
       name?: string;
       content: string;
     };
+
+interface OpenAiResponsesRequestTool {
+  type: "function";
+  name: string;
+  description?: string;
+  parameters?: Record<string, unknown>;
+}
+
+interface OpenAiResponsesRequestFunctionCall {
+  type: "function_call";
+  call_id: string;
+  name: string;
+  arguments: string;
+}
+
+interface OpenAiResponsesRequestFunctionCallOutput {
+  type: "function_call_output";
+  call_id: string;
+  output: string;
+}
+
+type OpenAiResponsesInputItem =
+  | ChatCompletionContentMessage
+  | {
+      role: "assistant";
+      content: string;
+    }
+  | OpenAiResponsesRequestFunctionCall
+  | OpenAiResponsesRequestFunctionCallOutput;
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   if (value !== null && typeof value === "object" && !Array.isArray(value)) {
@@ -158,7 +193,11 @@ function normalizeUsage(usage: unknown): NormalizedUsage {
   const usageRecord = asRecord(usage);
   const promptDetails = asRecord(usageRecord?.prompt_tokens_details);
   const completionDetails = asRecord(usageRecord?.completion_tokens_details);
-  const inputTokens = numberField(usageRecord, "prompt_tokens");
+  const inputTokens =
+    optionalNumberField(usageRecord, "input_tokens") ?? numberField(usageRecord, "prompt_tokens");
+  const outputTokens =
+    optionalNumberField(usageRecord, "output_tokens") ??
+    numberField(usageRecord, "completion_tokens");
   const cacheHitTokens =
     optionalNumberField(usageRecord, "prompt_cache_hit_tokens") ??
     numberField(promptDetails, "cached_tokens");
@@ -166,7 +205,7 @@ function normalizeUsage(usage: unknown): NormalizedUsage {
   return {
     requestCount: 1,
     inputTokens,
-    outputTokens: numberField(usageRecord, "completion_tokens"),
+    outputTokens,
     totalTokens: numberField(usageRecord, "total_tokens"),
     cacheHitTokens,
     cacheMissTokens: Math.max(inputTokens - cacheHitTokens, 0),
@@ -276,6 +315,132 @@ function serializeMessage(message: ChatCompletionMessage): OpenAiCompatibleReque
   return message;
 }
 
+function serializeResponsesTool(tool: ToolSchema): OpenAiResponsesRequestTool {
+  return {
+    type: "function",
+    name: tool.function.name,
+    ...(tool.function.description !== undefined ? { description: tool.function.description } : {}),
+    ...(tool.function.parameters !== undefined ? { parameters: tool.function.parameters } : {})
+  };
+}
+
+function serializeResponsesToolCall(
+  toolCall: ChatCompletionRequestToolCall
+): OpenAiResponsesRequestFunctionCall {
+  return {
+    type: "function_call",
+    call_id: toolCall.id,
+    name: toolCall.name,
+    arguments: serializeToolCallArguments(toolCall.arguments)
+  };
+}
+
+function serializeResponsesMessage(message: ChatCompletionMessage): OpenAiResponsesInputItem[] {
+  if (message.role === "assistant") {
+    return [
+      ...(message.content
+        ? [
+            {
+              role: "assistant" as const,
+              content: message.content
+            }
+          ]
+        : []),
+      ...(message.toolCalls?.map(serializeResponsesToolCall) ?? [])
+    ];
+  }
+
+  if (message.role === "tool") {
+    return [
+      {
+        type: "function_call_output",
+        call_id: message.toolCallId,
+        output: message.content
+      }
+    ];
+  }
+
+  return [message];
+}
+
+function createChatCompletionsBody(request: ChatCompletionRequest): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    model: request.modelId,
+    messages: request.messages.map(serializeMessage)
+  };
+
+  if (request.tools) {
+    body.tools = request.tools;
+  }
+
+  return body;
+}
+
+function createResponsesBody(request: ChatCompletionRequest): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    model: request.modelId,
+    input: request.messages.flatMap(serializeResponsesMessage)
+  };
+
+  if (request.tools) {
+    body.tools = request.tools.map(serializeResponsesTool);
+  }
+
+  return body;
+}
+
+function parseResponsesContent(responseBody: OpenAiResponsesResponseBody): string {
+  if (typeof responseBody.output_text === "string") {
+    return responseBody.output_text;
+  }
+
+  if (!Array.isArray(responseBody.output)) {
+    return "";
+  }
+
+  return responseBody.output
+    .flatMap((outputItem) => {
+      const outputRecord = asRecord(outputItem);
+      const content = outputRecord?.content;
+      if (!Array.isArray(content)) {
+        return [];
+      }
+
+      return content.flatMap((contentItem) => {
+        const contentRecord = asRecord(contentItem);
+        const text = contentRecord?.text;
+        return typeof text === "string" ? [text] : [];
+      });
+    })
+    .join("");
+}
+
+function parseResponsesToolCalls(output: unknown): ToolCall[] {
+  if (!Array.isArray(output)) {
+    return [];
+  }
+
+  return output.flatMap((outputItem) => {
+    const outputRecord = asRecord(outputItem);
+    if (outputRecord?.type !== "function_call") {
+      return [];
+    }
+
+    const name = outputRecord.name;
+    if (typeof name !== "string" || name.trim() === "") {
+      return [];
+    }
+
+    return [
+      {
+        id: typeof outputRecord.call_id === "string" ? outputRecord.call_id : "",
+        name,
+        arguments: parseToolCallArguments(outputRecord.arguments)
+      }
+    ];
+  });
+}
+
 function getFetch(options: OpenAiCompatibleClientOptions): FetchLike {
   const fetcher = options.fetch ?? globalThis.fetch;
 
@@ -288,6 +453,10 @@ function getFetch(options: OpenAiCompatibleClientOptions): FetchLike {
 
 function completionUrl(baseUrl: string): string {
   return `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
+}
+
+function responsesUrl(baseUrl: string): string {
+  return `${baseUrl.replace(/\/+$/, "")}/responses`;
 }
 
 function redactionOptionsFor(apiKey: string): RedactSecretsOptions {
@@ -440,20 +609,21 @@ export class OpenAiCompatibleClient {
     apiKey: string
   ): Promise<ChatCompletionResult> {
     const redactionOptions = redactionOptionsFor(apiKey);
-    const body: Record<string, unknown> = {
-      model: request.modelId,
-      messages: request.messages.map(serializeMessage)
-    };
-
-    if (request.tools) {
-      body.tools = request.tools;
-    }
+    const apiFormat = this.provider.apiFormat;
+    const body =
+      apiFormat === "openai_responses"
+        ? createResponsesBody(request)
+        : createChatCompletionsBody(request);
+    const url =
+      apiFormat === "openai_responses"
+        ? responsesUrl(this.provider.baseUrl)
+        : completionUrl(this.provider.baseUrl);
 
     const retryOptions = normalizeRetryOptions(this.options.retry);
 
     for (let attempt = 1; attempt <= retryOptions.maxAttempts; attempt += 1) {
       try {
-        return await this.sendChatCompletionOnce(body, apiKey, redactionOptions);
+        return await this.sendChatCompletionOnce(body, apiKey, redactionOptions, apiFormat, url);
       } catch (error) {
         const hasMoreAttempts = attempt < retryOptions.maxAttempts;
         if (!hasMoreAttempts || !isRetryableRequestError(error, retryOptions)) {
@@ -470,11 +640,13 @@ export class OpenAiCompatibleClient {
   private async sendChatCompletionOnce(
     body: Record<string, unknown>,
     apiKey: string,
-    redactionOptions: RedactSecretsOptions
+    redactionOptions: RedactSecretsOptions,
+    apiFormat: OpenAiCompatibleProviderDefinition["apiFormat"],
+    url: string
   ): Promise<ChatCompletionResult> {
     let response: Response;
     try {
-      response = await getFetch(this.options)(completionUrl(this.provider.baseUrl), {
+      response = await getFetch(this.options)(url, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${apiKey}`,
@@ -495,6 +667,17 @@ export class OpenAiCompatibleClient {
 
     if (!response.ok) {
       throw new Error(formatHttpError(response, responseBody, redactionOptions));
+    }
+
+    if (apiFormat === "openai_responses") {
+      const completion = responseBody as OpenAiResponsesResponseBody;
+      return {
+        content: parseResponsesContent(completion),
+        usage: completion.usage,
+        normalizedUsage: normalizeUsage(completion.usage),
+        toolCalls: parseResponsesToolCalls(completion.output),
+        raw: responseBody
+      };
     }
 
     const completion = responseBody as OpenAiCompatibleResponseBody;

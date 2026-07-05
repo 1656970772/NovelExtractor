@@ -8,6 +8,8 @@ import type {
   DesktopIpcChannel,
   DesktopIpcRequest,
   DesktopIpcResponse,
+  FetchedProviderModelDto,
+  FetchProviderModelsDto,
   JobDto,
   JobLogDto,
   ProjectDto,
@@ -42,6 +44,7 @@ export interface NovelExtractorDesktopApi {
   chooseProjectDirectory(): Promise<string | undefined>;
   saveProvider(input: SaveProviderDto): Promise<void>;
   listProviders(): Promise<ProviderViewDto[]>;
+  fetchProviderModels(input: FetchProviderModelsDto): Promise<FetchedProviderModelDto[]>;
   uploadTxt(input: UploadTxtDto): Promise<BookUploadResultDto>;
   listReports(input: { bookId: string }): Promise<ReportDto[]>;
   previewReport(input: { reportId: string }): Promise<SafeMarkdownPreviewDto>;
@@ -86,6 +89,7 @@ export function createNovelExtractorDesktopApi(
     chooseProjectDirectory: () => invokeTyped(invoke, "settings:chooseProjectDirectory", undefined),
     saveProvider: (input) => invokeTyped(invoke, "providers:save", input),
     listProviders: () => invokeTyped(invoke, "providers:list", undefined),
+    fetchProviderModels: (input) => invokeTyped(invoke, "providers:fetchModels", input),
     uploadTxt: (input) => invokeTyped(invoke, "books:uploadTxt", input),
     listReports: (input) => invokeTyped(invoke, "books:listReports", input),
     previewReport: (input) => invokeTyped(invoke, "reports:preview", input),

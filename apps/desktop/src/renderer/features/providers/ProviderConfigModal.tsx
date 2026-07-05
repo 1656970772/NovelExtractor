@@ -1,10 +1,17 @@
 import { useState } from "react";
-import type { ProviderViewDto, SaveProviderDto } from "../../../shared/ipcTypes";
+import { getProviderPresets } from "@novel-extractor/config";
+import type {
+  FetchedProviderModelDto,
+  FetchProviderModelsDto,
+  ProviderViewDto,
+  SaveProviderDto
+} from "../../../shared/ipcTypes";
 import { ProviderForm } from "./ProviderForm";
 import {
   buildSaveProviderDto,
   clearProviderSecretAfterSave,
   createProviderFormState,
+  mergeFetchedModelsIntoForm,
   type ProviderFormState,
   type ProviderResourceState,
   type ProviderSaveState
@@ -18,7 +25,14 @@ export interface ProviderConfigModalProps {
   saveState: ProviderSaveState;
   saveError?: string;
   onClose: () => void;
+  onFetchProviderModels: (input: FetchProviderModelsDto) => Promise<FetchedProviderModelDto[]>;
   onSaveProvider: (input: SaveProviderDto) => Promise<void> | void;
+}
+
+const PROVIDER_PRESETS = getProviderPresets();
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
 }
 
 export function ProviderConfigModal({
@@ -29,6 +43,7 @@ export function ProviderConfigModal({
   saveState,
   saveError,
   onClose,
+  onFetchProviderModels,
   onSaveProvider
 }: ProviderConfigModalProps) {
   const [formState, setFormState] = useState<ProviderFormState>(() =>
@@ -48,6 +63,57 @@ export function ProviderConfigModal({
       return;
     }
     setFormState((currentState) => clearProviderSecretAfterSave(currentState));
+  }
+
+  async function handleFetchModels(): Promise<void> {
+    const preset = PROVIDER_PRESETS.find((candidate) => candidate.id === formState.presetId);
+    const requestProviderId = formState.providerId;
+    const requestPresetId = formState.presetId;
+    const requestBaseUrl = formState.baseUrl.trim();
+    const requestModelsUrl = preset?.modelsUrl;
+    const apiKey = formState.apiKey.trim();
+
+    setFormState((currentState) => ({
+      ...currentState,
+      modelFetchState: "loading",
+      modelFetchError: undefined
+    }));
+
+    try {
+      const fetchedModels = await onFetchProviderModels({
+        providerId: requestProviderId,
+        presetId: requestPresetId,
+        baseUrl: requestBaseUrl,
+        apiKey: apiKey || undefined,
+        modelsUrl: requestModelsUrl
+      });
+
+      setFormState((currentState) => {
+        if (
+          currentState.providerId !== requestProviderId ||
+          currentState.presetId !== requestPresetId ||
+          currentState.baseUrl.trim() !== requestBaseUrl
+        ) {
+          return currentState;
+        }
+        return mergeFetchedModelsIntoForm(currentState, fetchedModels);
+      });
+    } catch (error) {
+      setFormState((currentState) => {
+        if (
+          currentState.providerId !== requestProviderId ||
+          currentState.presetId !== requestPresetId ||
+          currentState.baseUrl.trim() !== requestBaseUrl
+        ) {
+          return currentState;
+        }
+        return {
+          ...currentState,
+          modelFetchState: "error",
+          modelFetchError: getErrorMessage(error, "获取模型列表失败")
+        };
+      });
+    }
   }
 
   return (
@@ -71,6 +137,9 @@ export function ProviderConfigModal({
             formState={formState}
             onCancel={onClose}
             onChange={setFormState}
+            onFetchModels={() => {
+              void handleFetchModels();
+            }}
             onSubmit={() => {
               void handleSaveProvider();
             }}

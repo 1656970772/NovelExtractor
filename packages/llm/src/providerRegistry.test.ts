@@ -73,6 +73,29 @@ describe("LLM provider registry", () => {
     expect(() => registry.resolveModelRef("deepseek/unknown-model")).toThrow(/not configured/);
   });
 
+  it("resolves P1 cc-switch providers with protocol and catalog metadata", () => {
+    const registry = createProviderRegistry({ presets: getProviderPresets() });
+
+    const mimo = registry.resolveModelRef("xiaomi-mimo/mimo-v2.5");
+
+    expect(mimo.provider.apiFormat).toBe("openai_responses");
+    expect(mimo.provider.models.map((model) => model.id)).toEqual(["mimo-v2.5-pro", "mimo-v2.5"]);
+    expect(mimo.provider.models[1]).toMatchObject({
+      contextWindow: 1048576,
+      inputModalities: ["text", "image"]
+    });
+
+    const glm = registry.resolveModelRef("zhipu-glm/glm-5.2");
+    expect(glm.provider.apiFormat).toBe("openai_chat");
+    expect(glm.provider.reasoning).toMatchObject({
+      supportsThinking: true,
+      supportsEffort: false,
+      effortParam: "none",
+      outputFormat: "reasoning_content"
+    });
+    expect(glm.provider.models[0].supportsReasoning).toBe(true);
+  });
+
   it("converts the DeepSeek preset without duplicating model facts", () => {
     const preset = getProviderPresets().find((candidate) => candidate.id === "deepseek");
 

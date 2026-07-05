@@ -1,10 +1,12 @@
 import type {
   ProviderKind as ConfigProviderKind,
+  ProviderPresetId as ConfigProviderPresetId,
   TaskAction as ConfigTaskAction
 } from "@novel-extractor/config";
 import type { JobStatus as DomainJobStatus } from "@novel-extractor/domain";
 
 export type ProviderKind = ConfigProviderKind;
+export type ProviderPresetId = ConfigProviderPresetId;
 export type JobStatus = DomainJobStatus;
 
 export const DESKTOP_IPC_CHANNELS = [
@@ -15,6 +17,7 @@ export const DESKTOP_IPC_CHANNELS = [
   "settings:chooseProjectDirectory",
   "providers:save",
   "providers:list",
+  "providers:fetchModels",
   "books:uploadTxt",
   "books:listReports",
   "projectRuntime:get",
@@ -63,7 +66,7 @@ export interface SaveDesktopSettingsDto {
 
 export interface SaveProviderDto {
   providerId?: string;
-  presetId: "deepseek" | "custom-openai-compatible";
+  presetId: ProviderPresetId;
   displayName: string;
   kind: ProviderKind;
   baseUrl?: string;
@@ -71,15 +74,38 @@ export interface SaveProviderDto {
   modelName: string;
   defaultModel: boolean;
   enabled: boolean;
+  models?: ProviderModelDto[];
+}
+
+export interface ProviderModelDto {
+  id: string;
+  displayName: string;
+  enabled: boolean;
+  isDefault: boolean;
+}
+
+export interface FetchProviderModelsDto {
+  providerId?: string;
+  presetId: ProviderPresetId;
+  baseUrl: string;
+  apiKey?: string;
+  modelsUrl?: string;
+  isFullUrl?: boolean;
+  userAgent?: string;
+}
+
+export interface FetchedProviderModelDto {
+  id: string;
+  ownedBy?: string;
 }
 
 export interface ProviderViewDto {
   id: string;
-  presetId: "deepseek" | "custom-openai-compatible";
+  presetId: ProviderPresetId;
   displayName: string;
   kind: ProviderKind;
   baseUrl?: string;
-  models: Array<{ id: string; displayName: string; enabled: boolean; isDefault: boolean }>;
+  models: ProviderModelDto[];
   hasApiKey: boolean;
   enabled: boolean;
 }
@@ -244,6 +270,7 @@ export interface DesktopIpcRequestMap {
   "settings:chooseProjectDirectory": undefined;
   "providers:save": SaveProviderDto;
   "providers:list": undefined;
+  "providers:fetchModels": FetchProviderModelsDto;
   "books:uploadTxt": UploadTxtDto;
   "books:listReports": { bookId: string };
   "projectRuntime:get": { projectId: string };
@@ -275,6 +302,7 @@ export interface DesktopIpcResponseMap {
   "settings:chooseProjectDirectory": string | undefined;
   "providers:save": void;
   "providers:list": ProviderViewDto[];
+  "providers:fetchModels": FetchedProviderModelDto[];
   "books:uploadTxt": BookUploadResultDto;
   "books:listReports": ReportDto[];
   "projectRuntime:get": ProjectRuntimeDto;

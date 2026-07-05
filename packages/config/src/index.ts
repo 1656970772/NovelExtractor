@@ -1,5 +1,6 @@
 export * from "./schema";
 export * from "./defaults";
+export * from "./ccSwitchProviderPresets";
 export * from "./providerPresets";
 export * from "./taskStatus";
 export * from "./menu";

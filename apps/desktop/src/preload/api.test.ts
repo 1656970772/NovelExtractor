@@ -45,6 +45,12 @@ describe("preload desktop API", () => {
       enabled: true
     });
     await api.listProviders();
+    await api.fetchProviderModels({
+      presetId: "deepseek",
+      baseUrl: "https://api.deepseek.com",
+      apiKey: "sk-secret",
+      modelsUrl: "https://api.deepseek.com/models"
+    });
     await api.uploadTxt({ projectId: "project-1", filePath: "E:\\books\\novel.txt" });
     await api.listReports({ bookId: "book-1" });
     await api.previewReport({ reportId: "report-1" });
@@ -90,6 +96,7 @@ describe("preload desktop API", () => {
       "settings:chooseProjectDirectory",
       "providers:save",
       "providers:list",
+      "providers:fetchModels",
       "books:uploadTxt",
       "books:listReports",
       "reports:preview",
@@ -112,7 +119,7 @@ describe("preload desktop API", () => {
       "window:toggleMaximize",
       "window:close"
     ]);
-    expect(invoke).toHaveBeenCalledTimes(28);
+    expect(invoke).toHaveBeenCalledTimes(29);
   });
 
   it("opens the full job log through typed IPC", async () => {
@@ -158,6 +165,7 @@ describe("preload desktop API", () => {
       "chooseProjectDirectory",
       "saveProvider",
       "listProviders",
+      "fetchProviderModels",
       "uploadTxt",
       "listReports",
       "previewReport",

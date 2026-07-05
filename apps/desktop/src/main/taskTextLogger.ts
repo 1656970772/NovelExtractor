@@ -203,6 +203,11 @@ function replaceWindowTextReferencesInValue(
 
 function replaceWindowTextForLog(content: string, windowText: string, windowFileName: string): string {
   const reference = `[窗口原文见 ${windowFileName}]`;
+  const promptSectionOutput = replaceCurrentWindowPromptSectionForLog(content, windowText, reference);
+  if (promptSectionOutput !== undefined) {
+    return promptSectionOutput;
+  }
+
   const candidates = windowTextReferenceCandidates(windowText);
   if (candidates.length === 0) {
     return content;
@@ -219,6 +224,34 @@ function replaceWindowTextForLog(content: string, windowText: string, windowFile
   }
 
   return output;
+}
+
+function replaceCurrentWindowPromptSectionForLog(
+  content: string,
+  windowText: string,
+  reference: string
+): string | undefined {
+  const normalizedContent = normalizeLineEndings(content);
+  const headingMatch = /(^|\n)## 当前窗口文本[ \t]*\n/u.exec(normalizedContent);
+  if (!headingMatch) {
+    return undefined;
+  }
+
+  const sectionStart = headingMatch.index + headingMatch[0].length;
+  const beforeSection = normalizedContent.slice(0, sectionStart);
+  const afterHeading = normalizedContent.slice(sectionStart);
+  const normalizedWindowText = normalizeLineEndings(windowText).trim();
+
+  if (normalizedWindowText !== "" && afterHeading.startsWith(normalizedWindowText)) {
+    return `${beforeSection}${reference}${afterHeading.slice(normalizedWindowText.length)}`;
+  }
+
+  const nextSectionMatch = /\n## /u.exec(afterHeading);
+  if (nextSectionMatch) {
+    return `${beforeSection}${reference}${afterHeading.slice(nextSectionMatch.index)}`;
+  }
+
+  return `${beforeSection}${reference}`;
 }
 
 function windowTextReferenceCandidates(windowText: string): string[] {

@@ -3,6 +3,8 @@ import type {
   CoverageIndexCorruptionStrategy,
   MenuItemConfig,
   NovelExtractorConfig,
+  ProviderApiFormat,
+  ProviderReasoningCapability,
   QuantityPolicyDefaults,
   ReportPathPolicyMode,
   TaskAction,
@@ -24,6 +26,16 @@ const ALLOWED_TASK_ACTIONS = new Set<TaskAction>([
   "restart",
   "delete"
 ]);
+const ALLOWED_PROVIDER_API_FORMATS = new Set<ProviderApiFormat>([
+  "openai_chat",
+  "openai_responses"
+]);
+const ALLOWED_REASONING_EFFORT_PARAMS = new Set<
+  ProviderReasoningCapability["effortParam"]
+>(["reasoning_effort", "none"]);
+const ALLOWED_REASONING_OUTPUT_FORMATS = new Set<
+  ProviderReasoningCapability["outputFormat"]
+>(["reasoning_content"]);
 const REQUIRED_TASK_ACTIONS: TaskAction[] = ["start", "pause", "resume", "restart", "delete"];
 const ALLOWED_FALLBACK_STRATEGIES = new Set(["none", "semanticRuleFilter", "matchAll"]);
 const ALLOWED_FALLBACK_SOURCES = new Set(["runtimePolicySnapshot", "rulesSnapshot"]);
@@ -141,6 +153,81 @@ function assertNonEmptyStringArray(value: unknown, label: string): asserts value
   value.forEach((item, index) => {
     assertNonEmpty(item, `${label} ${index + 1}`);
   });
+}
+
+function assertProviderReasoning(value: unknown, label: string): void {
+  assertConfigObject(value, label);
+
+  assertBoolean(value.supportsThinking, `${label} supports thinking`);
+  assertBoolean(value.supportsEffort, `${label} supports effort`);
+  assertNonEmpty(value.thinkingParam, `${label} thinking param`);
+  assertAllowedValue(String(value.thinkingParam), new Set(["thinking"]), `${label} thinking param`);
+  assertNonEmpty(value.effortParam, `${label} effort param`);
+  assertAllowedValue(
+    String(value.effortParam),
+    ALLOWED_REASONING_EFFORT_PARAMS as Set<string>,
+    `${label} effort param`
+  );
+  assertNonEmpty(value.outputFormat, `${label} output format`);
+  assertAllowedValue(
+    String(value.outputFormat),
+    ALLOWED_REASONING_OUTPUT_FORMATS as Set<string>,
+    `${label} output format`
+  );
+  if (value.effortValueMode !== undefined) {
+    assertAllowedValue(String(value.effortValueMode), new Set(["deepseek"]), `${label} effort value mode`);
+  }
+}
+
+function assertProviderPresets(config: NovelExtractorConfig): void {
+  if (!Array.isArray(config.providerPresets)) {
+    throw new ConfigInvariantError("provider presets must be configured.");
+  }
+
+  assertUnique(
+    config.providerPresets.map((provider) => provider.id),
+    "provider preset id"
+  );
+
+  for (const provider of config.providerPresets) {
+    assertAllowedValue(
+      String(provider.apiFormat),
+      ALLOWED_PROVIDER_API_FORMATS as Set<string>,
+      `provider api format for ${provider.id}`
+    );
+
+    if (provider.reasoning !== undefined) {
+      assertProviderReasoning(provider.reasoning, `provider reasoning for ${provider.id}`);
+    }
+
+    if (!provider.allowsUserModels) {
+      assertNonEmpty(provider.baseUrl, `provider base url for ${provider.id}`);
+      if (!Array.isArray(provider.endpointCandidates)) {
+        throw new ConfigInvariantError(
+          `endpoint candidates for provider ${provider.id} must be configured.`
+        );
+      }
+      provider.endpointCandidates.forEach((candidate, index) => {
+        assertNonEmpty(candidate, `endpoint candidates for provider ${provider.id} ${index + 1}`);
+      });
+      if (!provider.endpointCandidates.includes(provider.baseUrl)) {
+        throw new ConfigInvariantError(
+          `endpoint candidates for provider ${provider.id} must include baseUrl.`
+        );
+      }
+    }
+
+    if (!Array.isArray(provider.models)) {
+      throw new ConfigInvariantError(`models for provider ${provider.id} must be configured.`);
+    }
+    for (const model of provider.models) {
+      assertNonEmpty(model.id, `model id for provider ${provider.id}`);
+    }
+    assertUnique(
+      provider.models.map((model) => model.id),
+      `model id for provider ${provider.id}`
+    );
+  }
 }
 
 function assertSafeRawWindowReportFileNamePrefix(value: unknown): void {
@@ -368,16 +455,7 @@ function assertMenuItemsHaveLabels(items: MenuItemConfig[], label: string): void
 }
 
 export function assertValidConfigInvariants(config: NovelExtractorConfig): void {
-  assertUnique(
-    config.providerPresets.map((provider) => provider.id),
-    "provider preset id"
-  );
-
-  for (const provider of config.providerPresets) {
-    for (const model of provider.models) {
-      assertNonEmpty(model.id, `model id for provider ${provider.id}`);
-    }
-  }
+  assertProviderPresets(config);
 
   for (const template of config.builtInTemplates) {
     assertNonEmpty(template.name, "template name");

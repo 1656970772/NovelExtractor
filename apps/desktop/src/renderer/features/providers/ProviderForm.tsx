@@ -2,6 +2,7 @@ import { getProviderPresets } from "@novel-extractor/config";
 import type { FormEvent } from "react";
 import {
   selectProviderPreset,
+  syncDefaultModelFlags,
   validateProviderForm,
   type ProviderFormState,
   type ProviderPresetId,
@@ -14,6 +15,7 @@ export interface ProviderFormProps {
   saveError?: string;
   onChange: (state: ProviderFormState) => void;
   onCancel: () => void;
+  onFetchModels: () => void;
   onSubmit: () => void;
 }
 
@@ -25,12 +27,15 @@ export function ProviderForm({
   saveError,
   onChange,
   onCancel,
+  onFetchModels,
   onSubmit
 }: ProviderFormProps) {
   const selectedPreset = PROVIDER_PRESETS.find((preset) => preset.id === formState.presetId);
   const validation = validateProviderForm(formState);
   const isSaving = saveState === "saving";
+  const isFetchingModels = formState.modelFetchState === "loading";
   const isPresetLocked = !selectedPreset?.allowsUserModels;
+  const shouldUseModelSelect = formState.models.length > 0;
 
   function updateForm(patch: Partial<ProviderFormState>): void {
     onChange({ ...formState, ...patch });
@@ -62,6 +67,22 @@ export function ProviderForm({
           </label>
         ))}
       </fieldset>
+
+      {selectedPreset ? (
+        <div className="provider-form__metadata">
+          {selectedPreset.websiteUrl ? (
+            <a href={selectedPreset.websiteUrl} rel="noreferrer" target="_blank">
+              官网
+            </a>
+          ) : null}
+          {selectedPreset.apiKeyUrl ? (
+            <a href={selectedPreset.apiKeyUrl} rel="noreferrer" target="_blank">
+              API key
+            </a>
+          ) : null}
+          <span>{selectedPreset.apiFormat}</span>
+        </div>
+      ) : null}
 
       <label className="provider-form__field">
         <span>配置名称</span>
@@ -95,13 +116,19 @@ export function ProviderForm({
 
       <label className="provider-form__field">
         <span>模型名</span>
-        {selectedPreset && selectedPreset.models.length > 0 ? (
+        {shouldUseModelSelect ? (
           <select
             disabled={isSaving}
-            onChange={(event) => updateForm({ modelName: event.target.value })}
+            onChange={(event) => {
+              const modelName = event.target.value;
+              updateForm({
+                modelName,
+                models: syncDefaultModelFlags(formState.models, modelName)
+              });
+            }}
             value={formState.modelName}
           >
-            {selectedPreset.models.map((model) => (
+            {formState.models.map((model) => (
               <option key={model.id} value={model.id}>
                 {model.displayName}
               </option>
@@ -115,6 +142,24 @@ export function ProviderForm({
           />
         )}
       </label>
+
+      <div className="provider-form__model-actions">
+        <button
+          aria-label="获取模型列表"
+          className="button button--secondary"
+          disabled={isSaving || isFetchingModels}
+          onClick={onFetchModels}
+          type="button"
+        >
+          {isFetchingModels ? "获取中" : "获取模型"}
+        </button>
+      </div>
+
+      {formState.modelFetchState === "error" && formState.modelFetchError ? (
+        <p className="form-error" role="alert">
+          {formState.modelFetchError}
+        </p>
+      ) : null}
 
       <div className="provider-form__toggles">
         <label>

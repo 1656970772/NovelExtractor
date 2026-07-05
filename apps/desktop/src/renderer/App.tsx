@@ -3,6 +3,8 @@ import type { TaskAction } from "@novel-extractor/config";
 import type {
   CreateJobDto,
   DesktopSettingsDto,
+  FetchedProviderModelDto,
+  FetchProviderModelsDto,
   JobDto,
   ProjectDto,
   ProviderViewDto,
@@ -358,6 +360,17 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
       setSaveState("error");
       throw error;
     }
+  }
+
+  async function fetchProviderModels(
+    input: FetchProviderModelsDto
+  ): Promise<FetchedProviderModelDto[]> {
+    const api = window.novelExtractor;
+    if (!api?.fetchProviderModels) {
+      throw new Error("获取模型列表入口尚未就绪");
+    }
+
+    return api.fetchProviderModels(input);
   }
 
   async function saveTemplateSelection(templateIds: string[]): Promise<void> {
@@ -753,6 +766,7 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
         saveError={saveError}
         saveState={saveState}
         onClose={() => setProviderModalOpen(false)}
+        onFetchProviderModels={fetchProviderModels}
         onSaveProvider={saveProvider}
       />
       <StorageSettingsModal

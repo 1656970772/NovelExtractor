@@ -7,6 +7,7 @@ import {
   mapJobDtoToExtractionJob,
   sortExtractionJobsByCreatedAtDesc
 } from "./extractionViewModel";
+import { getExtractionModelsFromProviders } from "../providers/providerViewModel";
 
 const book: BookUploadResultDto = {
   bookId: "book-1",
@@ -65,6 +66,29 @@ describe("extractionViewModel", () => {
     expect(state.extractionChapterCount).toBe(9);
     expect(state.overlapChapterCount).toBe(1);
     expect(state.skipAlreadyExtracted).toBe(true);
+  });
+
+  it("lists every enabled preset model from a saved cc-switch provider", () => {
+    const models = getExtractionModelsFromProviders([
+      {
+        id: "provider-mimo",
+        presetId: "xiaomi-mimo",
+        displayName: "Xiaomi MiMo",
+        kind: "openai-compatible",
+        baseUrl: "https://api.xiaomimimo.com/v1",
+        hasApiKey: true,
+        enabled: true,
+        models: [
+          { id: "mimo-v2.5-pro", displayName: "MiMo V2.5 Pro", enabled: true, isDefault: true },
+          { id: "mimo-v2.5", displayName: "MiMo V2.5", enabled: true, isDefault: false }
+        ]
+      }
+    ]);
+
+    expect(models.map((model) => model.displayName)).toEqual([
+      "Xiaomi MiMo / MiMo V2.5 Pro",
+      "Xiaomi MiMo / MiMo V2.5"
+    ]);
   });
 
   it("builds a CreateJobDto with extraction window and ledger strategy parameters", () => {
