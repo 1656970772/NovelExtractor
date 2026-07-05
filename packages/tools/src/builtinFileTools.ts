@@ -226,11 +226,12 @@ function assertAllowedReadReportExcerptArguments(args: Record<string, unknown>):
 }
 
 function normalizeReportFieldQueries(value: unknown): ReportFieldQuery[] {
-  if (!Array.isArray(value) || value.length === 0) {
+  const queries = parseJsonArrayString(value) ?? value;
+  if (!Array.isArray(queries) || queries.length === 0) {
     throw new ToolExecutionError("queries must be a non-empty array", "INVALID_ARGUMENTS");
   }
 
-  return value.map((item) => {
+  return queries.map((item) => {
     const record = isPlainRecord(item) ? item : undefined;
     if (record === undefined || typeof record.cardName !== "string" || !Array.isArray(record.fields)) {
       throw new ToolExecutionError("queries items must include cardName and fields", "INVALID_ARGUMENTS");
@@ -246,11 +247,12 @@ function normalizeReportFieldQueries(value: unknown): ReportFieldQuery[] {
 }
 
 function normalizeReportFieldUpdates(value: unknown): ReportFieldUpdate[] {
-  if (!Array.isArray(value) || value.length === 0) {
+  const updates = parseJsonArrayString(value) ?? value;
+  if (!Array.isArray(updates) || updates.length === 0) {
     throw new ToolExecutionError("updates must be a non-empty array", "INVALID_ARGUMENTS");
   }
 
-  return value.map((item) => {
+  return updates.map((item) => {
     const record = isPlainRecord(item) ? item : undefined;
     if (
       record === undefined ||
@@ -339,8 +341,16 @@ function normalizeReasonixArguments(name: string, rawArguments: unknown, context
     return rawArguments;
   }
 
+  const normalizedArgs =
+    name === "multi_edit"
+      ? {
+          ...args,
+          edits: parseJsonArrayString(args.edits) ?? args.edits
+        }
+      : args;
+
   return {
-    ...args,
+    ...normalizedArgs,
     path: toProjectRelativeReportPath(context, args.path)
   };
 }
@@ -373,6 +383,24 @@ function parseObjectArgument(rawArguments: unknown): Record<string, unknown> | u
   }
 
   return isPlainRecord(rawArguments) ? rawArguments : undefined;
+}
+
+function parseJsonArrayString(value: unknown): unknown[] | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function validateReadBudget(name: string, rawArguments: unknown, context: ToolExecutionContext, workspace: Workspace): void {

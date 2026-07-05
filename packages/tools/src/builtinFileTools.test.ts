@@ -129,6 +129,56 @@ describe("builtin file tools", () => {
     expect(fs.readFileSync(path.join(context.reportsRoot, "人物.md"), "utf8")).toBe("# 人物小传\n\n韩立：主角，谨慎\n");
   });
 
+  it("recovers JSON-stringified array fields for report and edit tools", async () => {
+    const context = makeContext();
+    fs.writeFileSync(
+      path.join(context.reportsRoot, "NPC性格与代表事件.md"),
+      "### 舞岩\n\n- 基础性格：旧\n- 欲望倾向：旧\n",
+      "utf8"
+    );
+    fs.writeFileSync(path.join(context.reportsRoot, "人物.md"), "# 人物\n\n韩立\n", "utf8");
+
+    await expect(
+      executeBuiltinFileTool(
+        "upsert_report_section",
+        {
+          outputFileName: "NPC性格与代表事件.md",
+          updates: JSON.stringify([
+            {
+              cardName: "舞岩",
+              fieldName: "基础性格",
+              content: "- 基础性格：傲慢自大"
+            }
+          ])
+        },
+        { ...context, allowedReportFileNames: ["NPC性格与代表事件.md"] }
+      )
+    ).resolves.toContain("updated report fields 舞岩/基础性格");
+
+    await expect(
+      executeBuiltinFileTool(
+        "read_report_excerpt",
+        {
+          outputFileName: "NPC性格与代表事件.md",
+          queries: JSON.stringify([{ cardName: "舞岩", fields: ["基础性格"] }])
+        },
+        { ...context, allowedReportFileNames: ["NPC性格与代表事件.md"] }
+      )
+    ).resolves.toContain("傲慢自大");
+
+    await expect(
+      executeBuiltinFileTool(
+        "multi_edit",
+        {
+          path: "人物.md",
+          edits: JSON.stringify([{ old_string: "韩立", new_string: "韩立：主角" }])
+        },
+        context
+      )
+    ).resolves.toContain("multi_edit ");
+    expect(fs.readFileSync(path.join(context.reportsRoot, "人物.md"), "utf8")).toBe("# 人物\n\n韩立：主角\n");
+  });
+
   it("records mark_no_update outcomes without creating or editing report files", async () => {
     const context = makeContext();
     const result = await executeBuiltinFileTool(

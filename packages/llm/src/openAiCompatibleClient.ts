@@ -223,7 +223,25 @@ function parseToolCallArguments(value: unknown): unknown {
   try {
     return JSON.parse(value);
   } catch {
-    return value;
+    return parseEmptyObjectPrefixedJsonObject(value) ?? value;
+  }
+}
+
+function parseEmptyObjectPrefixedJsonObject(value: string): unknown {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{}")) {
+    return undefined;
+  }
+
+  const suffix = trimmed.slice(2).trimStart();
+  if (!suffix.startsWith("{")) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(suffix);
+  } catch {
+    return undefined;
   }
 }
 

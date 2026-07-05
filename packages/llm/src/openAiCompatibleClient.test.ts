@@ -407,6 +407,56 @@ describe("OpenAiCompatibleClient", () => {
     });
   });
 
+  it("recovers tool call arguments prefixed by an empty object", async () => {
+    const client = new OpenAiCompatibleClient(
+      createProvider(),
+      { resolveApiKey: async () => "sk-prefixed-tool-secret" },
+      {
+        fetch: vi.fn(async () => {
+          return new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content: null,
+                    tool_calls: [
+                      {
+                        id: "call-prefixed-json",
+                        type: "function",
+                        function: {
+                          name: "write_file",
+                          arguments: "{}{\"path\":\"[报告]NPC性格与代表事件.md\",\"content\":\"# NPC性格与代表事件\"}"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        })
+      }
+    );
+
+    const result = await client.chatCompletion({
+      providerId: "deepseek-user",
+      modelId: "novel-analysis",
+      messages: [{ role: "user", content: "提取NPC信息" }]
+    });
+
+    expect(result.toolCalls).toEqual([
+      {
+        id: "call-prefixed-json",
+        name: "write_file",
+        arguments: {
+          path: "[报告]NPC性格与代表事件.md",
+          content: "# NPC性格与代表事件"
+        }
+      }
+    ]);
+  });
+
   it("serializes assistant tool calls and tool result messages in OpenAI-compatible request bodies", async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       expect(JSON.parse(String(init?.body))).toEqual({

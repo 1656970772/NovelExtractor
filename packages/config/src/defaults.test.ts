@@ -201,6 +201,10 @@ describe("default config", () => {
     expect(windowInstructions).toContain("卡片名");
     expect(windowInstructions).toContain("字段名");
     expect(windowInstructions).toContain("韩立-角色定位/核心性格/代表行为");
+    expect(windowInstructions).toContain("updates");
+    expect(windowInstructions).toContain("edits");
+    expect(windowInstructions).toContain("真 JSON 数组");
+    expect(windowInstructions).toContain("不要把数组写成字符串");
     expect(windowInstructions).not.toContain("glob");
     expect(windowInstructions).not.toContain("bash");
   });

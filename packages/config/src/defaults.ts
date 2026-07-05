@@ -171,6 +171,7 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
       NO_WHOLE_BOOK_PRIOR_KNOWLEDGE_RULE,
       TEMPLATE_EXAMPLE_EVIDENCE_RULE,
       "更新既有报告前，优先用 read_report_excerpt 按“卡片名-字段名/字段名”坐标读取目标字段块；字段块确认后用 upsert_report_section 按 cardName + fieldName 直接替换字段块，不要整读旧报告，不要用 old_string。",
+      "工具参数必须严格按 schema 传入原生 JSON 值：updates、edits、queries 等数组字段必须是真 JSON 数组（[...]），不要把数组写成字符串、Markdown 代码块或多层转义文本。",
       "字段坐标示例：韩立-角色定位/核心性格/代表行为；工具调用时拆成 cardName=韩立，fields=[角色定位,核心性格,代表行为]。",
       "如果本批次只有部分模板无新增信息，必须对这些模板调用 mark_no_update，并继续为其他模板写入或更新报告。",
       "如果当前窗口没有可写入的新信息，且未执行写工具，最终文本必须严格返回 NO_UPDATE。"
