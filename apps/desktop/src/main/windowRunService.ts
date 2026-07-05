@@ -125,6 +125,7 @@ const MARK_NO_UPDATE_TOOL_NAME = "mark_no_update";
 const READ_REPORT_EXCERPT_TOOL_NAME = "read_report_excerpt";
 const UPSERT_REPORT_SECTION_TOOL_NAME = "upsert_report_section";
 const DEFAULT_MAX_READ_BYTES = 1024 * 1024;
+const FORMAL_REPORT_FILE_NAME_PREFIX = "[报告]";
 const NO_TOOL_PROTOCOL_ERROR_MESSAGE =
   "tool loop 协议错误：无工具调用时必须返回 NO_UPDATE，或先通过写工具成功写入报告。";
 const NO_TOOL_PROTOCOL_CORRECTION_MESSAGE =
@@ -266,6 +267,27 @@ function createTemplatePromptHash(template: TemplateDto): string {
     .digest("hex");
 }
 
+function toFormalReportFileName(templateFileName: string): string {
+  const parsed = path.parse(templateFileName);
+  const extension = parsed.ext || ".md";
+  const baseName = parsed.name.startsWith(FORMAL_REPORT_FILE_NAME_PREFIX)
+    ? parsed.name.slice(FORMAL_REPORT_FILE_NAME_PREFIX.length)
+    : parsed.name;
+  if (!baseName.includes("模板") && !parsed.name.startsWith(FORMAL_REPORT_FILE_NAME_PREFIX)) {
+    return templateFileName;
+  }
+
+  const reportBaseName = baseName.replace(/模板/gu, "").trim() || baseName.trim() || "未命名";
+  return `${FORMAL_REPORT_FILE_NAME_PREFIX}${reportBaseName}${extension}`;
+}
+
+function toFormalReportTemplate(template: TemplateDto): TemplateDto {
+  return {
+    ...template,
+    fileName: toFormalReportFileName(template.fileName)
+  };
+}
+
 function sha256Json(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
@@ -366,7 +388,7 @@ function buildWindowUserPrompt(input: {
 }): string {
   const { artifacts, currentDate, manifestWindow, reportInventory, templatePromptProfiles, totalWindowCount, windowText } = input;
   const windowNumber = manifestWindow.index + 1;
-  const templateSection = templatePromptProfiles.map(renderTemplatePromptProfileCard).join("\n\n");
+  const templateSection = renderTemplatePromptProfileCards(templatePromptProfiles, reportInventory);
   const reportInventorySection = renderReportInventoryPromptSection(reportInventory);
 
   return [
@@ -402,8 +424,41 @@ function renderReportInventoryPromptSection(reportInventory: readonly ReportInve
     "宿主已基于本批次选中模板和 reports 目录提供报告清单，清单只包含本批次允许触达的报告文件。",
     `已有报告：${existingReportFileNames.length > 0 ? existingReportFileNames.join("、") : "无"}`,
     `待创建报告：${missingReportFileNames.length > 0 ? missingReportFileNames.join("、") : "无"}`,
-    "不要再调用目录或 shell 类工具查找这些报告是否存在；需要读已有报告时，直接使用允许的文件读取或搜索工具。"
+    "不要再调用目录或 shell 类工具查找这些报告是否存在；需要读已有报告时，直接使用允许的文件读取或搜索工具。",
+    "已有报告可按需读取相关字段，并用 upsert_report_section 修改目标字段。",
+    "待创建报告不要先调用 read_file 或 read_report_excerpt；有可写入信息时直接用 write_file 创建并写入完整报告正文。"
   ].join("\n");
+}
+
+function renderTemplatePromptProfileCards(
+  templatePromptProfiles: readonly TemplatePromptProfile[],
+  reportInventory: readonly ReportInventoryItem[]
+): string {
+  const reportStatusByOutputFileName = new Map(
+    reportInventory.map((item) => [item.outputFileName, item.exists ? "已存在" : "待创建"])
+  );
+
+  return templatePromptProfiles
+    .map((profile) =>
+      renderTemplatePromptProfileCardWithReportStatus(
+        profile,
+        reportStatusByOutputFileName.get(profile.outputFileName) ?? "未知"
+      )
+    )
+    .join("\n\n");
+}
+
+function renderTemplatePromptProfileCardWithReportStatus(
+  profile: TemplatePromptProfile,
+  reportStatus: string
+): string {
+  const lines = renderTemplatePromptProfileCard(profile).split("\n");
+  const outputFileNameLineIndex = lines.findIndex((line) => line === `- outputFileName: ${profile.outputFileName}`);
+  if (outputFileNameLineIndex >= 0) {
+    lines.splice(outputFileNameLineIndex + 1, 0, `- reportStatus: ${reportStatus}`);
+  }
+
+  return lines.join("\n");
 }
 
 function toReportDisplayName(fileName: string): string {
@@ -3082,10 +3137,14 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
 
   return {
     async runJobWindows({ artifacts, job }) {
+      const reportArtifacts: WindowRunArtifacts = {
+        ...artifacts,
+        templates: artifacts.templates.map(toFormalReportTemplate)
+      };
       const { client, modelId, providerId } = await createLlmClient(job);
-      const runtimeInput = createRuntimeInput({ artifacts, job, modelId });
+      const runtimeInput = createRuntimeInput({ artifacts: reportArtifacts, job, modelId });
       const context = await createWindowRunJobContext({
-        artifacts,
+        artifacts: reportArtifacts,
         job,
         totalWindowCount: runtimeInput.windows.length
       });
@@ -3102,7 +3161,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
       const runtime = createJobRuntime({
         clock: options.clock,
         llm: createLlmAdapter({
-          artifacts,
+          artifacts: reportArtifacts,
           client,
           context,
           job,

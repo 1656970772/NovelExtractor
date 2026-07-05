@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import type { ChatCompletionMessage, ToolSchema } from "@novel-extractor/llm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createTaskTextLogger, serializeModelRequestForTaskLog } from "./taskTextLogger";
+import {
+  createTaskTextLogger,
+  replaceWindowTextReferencesForTaskLog,
+  serializeModelRequestForTaskLog
+} from "./taskTextLogger";
 
 function createSequenceClock(values: string[]) {
   let index = 0;
@@ -184,5 +188,26 @@ describe("task text logger", () => {
     expect(content).toContain("name: read_file");
     expect(content).toContain("parameters:");
     expect(content).not.toContain("非常长的工具说明文本");
+  });
+
+  it("replaces paginated current-window read_file results with the window file reference", () => {
+    const windowText = [
+      "第一章",
+      "",
+      "这里是很长很长的窗口原文第一段。",
+      "这里是很长很长的窗口原文第二段。",
+      "这里是很长很长的窗口原文第三段。"
+    ].join("\n");
+
+    const output = replaceWindowTextReferencesForTaskLog({
+      value: {
+        返回内容:
+          "1→第一章\n2→\n3→这里是很长很长的窗口原文第一段。\n\n[more lines below; pass offset=3 to continue]\n"
+      },
+      windowFileName: "window-0001.txt",
+      windowText
+    });
+
+    expect(output).toEqual({ 返回内容: "[窗口原文见 window-0001.txt]" });
   });
 });

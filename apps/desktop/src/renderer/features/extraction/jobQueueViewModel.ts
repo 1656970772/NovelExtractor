@@ -73,7 +73,20 @@ export function formatTimestamp(timestamp?: string): string {
     return "--";
   }
 
-  return timestamp.replace("T", " ").slice(0, 19);
+  const timestampMs = Date.parse(timestamp);
+  if (Number.isNaN(timestampMs)) {
+    return "--";
+  }
+
+  const date = new Date(timestampMs);
+  const yearText = date.getFullYear().toString().padStart(4, "0");
+  const monthText = (date.getMonth() + 1).toString().padStart(2, "0");
+  const dayText = date.getDate().toString().padStart(2, "0");
+  const hourText = date.getHours().toString().padStart(2, "0");
+  const minuteText = date.getMinutes().toString().padStart(2, "0");
+  const secondText = date.getSeconds().toString().padStart(2, "0");
+
+  return `${yearText}-${monthText}-${dayText} ${hourText}:${minuteText}:${secondText}`;
 }
 
 function clampProgressPercent(percent?: number): number {

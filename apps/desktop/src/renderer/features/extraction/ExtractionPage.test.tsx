@@ -548,7 +548,7 @@ describe("ExtractionPage", () => {
     expect(screen.getByRole("heading", { name: "已完成的书" })).toBeInTheDocument();
     expect(screen.queryByText("世界观模板")).not.toBeInTheDocument();
     expect(screen.getByText("模型：deepseek-reasoner")).toBeInTheDocument();
-    expect(screen.getByText("完成时间：2026-07-02 10:12:48")).toBeInTheDocument();
+    expect(screen.getByText("完成时间：2026-07-02 18:12:48")).toBeInTheDocument();
     const completedCard = screen.getByRole("heading", { name: "已完成的书" }).closest("li");
     expect(completedCard).toBeInstanceOf(HTMLElement);
     const outputButton = within(completedCard as HTMLElement).getByRole("button", { name: "打开输出目录" });
@@ -673,7 +673,7 @@ describe("ExtractionPage", () => {
     expect(screen.getByText("预计总耗时：已暂停 00:07:00")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "失败的书" })).toBeInTheDocument();
     expect(screen.getByText("模型返回格式无效")).toBeInTheDocument();
-    expect(screen.getByText("失败时间：2026-07-02 09:40:30")).toBeInTheDocument();
+    expect(screen.getByText("失败时间：2026-07-02 17:40:30")).toBeInTheDocument();
   });
 
   it("marks job cards with status-specific classes for visual state colors", () => {

@@ -331,6 +331,92 @@ describe("window run report inventory", () => {
     expect(userPrompt).toContain("已有报告：NPC性格与代表事件.md、势力设定.md、材料分析.md");
     expect(userPrompt).toContain("待创建报告：事件因果链（长程因果图）.md");
     expect(userPrompt).toContain("不要再调用目录或 shell 类工具查找这些报告是否存在");
+    expect(userPrompt).toMatch(/outputFileName: NPC性格与代表事件\.md[\s\S]*reportStatus: 已存在/u);
+    expect(userPrompt).toMatch(/outputFileName: 事件因果链（长程因果图）\.md[\s\S]*reportStatus: 待创建/u);
+    expect(userPrompt).toContain("已有报告可按需读取相关字段，并用 upsert_report_section 修改目标字段。");
+    expect(userPrompt).toContain("待创建报告不要先调用 read_file 或 read_report_excerpt；有可写入信息时直接用 write_file 创建并写入完整报告正文。");
+  }, 20000);
+
+  it("uses formal report file names instead of template file names when creating reports", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-formal-report-name-"));
+    scratchDirs.push(projectRoot);
+    const reportsRoot = path.join(projectRoot, "assets", "books", "book-1", "reports");
+    const windowTextPath = path.join(projectRoot, "runs", "job-1", "windows", "window-0001.txt");
+    const requestBodies: Record<string, unknown>[] = [];
+    const registerReport = vi.fn(async () => {});
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requestBodies.push(body);
+
+      if (requestBodies.length === 1) {
+        return new Response(
+          JSON.stringify(createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-write-npc", "write_file", {
+                path: "[报告]NPC性格与代表事件.md",
+                content: "# NPC性格与代表事件\n\n### 韩立\n\n- 角色定位：山村少年。"
+              }),
+              createToolCall("call-write-world", "write_file", {
+                path: "世界观.md",
+                content: "# 世界观\n\n### 山村\n\n- 设定说明：故事起点。"
+              })
+            ]
+          })),
+          { headers: { "Content-Type": "application/json" }, status: 200 }
+        );
+      }
+
+      return new Response(
+        JSON.stringify(createChatCompletionResponse({ content: "窗口完成。" })),
+        { headers: { "Content-Type": "application/json" }, status: 200 }
+      );
+    });
+
+    await fs.mkdir(path.dirname(windowTextPath), { recursive: true });
+    await fs.mkdir(reportsRoot, { recursive: true });
+    await fs.writeFile(windowTextPath, "第一章\n\n韩立从山村出发。", "utf8");
+
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      fetch,
+      findExistingReport: () => undefined,
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeState: async () => {},
+      providerStore: createProviderStore(createProviderConfig(apiKeyRef)),
+      registerReport,
+      taskLogger: { append: vi.fn(async () => {}), setSecrets: vi.fn() } as any
+    });
+
+    await service.runJobWindows({
+      artifacts: createWindowArtifacts({
+        projectRoot,
+        templates: [
+          createTemplate({ id: "template-1", name: "NPC性格与代表事件模板", fileName: "NPC性格与代表事件模板.md" }),
+          createTemplate({ id: "template-2", name: "世界观", fileName: "世界观.md" })
+        ]
+      }),
+      job: createWindowRunJob({ templateIds: ["template-1", "template-2"] })
+    });
+
+    const firstPrompt = messagesOf(requestBodies[0]).find((message) => message.role === "user")?.content;
+    expect(firstPrompt).toContain("待创建报告：[报告]NPC性格与代表事件.md、世界观.md");
+    expect(firstPrompt).toContain("outputFileName: [报告]NPC性格与代表事件.md");
+    expect(firstPrompt).toContain("outputFileName: 世界观.md");
+    await expect(fs.readFile(path.join(reportsRoot, "[报告]NPC性格与代表事件.md"), "utf8")).resolves.toContain("韩立");
+    await expect(fs.readFile(path.join(reportsRoot, "世界观.md"), "utf8")).resolves.toContain("山村");
+    expect(registerReport).toHaveBeenCalledWith({
+      path: path.join(reportsRoot, "[报告]NPC性格与代表事件.md"),
+      report: expect.objectContaining({
+        fileName: "[报告]NPC性格与代表事件.md",
+        reportKind: "template-output"
+      })
+    });
   }, 20000);
 
   it("limits each batched prompt report inventory to that batch", async () => {
@@ -358,7 +444,7 @@ describe("window run report inventory", () => {
       if (requestBodies.length === 1) {
         return new Response(
           JSON.stringify(createChatCompletionResponse({
-            toolCalls: templates.slice(0, 4).map((template) =>
+            toolCalls: templates.slice(0, 3).map((template) =>
               createToolCall(`call-no-update-${template.id}`, "mark_no_update", {
                 path: template.fileName,
                 reason: `${template.name}当前窗口无新增。`
@@ -372,12 +458,12 @@ describe("window run report inventory", () => {
       if (requestBodies.length === 3) {
         return new Response(
           JSON.stringify(createChatCompletionResponse({
-            toolCalls: [
-              createToolCall("call-no-update-template-5", "mark_no_update", {
-                path: "报告五.md",
-                reason: "报告五当前窗口无新增。"
+            toolCalls: templates.slice(3).map((template) =>
+              createToolCall(`call-no-update-${template.id}`, "mark_no_update", {
+                path: template.fileName,
+                reason: `${template.name}当前窗口无新增。`
               })
-            ]
+            )
           })),
           { headers: { "Content-Type": "application/json" }, status: 200 }
         );
@@ -414,8 +500,10 @@ describe("window run report inventory", () => {
     const firstPrompt = messagesOf(requestBodies[0]).find((message) => message.role === "user")?.content;
     const secondBatchPrompt = messagesOf(requestBodies[2]).find((message) => message.role === "user")?.content;
     expect(firstPrompt).toContain("报告一.md");
-    expect(firstPrompt).toContain("报告四.md");
+    expect(firstPrompt).toContain("报告三.md");
+    expect(firstPrompt).not.toContain("报告四.md");
     expect(firstPrompt).not.toContain("报告五.md");
+    expect(secondBatchPrompt).toContain("报告四.md");
     expect(secondBatchPrompt).toContain("报告五.md");
     expect(secondBatchPrompt).not.toContain("报告一.md");
   }, 20000);

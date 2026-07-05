@@ -46,6 +46,7 @@ export interface ReplaceWindowTextReferencesForTaskLogInput {
 const systemClock: Pick<Clock, "now"> = {
   now: () => new Date().toISOString()
 };
+const minimumWindowExcerptCharsForLogReference = 8;
 
 function toDisplayTimestamp(timestamp: string): string {
   const match = timestamp.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/u);
@@ -212,11 +213,8 @@ function replaceWindowTextForLog(content: string, windowText: string, windowFile
     output = output.split(candidate).join(reference);
   }
 
-  const readFilePlainText = parseFullReadFileWindowText(output);
-  if (
-    readFilePlainText !== undefined &&
-    candidates.some((candidate) => comparableWindowText(candidate) === comparableWindowText(readFilePlainText))
-  ) {
+  const readFilePlainText = parseReadFileWindowText(output);
+  if (readFilePlainText !== undefined && matchesWindowTextForLogReference(readFilePlainText, candidates)) {
     return reference;
   }
 
@@ -236,22 +234,56 @@ function comparableWindowText(value: string): string {
   return normalizeLineEndings(value).trimEnd();
 }
 
-function parseFullReadFileWindowText(content: string): string | undefined {
+function matchesWindowTextForLogReference(readFilePlainText: string, candidates: readonly string[]): boolean {
+  const comparableReadText = comparableWindowText(readFilePlainText);
+  if (comparableReadText === "") {
+    return false;
+  }
+
+  return candidates.some((candidate) => {
+    const comparableCandidate = comparableWindowText(candidate);
+    return (
+      comparableCandidate === comparableReadText ||
+      (isMeaningfulWindowTextExcerpt(comparableReadText) && comparableCandidate.includes(comparableReadText))
+    );
+  });
+}
+
+function isMeaningfulWindowTextExcerpt(value: string): boolean {
+  return value.replace(/\s/gu, "").length >= minimumWindowExcerptCharsForLogReference;
+}
+
+function parseReadFileWindowText(content: string): string | undefined {
   const lines = normalizeLineEndings(content).split("\n");
   while (lines.at(-1) === "") {
     lines.pop();
   }
-  if (lines.length === 0 || lines.some((line) => line.startsWith("[more lines below;"))) {
+  if (lines.length === 0) {
     return undefined;
   }
 
   const textLines: string[] = [];
-  for (const line of lines) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line === "" && lines[index + 1]?.startsWith("[more lines below;")) {
+      continue;
+    }
+    if (line.startsWith("[more lines below;")) {
+      if (index !== lines.length - 1) {
+        return undefined;
+      }
+      continue;
+    }
+
     const match = /^\s*\d+→(.*)$/u.exec(line);
     if (!match) {
       return undefined;
     }
     textLines.push(match[1] ?? "");
+  }
+
+  if (textLines.length === 0) {
+    return undefined;
   }
 
   return textLines.join("\n");

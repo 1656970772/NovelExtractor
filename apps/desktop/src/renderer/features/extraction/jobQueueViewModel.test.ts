@@ -78,7 +78,7 @@ describe("jobQueueViewModel", () => {
     expect(card.progressWidthPercent).toBe(100);
     expect(card.elapsedText).toBe("00:05:32");
     expect(card.estimatedTotalText).toBe("00:07:58");
-    expect(card.completedAtText).toBe("2026-07-02 10:12:48");
+    expect(card.completedAtText).toBe("2026-07-02 18:12:48");
   });
 
   it("uses the current clock for running elapsed time without changing the total estimate", () => {
@@ -102,8 +102,12 @@ describe("jobQueueViewModel", () => {
 
   it("formats timestamps without depending on locale settings", () => {
     expect(formatTimestamp()).toBe("--");
-    expect(formatTimestamp("2026-07-02T10:12:48.000Z")).toBe("2026-07-02 10:12:48");
+    expect(formatTimestamp("2026-07-02T10:12:48.000Z")).toBe("2026-07-02 18:12:48");
     expect(formatTimestamp("not-an-iso-timestamp-value")).toBe("--");
+  });
+
+  it("renders UTC completion timestamps in the current local time zone", () => {
+    expect(formatTimestamp("2026-07-05T03:23:30.000Z")).toBe("2026-07-05 11:23:30");
   });
 
   it("formats frozen card remaining time with three duration segments", () => {

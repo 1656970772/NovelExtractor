@@ -5991,8 +5991,10 @@ describe("P0 desktop IPC handlers", () => {
   it("recovers a missing template outcome when the model marks the unwritten output as no update", async () => {
     const firstTemplateName = "甲模板纠正测试";
     const secondTemplateName = "乙模板纠正测试";
-    const firstReportName = "甲模板纠正测试.md";
-    const secondReportName = "乙模板纠正测试.md";
+    const firstTemplateFileName = "甲模板纠正测试.md";
+    const secondTemplateFileName = "乙模板纠正测试.md";
+    const firstReportName = "[报告]甲纠正测试.md";
+    const secondReportName = "[报告]乙纠正测试.md";
     const mockServer = await startMockOpenAiServer({
       respond: ({ requestIndex }) => {
         if (requestIndex === 0) {
@@ -6048,14 +6050,14 @@ describe("P0 desktop IPC handlers", () => {
         projectId: "project-a",
         scope: "project",
         name: firstTemplateName,
-        fileName: firstReportName,
+        fileName: firstTemplateFileName,
         body: "只记录甲模板纠正测试。"
       });
       const secondTemplate = await contract.invoke(handlers, "templates:save", {
         projectId: "project-a",
         scope: "project",
         name: secondTemplateName,
-        fileName: secondReportName,
+        fileName: secondTemplateFileName,
         body: "只记录乙模板纠正测试。"
       });
       const job = await contract.invoke(handlers, "jobs:create", {
@@ -7274,10 +7276,10 @@ describe("P0 desktop IPC handlers", () => {
 
   it("completes four templates in one default count-based batch with one written report and no-update outcomes", async () => {
     const templates = [
-      { name: "甲模板分批测试", fileName: "甲模板分批测试.md" },
-      { name: "乙模板分批测试", fileName: "乙模板分批测试.md" },
-      { name: "丙模板分批测试", fileName: "丙模板分批测试.md" },
-      { name: "丁模板分批测试", fileName: "丁模板分批测试.md" }
+      { name: "甲模板分批测试", fileName: "甲模板分批测试.md", outputFileName: "[报告]甲分批测试.md" },
+      { name: "乙模板分批测试", fileName: "乙模板分批测试.md", outputFileName: "[报告]乙分批测试.md" },
+      { name: "丙模板分批测试", fileName: "丙模板分批测试.md", outputFileName: "[报告]丙分批测试.md" },
+      { name: "丁模板分批测试", fileName: "丁模板分批测试.md", outputFileName: "[报告]丁分批测试.md" }
     ];
     const mockServer = await startMockOpenAiServer({
       respond: ({ requestIndex }) => {
@@ -7286,19 +7288,19 @@ describe("P0 desktop IPC handlers", () => {
             body: createChatCompletionResponse({
               toolCalls: [
                 createToolCall("call-first-template-write", "write_file", {
-                  path: templates[0].fileName,
+                  path: templates[0].outputFileName,
                   content: "# 甲模板分批测试\n\n合并批次写入甲模板。"
                 }),
                 createToolCall("call-second-template-no-update", "mark_no_update", {
-                  path: templates[1].fileName,
+                  path: templates[1].outputFileName,
                   reason: "乙模板当前窗口无新增信息。"
                 }),
                 createToolCall("call-third-template-no-update", "mark_no_update", {
-                  path: templates[2].fileName,
+                  path: templates[2].outputFileName,
                   reason: "丙模板当前窗口无新增信息。"
                 }),
                 createToolCall("call-fourth-template-no-update", "mark_no_update", {
-                  path: templates[3].fileName,
+                  path: templates[3].outputFileName,
                   reason: "丁模板当前窗口无新增信息。"
                 })
               ]
@@ -7394,9 +7396,9 @@ describe("P0 desktop IPC handlers", () => {
         status: "completed",
         progressText: "进度：1/1"
       });
-      expect(reports.map((report) => report.fileName)).toEqual([templates[0].fileName]);
+      expect(reports.map((report) => report.fileName)).toEqual([templates[0].outputFileName]);
       expect(await fs.readFile(
-        path.join(tempRoot, "projects", "project-a", "assets", "books", book.bookId, "reports", templates[0].fileName),
+        path.join(tempRoot, "projects", "project-a", "assets", "books", book.bookId, "reports", templates[0].outputFileName),
         "utf8"
       )).toContain("合并批次写入甲模板。");
     } finally {

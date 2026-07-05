@@ -52,6 +52,26 @@ describe("template batch planner", () => {
     expect(batches.map((batch) => batch.splitReason)).toEqual(["maxTemplatesPerCall", "complete"]);
   });
 
+  it("balances template counts across the required number of batches", () => {
+    const makeTemplates = (count: number) =>
+      Array.from({ length: count }, (_, index) => ({
+        id: `template-${index + 1}`,
+        name: `模板${index + 1}`,
+        fileName: `报告${index + 1}.md`
+      }));
+
+    const getBatchSizes = (count: number) =>
+      planTemplateBatches({
+        templates: makeTemplates(count),
+        maxTemplatesPerCall: 4
+      }).map((batch) => batch.templates.length);
+
+    expect(getBatchSizes(5)).toEqual([3, 2]);
+    expect(getBatchSizes(6)).toEqual([3, 3]);
+    expect(getBatchSizes(9)).toEqual([3, 3, 3]);
+    expect(getBatchSizes(10)).toEqual([4, 3, 3]);
+  });
+
   it("does not split large template bodies by prompt character budget", () => {
     const largeTemplates = templates.map((template) => ({
       ...template,

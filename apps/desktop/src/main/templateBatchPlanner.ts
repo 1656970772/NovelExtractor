@@ -24,35 +24,25 @@ export function planTemplateBatches<TTemplate extends TemplateBatchPlannerTempla
   input: PlanTemplateBatchesInput<TTemplate>
 ): Array<TemplateBatch<TTemplate>> {
   const batchSize = toBatchSize(input.maxTemplatesPerCall);
+  const batchCount = Math.ceil(input.templates.length / batchSize);
   const batches: Array<TemplateBatch<TTemplate>> = [];
-  let currentTemplates: TTemplate[] = [];
 
-  function flush(splitReason: TemplateBatchSplitReason): void {
-    if (currentTemplates.length === 0) {
-      return;
-    }
+  if (batchCount === 0) {
+    return batches;
+  }
+
+  const baseBatchSize = Math.floor(input.templates.length / batchCount);
+  const largerBatchCount = input.templates.length % batchCount;
+  let startIndex = 0;
+
+  for (let batchIndex = 0; batchIndex < batchCount; batchIndex += 1) {
+    const currentBatchSize = baseBatchSize + (batchIndex < largerBatchCount ? 1 : 0);
+    const endIndex = startIndex + currentBatchSize;
     batches.push({
-      templates: currentTemplates,
-      splitReason
+      templates: input.templates.slice(startIndex, endIndex),
+      splitReason: batchIndex === batchCount - 1 ? "complete" : "maxTemplatesPerCall"
     });
-    currentTemplates = [];
-  }
-
-  for (const template of input.templates) {
-    currentTemplates.push(template);
-
-    if (currentTemplates.length >= batchSize) {
-      flush("maxTemplatesPerCall");
-    }
-  }
-
-  if (currentTemplates.length > 0) {
-    flush("complete");
-  } else if (batches.length > 0 && batches.at(-1)?.splitReason === "maxTemplatesPerCall") {
-    batches[batches.length - 1] = {
-      ...batches[batches.length - 1],
-      splitReason: "complete"
-    };
+    startIndex = endIndex;
   }
 
   return batches;
