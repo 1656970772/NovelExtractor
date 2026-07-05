@@ -88,6 +88,16 @@ describe("ProviderConfigModal and UserMenu", () => {
     expect(within(dialog).getAllByRole("radio")).toHaveLength(11);
   });
 
+  it("closes the provider config dialog from the header action", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    renderModal({ onClose });
+
+    await user.click(screen.getByRole("button", { name: "关闭大模型配置" }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it("shows Xiaomi MiMo preset models with locked Base URL", async () => {
     const user = userEvent.setup();
     renderModal();
@@ -204,6 +214,18 @@ describe("ProviderConfigModal and UserMenu", () => {
 
     const modelSelect = await screen.findByRole("combobox", { name: "模型名" });
     expect(within(modelSelect).getByRole("option", { name: "custom-live-model" })).toBeInTheDocument();
+  });
+
+  it("shows an OpenAI-compatible /v1 base URL example for custom providers", async () => {
+    const user = userEvent.setup();
+    renderModal({ providers: [] });
+
+    await user.click(screen.getByRole("radio", { name: "自定义 OpenAI-compatible" }));
+
+    expect(screen.getByLabelText("Base URL")).toHaveAttribute(
+      "placeholder",
+      "例如：https://api.jiu96.com/v1"
+    );
   });
 
   it("disables save and cancel while saving", () => {

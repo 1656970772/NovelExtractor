@@ -218,6 +218,21 @@ describe("app css template modal layout", () => {
     expect(uploadFileListRule).toContain("scrollbar-width: thin");
   });
 
+  it("keeps the provider modal header fixed while the body scrolls", () => {
+    const modalRule = getRuleBody(".provider-modal");
+    const headerRule = getRuleBody(".provider-modal__header");
+    const bodyRule = getRuleBody(".provider-modal__body");
+
+    expect(modalRule).toContain("grid-template-rows: auto minmax(0, 1fr)");
+    expect(modalRule).toContain("overflow: hidden");
+    expect(headerRule).toContain("position: sticky");
+    expect(headerRule).toContain("top: 0");
+    expect(headerRule).toContain("z-index: 1");
+    expect(bodyRule).toContain("min-height: 0");
+    expect(bodyRule).toContain("overflow-y: auto");
+    expect(bodyRule).toContain("overflow-x: hidden");
+  });
+
   it("uses a red background for destructive template buttons", () => {
     const dangerButtonRule = getRuleBody(".button--danger");
 

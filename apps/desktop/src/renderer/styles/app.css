@@ -1484,10 +1484,11 @@ p {
 .provider-modal {
   position: relative;
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 16px;
   width: min(920px, 100%);
   max-height: min(720px, calc(100dvh - 40px));
-  overflow: auto;
+  overflow: hidden;
   padding: 18px;
   border: 1px solid var(--app-color-border);
   border-radius: var(--app-radius-panel);
@@ -1496,13 +1497,17 @@ p {
 }
 
 .provider-modal__header {
+  position: sticky;
+  z-index: 1;
+  top: 0;
   display: flex;
   align-items: start;
   justify-content: space-between;
   gap: 16px;
+  background: var(--app-color-surface);
 }
 
-.provider-modal__header > div {
+.provider-modal__title {
   display: grid;
   gap: 4px;
 }
@@ -1512,11 +1517,36 @@ p {
   line-height: 1.25;
 }
 
+.provider-modal__header-actions {
+  display: flex;
+  align-items: start;
+  gap: 8px;
+}
+
+.provider-modal__close-button {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+}
+
+.provider-modal__close-icon {
+  width: 16px;
+  height: 16px;
+}
+
 .provider-modal__body {
   display: grid;
   grid-template-columns: minmax(280px, 0.92fr) minmax(280px, 1fr);
   gap: 16px;
   align-items: start;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
 }
 
 .template-modal {

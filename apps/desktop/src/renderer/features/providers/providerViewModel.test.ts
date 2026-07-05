@@ -5,6 +5,7 @@ import {
   clearProviderSecretAfterSave,
   createProviderFormState,
   mergeFetchedModelsIntoForm,
+  selectProviderPreset,
   validateProviderForm
 } from "./providerViewModel";
 
@@ -85,6 +86,20 @@ describe("providerViewModel", () => {
 
     expect(clearedState.apiKey).toBe("");
     expect(JSON.stringify(clearedState)).not.toContain("sk-must-not-survive");
+  });
+
+  it("clears provider id when switching to a different preset", () => {
+    const state = {
+      ...createProviderFormState("deepseek"),
+      providerId: "provider-deepseek"
+    };
+
+    const switchedState = selectProviderPreset(state, "minimax");
+
+    expect(buildSaveProviderDto(switchedState)).toMatchObject({
+      presetId: "minimax",
+      providerId: undefined
+    });
   });
 
   it("merges fetched models without losing existing form model metadata", () => {

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { X } from "lucide-react";
 import { getProviderPresets } from "@novel-extractor/config";
 import type {
   FetchedProviderModelDto,
@@ -125,11 +126,22 @@ export function ProviderConfigModal({
         role="dialog"
       >
         <div className="provider-modal__header">
-          <div>
+          <div className="provider-modal__title">
             <p className="section-kicker">Providers</p>
             <h2 id="provider-modal-title">大模型配置</h2>
           </div>
-          <span className="status-chip">{providers.length} 项配置</span>
+          <div className="provider-modal__header-actions">
+            <span className="status-chip">{providers.length} 项配置</span>
+            <button
+              aria-label="关闭大模型配置"
+              className="button button--quiet provider-modal__close-button"
+              onClick={onClose}
+              title="关闭"
+              type="button"
+            >
+              <X aria-hidden="true" className="provider-modal__close-icon" />
+            </button>
+          </div>
         </div>
 
         <div className="provider-modal__body">

@@ -109,9 +109,11 @@ export function selectProviderPreset(
   presetId: ProviderPresetId,
   presets = getProviderPresets()
 ): ProviderFormState {
+  const nextState = createProviderFormState(presetId, presets);
+
   return {
-    ...createProviderFormState(presetId, presets),
-    providerId: state.providerId,
+    ...nextState,
+    providerId: state.presetId === presetId ? state.providerId : undefined,
     defaultModel: state.defaultModel,
     enabled: state.enabled
   };

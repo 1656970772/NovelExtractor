@@ -20,6 +20,7 @@ export interface ProviderFormProps {
 }
 
 const PROVIDER_PRESETS = getProviderPresets();
+const CUSTOM_OPENAI_COMPATIBLE_BASE_URL_PLACEHOLDER = "例如：https://api.jiu96.com/v1";
 
 export function ProviderForm({
   formState,
@@ -36,6 +37,10 @@ export function ProviderForm({
   const isFetchingModels = formState.modelFetchState === "loading";
   const isPresetLocked = !selectedPreset?.allowsUserModels;
   const shouldUseModelSelect = formState.models.length > 0;
+  const baseUrlPlaceholder =
+    selectedPreset?.id === "custom-openai-compatible"
+      ? CUSTOM_OPENAI_COMPATIBLE_BASE_URL_PLACEHOLDER
+      : undefined;
 
   function updateForm(patch: Partial<ProviderFormState>): void {
     onChange({ ...formState, ...patch });
@@ -98,6 +103,7 @@ export function ProviderForm({
         <input
           disabled={isSaving}
           onChange={(event) => updateForm({ baseUrl: event.target.value })}
+          placeholder={baseUrlPlaceholder}
           readOnly={isPresetLocked}
           value={formState.baseUrl}
         />

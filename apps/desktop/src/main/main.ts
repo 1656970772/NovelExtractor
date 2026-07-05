@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, dialog, ipcMain, safeStorage, shell } from "electron";
+import { app, BrowserWindow, Menu, dialog, ipcMain, net, safeStorage, shell } from "electron";
 import type { OpenDialogOptions } from "electron";
 import { getThemeTokens } from "@novel-extractor/config";
 import { join } from "node:path";
@@ -9,6 +9,7 @@ import {
   createDesktopSettingsIpcHandlers,
   createFileDesktopSettingsStore
 } from "./desktopSettings";
+import { createElectronFetch } from "./electronFetch";
 import { createNotImplementedIpcHandlers, registerIpcHandlers } from "./ipc";
 import { createMainBrowserWindowOptions } from "./mainWindowOptions";
 import { createP0IpcHandlers } from "./p0Handlers";
@@ -115,10 +116,12 @@ void app.whenReady().then(async () => {
   const providerStore = createFileProviderStore({
     filePath: join(appPaths.userDataDir, "providers.json")
   });
+  const desktopFetch = createElectronFetch(net as { fetch: typeof fetch });
   registerIpcHandlers(ipcMain, {
     ...createNotImplementedIpcHandlers(),
     ...createP0IpcHandlers({
       credentialStore,
+      fetch: desktopFetch,
       providerStore,
       workspaceRoot: appPaths.userDataDir,
       projectsRoot: () => projectStorageDirectory,
@@ -126,7 +129,11 @@ void app.whenReady().then(async () => {
       shell,
       onJobUpdated: notifyRendererJobUpdated
     }),
-    ...createProviderIpcHandlers({ credentialStore, providerStore }),
+    ...createProviderIpcHandlers({
+      credentialStore,
+      modelFetch: { fetch: desktopFetch },
+      providerStore
+    }),
     ...createWindowIpcHandlers(BrowserWindow),
     ...createDesktopSettingsIpcHandlers({
       settingsStore,

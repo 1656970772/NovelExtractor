@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { getProviderPresets } from "@novel-extractor/config";
 import type { ProviderConfig } from "@novel-extractor/domain";
 import type { DesktopIpcHandlers } from "./ipc";
@@ -25,6 +26,27 @@ export interface ProviderIpcHandlersOptions {
 function createDefaultProviderIdFactory(): () => string {
   let nextId = 1;
   return () => `provider-${nextId++}`;
+}
+
+function createUniqueProviderId(
+  providers: readonly ProviderConfig[],
+  providerIdFactory: () => string
+): string {
+  const existingProviderIds = new Set(providers.map((provider) => provider.id));
+
+  for (let attempt = 0; attempt <= existingProviderIds.size; attempt += 1) {
+    const providerId = providerIdFactory();
+    if (!existingProviderIds.has(providerId)) {
+      return providerId;
+    }
+  }
+
+  let fallbackProviderId = "";
+  do {
+    fallbackProviderId = `provider-${randomUUID()}`;
+  } while (existingProviderIds.has(fallbackProviderId));
+
+  return fallbackProviderId;
 }
 
 function findModelDisplayName(input: SaveProviderDto): string {
@@ -108,7 +130,10 @@ export function createProviderIpcHandlers(
     input: SaveProviderDto
   ): ProviderConfig | undefined {
     if (input.providerId) {
-      return providers.find((provider) => provider.id === input.providerId);
+      const providerById = providers.find((provider) => provider.id === input.providerId);
+      if (providerById?.presetId === input.presetId) {
+        return providerById;
+      }
     }
 
     return providers.find((provider) => provider.presetId === input.presetId);
@@ -116,8 +141,17 @@ export function createProviderIpcHandlers(
 
   return {
     "providers:save": async (input) => {
-      const existingProvider = findExistingProvider(await providerStore.listProviderConfigs(), input);
-      const providerConfigId = existingProvider?.id ?? input.providerId ?? providerIdFactory();
+      const providers = await providerStore.listProviderConfigs();
+      const existingProvider = findExistingProvider(providers, input);
+      const hasConflictingProviderId = input.providerId
+        ? providers.some(
+            (provider) => provider.id === input.providerId && provider.presetId !== input.presetId
+          )
+        : false;
+      const providerConfigId =
+        existingProvider?.id ??
+        (hasConflictingProviderId ? undefined : input.providerId) ??
+        createUniqueProviderId(providers, providerIdFactory);
       const trimmedApiKey = input.apiKey?.trim();
       const apiKeyRef = trimmedApiKey
         ? credentialStore.saveApiKey({ providerConfigId, apiKey: trimmedApiKey })

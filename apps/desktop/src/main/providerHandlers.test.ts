@@ -3,6 +3,7 @@ import type { ProviderConfig } from "@novel-extractor/domain";
 import { createMemoryCredentialStore } from "./credentials";
 import { createIpcContract, createNotImplementedIpcHandlers } from "./ipc";
 import { createProviderIpcHandlers } from "./providerHandlers";
+import { createMemoryProviderStore } from "./providerStore";
 
 describe("provider IPC handlers", () => {
   it("saves API keys as opaque references and never exposes raw keys from list", async () => {
@@ -181,6 +182,114 @@ describe("provider IPC handlers", () => {
       { id: "model-a", displayName: "Model A", enabled: true, isDefault: false },
       { id: "model-b", displayName: "Model B", enabled: true, isDefault: true }
     ]);
+  });
+
+  it("creates a new provider when a stale provider id is submitted for a different preset", async () => {
+    const providerStore = createMemoryProviderStore();
+    await providerStore.saveProviderConfig({
+      id: "provider-deepseek",
+      presetId: "deepseek",
+      displayName: "DeepSeek",
+      kind: "openai-compatible",
+      baseUrl: "https://api.deepseek.com",
+      models: [
+        {
+          id: "deepseek-v4-flash",
+          displayName: "DeepSeek V4 Flash",
+          enabled: true,
+          isDefault: true
+        }
+      ],
+      enabled: true
+    });
+    const contract = createIpcContract();
+    const handlers = {
+      ...createNotImplementedIpcHandlers(),
+      ...createProviderIpcHandlers({
+        providerIdFactory: () => "provider-minimax",
+        providerStore
+      } as Parameters<typeof createProviderIpcHandlers>[0])
+    };
+
+    await contract.invoke(handlers, "providers:save", {
+      providerId: "provider-deepseek",
+      presetId: "minimax",
+      displayName: "MiniMax",
+      kind: "openai-compatible",
+      baseUrl: "https://api.minimaxi.com/v1",
+      apiKey: "sk-minimax",
+      modelName: "MiniMax-M3",
+      defaultModel: true,
+      enabled: true
+    });
+
+    expect(await providerStore.listProviderConfigs()).toMatchObject([
+      {
+        id: "provider-deepseek",
+        presetId: "deepseek",
+        displayName: "DeepSeek"
+      },
+      {
+        id: "provider-minimax",
+        presetId: "minimax",
+        displayName: "MiniMax"
+      }
+    ]);
+  });
+
+  it("does not overwrite an existing provider after the default id factory restarts", async () => {
+    const providerStore = createMemoryProviderStore();
+    await providerStore.saveProviderConfig({
+      id: "provider-1",
+      presetId: "deepseek",
+      displayName: "DeepSeek",
+      kind: "openai-compatible",
+      baseUrl: "https://api.deepseek.com",
+      models: [
+        {
+          id: "deepseek-v4-flash",
+          displayName: "DeepSeek V4 Flash",
+          enabled: true,
+          isDefault: true
+        }
+      ],
+      enabled: true
+    });
+    const contract = createIpcContract();
+    const handlers = {
+      ...createNotImplementedIpcHandlers(),
+      ...createProviderIpcHandlers({ providerStore })
+    };
+
+    await contract.invoke(handlers, "providers:save", {
+      presetId: "minimax",
+      displayName: "MiniMax",
+      kind: "openai-compatible",
+      baseUrl: "https://api.minimaxi.com/v1",
+      apiKey: "sk-minimax",
+      modelName: "MiniMax-M3",
+      defaultModel: true,
+      enabled: true
+    });
+
+    const savedProviders = await providerStore.listProviderConfigs();
+    expect(savedProviders).toHaveLength(2);
+    expect(savedProviders).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "provider-1",
+          presetId: "deepseek",
+          displayName: "DeepSeek"
+        }),
+        expect.objectContaining({
+          presetId: "minimax",
+          displayName: "MiniMax"
+        })
+      ])
+    );
+    expect(savedProviders.find((provider) => provider.presetId === "minimax")?.id).not.toBe(
+      "provider-1"
+    );
   });
 
   it("trims submitted form models, drops blank IDs, and marks the trimmed modelName as default", async () => {
