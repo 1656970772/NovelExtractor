@@ -13,7 +13,8 @@
     "./toolDefinition": "./src/toolDefinition.ts",
     "./redaction": "./src/redaction.ts",
     "./protocols/types": "./src/protocols/types.ts",
-    "./protocols/toolSchemaProjection": "./src/protocols/toolSchemaProjection.ts"
+    "./protocols/toolSchemaProjection": "./src/protocols/toolSchemaProjection.ts",
+    "./protocols/openaiChat": "./src/protocols/openaiChat.ts"
   },
   "scripts": {
     "test": "vitest run",
