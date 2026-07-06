@@ -195,6 +195,43 @@ describe("OpenAiCompatibleClient", () => {
     expect(result.requestBody).toEqual((snapshots[0] as { body: unknown }).body);
   });
 
+  it("isolates prepared request snapshots from the body sent to fetch", async () => {
+    let actualBody: unknown;
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      actualBody = JSON.parse(String(init?.body));
+
+      return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    });
+    const client = new OpenAiCompatibleClient(
+      createProvider(),
+      { resolveApiKey: async () => "sk-prepared-secret" },
+      { fetch: fetchMock }
+    );
+
+    const result = await client.chatCompletion({
+      providerId: "deepseek-user",
+      modelId: "novel-analysis",
+      messages: [{ role: "user", content: "提取丹药信息" }],
+      onRequestPrepared: (snapshot) => {
+        const body = snapshot.body as {
+          model: string;
+          messages: Array<{ role: string; content: string }>;
+        };
+        body.model = "mutated-by-callback";
+        body.messages = [{ role: "user", content: "tampered prompt" }];
+      }
+    });
+
+    expect(actualBody).toEqual({
+      model: "novel-analysis",
+      messages: [{ role: "user", content: "提取丹药信息" }]
+    });
+    expect(result.requestBody).toEqual(actualBody);
+  });
+
   it("keeps raw usage and normalizes OpenAI-compatible token details", async () => {
     const usage = {
       prompt_tokens: 100,

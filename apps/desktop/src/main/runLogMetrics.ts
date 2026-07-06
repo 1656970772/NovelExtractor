@@ -350,26 +350,78 @@ function countPromptToolSchemaDescriptions(lines: string[]): number {
   return count;
 }
 
+type ProviderBodyScope = {
+  indent: number;
+  key: string;
+  isDeclaration: boolean;
+  isSchema: boolean;
+};
+
+const PROVIDER_BODY_SCHEMA_KEYS = new Set(["parameters", "input_schema", "inputSchema", "json", "properties"]);
+
 function countProviderBodyToolDescriptions(lines: string[]): number {
   let count = 0;
-  let schemaBlockIndents: number[] = [];
+  const scopes: ProviderBodyScope[] = [];
+
+  const popToParentOf = (indent: number) => {
+    while (scopes.length > 0 && indent <= scopes[scopes.length - 1].indent) {
+      scopes.pop();
+    }
+  };
+  const hasSchemaScope = () => scopes.some((scope) => scope.isSchema);
+  const hasAncestorKey = (key: string) => scopes.some((scope) => scope.key === key);
+  const pushScope = (indent: number, key: string, isDeclaration: boolean) => {
+    scopes.push({
+      indent,
+      key,
+      isDeclaration,
+      isSchema: PROVIDER_BODY_SCHEMA_KEYS.has(key) || (scopes.at(-1)?.isSchema ?? false)
+    });
+  };
+  const handleField = (indent: number, value: string) => {
+    const fieldMatch = value.match(/^([A-Za-z_][A-Za-z0-9_-]*):(?:\s*(.*))?$/u);
+    if (!fieldMatch) {
+      return;
+    }
+
+    const key = fieldMatch[1];
+    const inlineValue = fieldMatch[2]?.trim() ?? "";
+    const hasInlineValue = inlineValue !== "";
+
+    if (key === "description" && hasInlineValue && !hasSchemaScope() && scopes.at(-1)?.isDeclaration) {
+      count += 1;
+      return;
+    }
+
+    if (hasInlineValue) {
+      return;
+    }
+
+    const isDeclaration = key === "toolSpec" || (key === "function" && hasAncestorKey("tools"));
+    pushScope(indent, key, isDeclaration);
+  };
 
   for (const line of lines) {
     if (line.trim() === "") {
       continue;
     }
 
-    const indent = line.match(/^\s*/u)?.[0].length ?? 0;
-    schemaBlockIndents = schemaBlockIndents.filter((schemaIndent) => indent > schemaIndent);
-
-    if (/^\s*(?:parameters|input_schema|inputSchema|json|properties):\s*$/u.test(line)) {
-      schemaBlockIndents.push(indent);
+    const itemMatch = line.match(/^(\s*)-\s*(.*)$/u);
+    if (itemMatch) {
+      const indent = itemMatch[1].length;
+      popToParentOf(indent);
+      const parentKey = scopes.at(-1)?.key;
+      pushScope(indent, "[]", parentKey === "tools" || parentKey === "functionDeclarations");
+      const inlineValue = itemMatch[2].trim();
+      if (inlineValue !== "") {
+        handleField(indent + 2, inlineValue);
+      }
       continue;
     }
 
-    if (schemaBlockIndents.length === 0 && /^\s*description:\s+.+/u.test(line)) {
-      count += 1;
-    }
+    const indent = line.match(/^\s*/u)?.[0].length ?? 0;
+    popToParentOf(indent);
+    handleField(indent, line.trim());
   }
 
   return count;

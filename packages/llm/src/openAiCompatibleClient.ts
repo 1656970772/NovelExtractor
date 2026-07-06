@@ -152,6 +152,10 @@ function normalizeUsage(usage: unknown): NormalizedUsage {
   };
 }
 
+function cloneJsonValue<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
 function getFetch(options: OpenAiCompatibleClientOptions): FetchLike {
   const fetcher = options.fetch ?? globalThis.fetch;
 
@@ -354,7 +358,7 @@ export class OpenAiCompatibleClient {
     await request.onRequestPrepared?.({
       apiFormat,
       url,
-      body
+      body: cloneJsonValue(body)
     });
 
     const retryOptions = normalizeRetryOptions(this.options.retry);

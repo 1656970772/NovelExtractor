@@ -209,6 +209,36 @@ providerBody:
     expect(metrics.expandedToolSchemaCount).toBe(1);
   });
 
+  it("does not count ProviderBody message or metadata descriptions as tool schemas", () => {
+    const messageDescriptionOnly = parseRunLogMetrics(`[2026-07-03 10:00:00][大模型请求][ProviderBody]
+providerBody:
+  model: novel-analysis
+  messages:
+    -
+      role: user
+      content: |
+        模板字段：
+        description: 这只是消息正文，不是工具说明`);
+    const metadataPlusTool = parseRunLogMetrics(`[2026-07-03 10:00:00][大模型请求][ProviderBody]
+providerBody:
+  metadata:
+    description: 这是请求元数据说明，不是工具说明
+  tools:
+    -
+      type: function
+      name: read_report_excerpt
+      description: 读取本批允许报告中的卡片字段块。
+      parameters:
+        type: object
+        properties:
+          queries:
+            type: array
+            description: schema 字段描述不应计数`);
+
+    expect(messageDescriptionOnly.expandedToolSchemaCount).toBe(0);
+    expect(metadataPlusTool.expandedToolSchemaCount).toBe(1);
+  });
+
   it("prefers provider-native schema metrics when prompt and provider body logs coexist", () => {
     const metrics = parseRunLogMetrics(`[2026-07-03 10:00:00][大模型请求][Prompt]
 tools:
