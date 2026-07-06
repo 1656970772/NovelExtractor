@@ -11,6 +11,7 @@ export interface ChatCompletionRequest {
   modelId: string;
   messages: ChatCompletionMessage[];
   tools?: ToolDefinition[];
+  providerOptions?: Record<string, unknown>;
 }
 
 export type ToolCallArguments =
@@ -334,7 +335,7 @@ export class OpenAiCompatibleClient {
       modelId: request.modelId,
       messages: request.messages,
       tools: request.tools ?? [],
-      providerOptions: {}
+      providerOptions: request.providerOptions ?? {}
     });
     const url = `${this.provider.baseUrl.replace(/\/+$/, "")}${adapter.path({
       baseUrl: this.provider.baseUrl,

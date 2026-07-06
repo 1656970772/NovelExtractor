@@ -741,6 +741,7 @@ describe("OpenAiCompatibleClient", () => {
     const result = await client.chatCompletion({
       providerId: "anthropic-native",
       modelId: "claude-test",
+      providerOptions: { max_tokens: 2048 },
       messages: [
         { role: "system", content: "你是小说资料抽取助手" },
         { role: "user", content: "处理窗口" },
@@ -763,6 +764,7 @@ describe("OpenAiCompatibleClient", () => {
     expect(calls[0].headers.authorization).toBeUndefined();
     expect(calls[0].body).toMatchObject({
       model: "claude-test",
+      max_tokens: 2048,
       system: "你是小说资料抽取助手",
       messages: [{ role: "user", content: [{ type: "text", text: "处理窗口" }] }],
       tools: [
