@@ -99,7 +99,8 @@ describe("tool error classification", () => {
     ["CARD_NOT_FOUND", "CARD_NOT_FOUND: 未找到卡片 韩立"],
     ["FIELD_NOT_FOUND", "FIELD_NOT_FOUND: 未找到字段 韩立/核心性格"],
     ["FIELD_AMBIGUOUS", "FIELD_AMBIGUOUS: 字段重复 韩立/核心性格"],
-    ["INVALID_FIELD_CONTENT", "INVALID_FIELD_CONTENT: content 必须以 - 核心性格： 开头"]
+    ["INVALID_FIELD_CONTENT", "INVALID_FIELD_CONTENT: content 必须以 - 核心性格： 开头"],
+    ["INVALID_CARD_CONTENT", "INVALID_CARD_CONTENT: add_card content 标题必须匹配 cardName 韩立"]
   ] as const)("classifies upsert_report_section %s as recoverable by the model", (code, message) => {
     expect(classify("upsert_report_section", new ToolExecutionError(message, code))).toMatchObject({
       category: "recoverable_by_model",

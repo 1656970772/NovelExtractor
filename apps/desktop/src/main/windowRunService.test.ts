@@ -334,8 +334,15 @@ describe("window run report inventory", () => {
     expect(userPrompt).toContain("优先用 read_report_excerpt 读取目标字段块");
     expect(userPrompt).toMatch(/outputFileName: NPC性格与代表事件\.md[\s\S]*reportStatus: 已存在/u);
     expect(userPrompt).toMatch(/outputFileName: 事件因果链（长程因果图）\.md[\s\S]*reportStatus: 待创建/u);
-    expect(userPrompt).toContain("已有报告可按需读取相关字段，并用 upsert_report_section 修改目标字段。");
-    expect(userPrompt).toContain("待创建报告不要先调用 read_file 或 read_report_excerpt；有可写入信息时直接用 write_file 创建并写入完整报告正文。");
+    expect(userPrompt).toContain(
+      "已有报告可按需读取相关字段；新增卡片/字段用 upsert_report_section 的 add_card/add_field，修改既有字段用 read_report_excerpt 后再 replace_field。"
+    );
+    expect(userPrompt).toContain(
+      "待创建报告有可写入卡片或字段时，直接用 upsert_report_section 的 add_card 或 add_field 创建报告内容"
+    );
+    expect(userPrompt).toContain("不要先调用 read_file、read_report_excerpt 或 write_file 铺底。");
+    expect(userPrompt).not.toContain("有可写入信息时直接用 write_file 创建并写入完整报告正文");
+    expect(userPrompt).not.toContain("待创建报告不要先调用 read_file 或 read_report_excerpt");
   }, 20000);
 
   it("uses formal report file names instead of template file names when creating reports", async () => {
@@ -527,6 +534,36 @@ describe("window run Reasonix tool loop integration", () => {
     expect(result.logText).not.toContain("updates must be a non-empty array");
     expect(result.reportContents["[报告]NPC性格与代表事件.md"]).toBe(
       "# NPC性格与代表事件\n\n### 韩立\n\n- 核心性格：旧内容。\n"
+    );
+  });
+
+  it("executes upsert_report_section when array arguments are JSON-stringified by the provider", async () => {
+    const result = await runWindowWithMockToolCall({
+      toolCall: createToolCall("call-stringified-updates", "upsert_report_section", {
+        outputFileName: "[报告]NPC性格与代表事件.md",
+        updates: JSON.stringify([
+          {
+            operation: "add_card",
+            cardName: "韩立",
+            content: "### 韩立\n\n- 核心性格：谨慎行事。"
+          }
+        ])
+      }),
+      expectToolResult: {
+        toolName: "upsert_report_section",
+        toolCallId: "call-stringified-updates",
+        assertContent: (content) => {
+          expect(content).toContain("\"changed\":true");
+          expect(content).toContain("created_report_and_card");
+          expect(content).not.toContain("tool_schema_invalid_arguments");
+        }
+      }
+    });
+
+    expect(result.requestBodies).toHaveLength(2);
+    expect(result.logText).not.toContain("$.updates 必须是数组");
+    expect(result.reportContents["[报告]NPC性格与代表事件.md"]).toBe(
+      "# [报告]NPC性格与代表事件\n\n### 韩立\n\n- 核心性格：谨慎行事。\n"
     );
   });
 
@@ -745,6 +782,201 @@ describe("window run Reasonix tool loop integration", () => {
         reportKind: "template-output"
       })
     });
+  }, 20000);
+
+  it("requires read_report_excerpt before explicit replace_field upsert on an existing report", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-replace-field-upsert-"));
+    scratchDirs.push(projectRoot);
+    const reportsRoot = path.join(projectRoot, "assets", "books", "book-1", "reports");
+    const windowTextPath = path.join(projectRoot, "runs", "job-1", "windows", "window-0001.txt");
+    const outputFileName = "NPC性格与代表事件.md";
+    const originalReport = "### 韩立\n- 角色定位：旧定位\n- 核心性格：旧性格\n- 代表行为：旧行为\n";
+    const requestBodies: Record<string, unknown>[] = [];
+    let blockedUpdateResult = "";
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+    const providerConfig = createProviderConfig(apiKeyRef);
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requestBodies.push(body);
+
+      if (requestBodies.length === 1) {
+        return new Response(
+          JSON.stringify(createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-replace-behavior-without-read", "upsert_report_section", {
+                outputFileName,
+                updates: [
+                  {
+                    operation: "replace_field",
+                    cardName: "韩立",
+                    fieldName: "代表行为",
+                    content: "- 代表行为：未预读时不应写入的新行为。"
+                  }
+                ]
+              })
+            ]
+          })),
+          { headers: { "Content-Type": "application/json" }, status: 200 }
+        );
+      }
+
+      if (requestBodies.length === 2) {
+        blockedUpdateResult = requireToolResult(
+          body,
+          "upsert_report_section",
+          "call-replace-behavior-without-read"
+        );
+        return new Response(
+          JSON.stringify(createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-mark-no-update-after-blocked-replace", "mark_no_update", {
+                path: outputFileName,
+                reason: "未预读既有字段，本窗口不更新。"
+              })
+            ]
+          })),
+          { headers: { "Content-Type": "application/json" }, status: 200 }
+        );
+      }
+
+      return new Response(
+        JSON.stringify(createChatCompletionResponse({ content: "窗口完成。" })),
+        { headers: { "Content-Type": "application/json" }, status: 200 }
+      );
+    });
+
+    await fs.mkdir(path.dirname(windowTextPath), { recursive: true });
+    await fs.mkdir(reportsRoot, { recursive: true });
+    await fs.writeFile(windowTextPath, "第一章\n\n韩立做出新的行动。", "utf8");
+    await fs.writeFile(path.join(reportsRoot, outputFileName), originalReport, "utf8");
+
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      enabledToolNames: legacyDesktopToolNames,
+      fetch,
+      findExistingReport: () => ({
+        id: "report-1",
+        bookId: "book-1",
+        fileName: outputFileName,
+        displayName: "NPC性格与代表事件",
+        relativePath: `assets/books/book-1/reports/${outputFileName}`,
+        reportKind: "template-output",
+        templateId: "template-1",
+        byteSize: 100,
+        createdAt: "2026-07-01T00:00:00.000Z",
+        updatedAt: "2026-07-01T00:00:00.000Z"
+      }),
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeState: async () => {},
+      providerStore: createProviderStore(providerConfig),
+      registerReport: () => {}
+    });
+
+    const result = await service.runJobWindows({
+      artifacts: createWindowArtifacts({
+        projectRoot,
+        templates: [createTemplate({ id: "template-1", name: "NPC性格与代表事件", fileName: outputFileName })]
+      }),
+      job: createWindowRunJob({ templateIds: ["template-1"] })
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(requestBodies).toHaveLength(3);
+    expect(blockedUpdateResult).toContain("已有报告不能直接更新字段");
+    expect(blockedUpdateResult).toContain("请先用 read_report_excerpt");
+    await expect(fs.readFile(path.join(reportsRoot, outputFileName), "utf8")).resolves.toBe(originalReport);
+  }, 20000);
+
+  it("allows add_field on an existing report without pre-reading the same field", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-add-field-"));
+    scratchDirs.push(projectRoot);
+    const reportsRoot = path.join(projectRoot, "assets", "books", "book-1", "reports");
+    const windowTextPath = path.join(projectRoot, "runs", "job-1", "windows", "window-0001.txt");
+    const outputFileName = "NPC性格与代表事件.md";
+    const requestBodies: Record<string, unknown>[] = [];
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+    const providerConfig = createProviderConfig(apiKeyRef);
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requestBodies.push(body);
+
+      if (requestBodies.length === 1) {
+        return new Response(
+          JSON.stringify(createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-add-field-without-read", "upsert_report_section", {
+                outputFileName,
+                updates: [
+                  {
+                    operation: "add_field",
+                    cardName: "韩立",
+                    fieldName: "变化与后果",
+                    content: "- 变化与后果：谨慎行动带来新的连锁后果。"
+                  }
+                ]
+              })
+            ]
+          })),
+          { headers: { "Content-Type": "application/json" }, status: 200 }
+        );
+      }
+
+      return new Response(
+        JSON.stringify(createChatCompletionResponse({ content: "窗口完成。" })),
+        { headers: { "Content-Type": "application/json" }, status: 200 }
+      );
+    });
+
+    await fs.mkdir(path.dirname(windowTextPath), { recursive: true });
+    await fs.mkdir(reportsRoot, { recursive: true });
+    await fs.writeFile(windowTextPath, "第一章\n\n韩立的谨慎行动带来新后果。", "utf8");
+    await fs.writeFile(path.join(reportsRoot, outputFileName), "### 韩立\n- 核心性格：谨慎\n", "utf8");
+
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      enabledToolNames: legacyDesktopToolNames,
+      fetch,
+      findExistingReport: () => ({
+        id: "report-1",
+        bookId: "book-1",
+        fileName: outputFileName,
+        displayName: "NPC性格与代表事件",
+        relativePath: `assets/books/book-1/reports/${outputFileName}`,
+        reportKind: "template-output",
+        templateId: "template-1",
+        byteSize: 100,
+        createdAt: "2026-07-01T00:00:00.000Z",
+        updatedAt: "2026-07-01T00:00:00.000Z"
+      }),
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeState: async () => {},
+      providerStore: createProviderStore(providerConfig),
+      registerReport: async () => {}
+    });
+
+    const result = await service.runJobWindows({
+      artifacts: createWindowArtifacts({
+        projectRoot,
+        templates: [createTemplate({ id: "template-1", name: "NPC性格与代表事件", fileName: outputFileName })]
+      }),
+      job: createWindowRunJob({ templateIds: ["template-1"] })
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(requestBodies).toHaveLength(2);
+    await expect(fs.readFile(path.join(reportsRoot, outputFileName), "utf8")).resolves.toContain(
+      "- 变化与后果：谨慎行动带来新的连锁后果。"
+    );
   }, 20000);
 
   it("does not let read_report_excerpt unlock edit_file for the whole existing report", async () => {
@@ -977,6 +1209,449 @@ describe("window run Reasonix tool loop integration", () => {
     expect(JSON.stringify(requestBodies[1])).toContain("报告正文不得包含内部运行路径");
     expect(JSON.stringify(requestBodies)).not.toContain(secret);
     expect(JSON.stringify(append.mock.calls)).not.toContain(secret);
+  }, 20000);
+
+  it("runs report content guard before returning existing add_field content", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-upsert-existing-secret-"));
+    scratchDirs.push(projectRoot);
+    const reportsRoot = path.join(projectRoot, "assets", "books", "book-1", "reports");
+    const windowTextPath = path.join(projectRoot, "runs", "job-1", "windows", "window-0001.txt");
+    const outputFileName = "NPC性格与代表事件.md";
+    const secret = "sk-window-loop";
+    const existingFieldContent = "既有字段正文不应被返回给模型";
+    const requestBodies: Record<string, unknown>[] = [];
+    const append = vi.fn(async () => {});
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: secret
+    });
+    const providerConfig = createProviderConfig(apiKeyRef);
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requestBodies.push(body);
+
+      if (requestBodies.length === 1) {
+        return new Response(
+          JSON.stringify(createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-add-existing-field-with-secret", "upsert_report_section", {
+                outputFileName,
+                updates: [
+                  {
+                    operation: "add_field",
+                    cardName: "韩立",
+                    fieldName: "核心性格",
+                    content: `- 核心性格：资料来自 runs/job-1，secret=${secret}`
+                  }
+                ]
+              })
+            ]
+          })),
+          { headers: { "Content-Type": "application/json" }, status: 200 }
+        );
+      }
+
+      if (requestBodies.length === 2) {
+        expect(requireToolResult(body, "upsert_report_section", "call-add-existing-field-with-secret")).toContain(
+          "报告正文不得包含内部运行路径"
+        );
+        return new Response(
+          JSON.stringify(createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-mark-no-update-after-secret", "mark_no_update", {
+                path: outputFileName,
+                reason: "内容守卫拒绝，本窗口不更新。"
+              })
+            ]
+          })),
+          { headers: { "Content-Type": "application/json" }, status: 200 }
+        );
+      }
+
+      return new Response(
+        JSON.stringify(createChatCompletionResponse({ content: "窗口完成。" })),
+        { headers: { "Content-Type": "application/json" }, status: 200 }
+      );
+    });
+
+    await fs.mkdir(path.dirname(windowTextPath), { recursive: true });
+    await fs.mkdir(reportsRoot, { recursive: true });
+    await fs.writeFile(windowTextPath, "第一章\n\n韩立继续谨慎行事。", "utf8");
+    await fs.writeFile(path.join(reportsRoot, outputFileName), `### 韩立\n- 核心性格：${existingFieldContent}\n`, "utf8");
+
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      enabledToolNames: legacyDesktopToolNames,
+      fetch,
+      findExistingReport: () => undefined,
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeState: async () => {},
+      providerStore: createProviderStore(providerConfig),
+      registerReport: () => {},
+      taskLogger: { append, setSecrets: vi.fn() } as any
+    });
+
+    const result = await service.runJobWindows({
+      artifacts: createWindowArtifacts({
+        projectRoot,
+        templates: [createTemplate({ id: "template-1", name: "NPC性格与代表事件", fileName: outputFileName })]
+      }),
+      job: createWindowRunJob({ templateIds: ["template-1"] })
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(requestBodies).toHaveLength(3);
+    expect(JSON.stringify(requestBodies)).not.toContain(existingFieldContent);
+    expect(JSON.stringify(append.mock.calls)).not.toContain(existingFieldContent);
+    expect(JSON.stringify(requestBodies)).not.toContain(secret);
+    expect(JSON.stringify(append.mock.calls)).not.toContain(secret);
+    expect(JSON.stringify(requestBodies)).toContain("报告正文不得包含内部运行路径");
+    expect(JSON.stringify(append.mock.calls)).toContain("[REDACTED]");
+  }, 20000);
+
+  it("does not register unchanged add_field as a completed report write", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-add-field-unchanged-"));
+    scratchDirs.push(projectRoot);
+    const reportsRoot = path.join(projectRoot, "assets", "books", "book-1", "reports");
+    const windowTextPath = path.join(projectRoot, "runs", "job-1", "windows", "window-0001.txt");
+    const outputFileName = "NPC性格与代表事件.md";
+    const requestBodies: Record<string, unknown>[] = [];
+    const registerReport = vi.fn(async () => {});
+    let firstToolResult = "";
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+    const providerConfig = createProviderConfig(apiKeyRef);
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requestBodies.push(body);
+
+      if (requestBodies.length === 1) {
+        return new Response(
+          JSON.stringify(createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-add-existing-field", "upsert_report_section", {
+                outputFileName,
+                updates: [
+                  {
+                    operation: "add_field",
+                    cardName: "韩立",
+                    fieldName: "核心性格",
+                    content: "- 核心性格：不应覆盖。"
+                  }
+                ]
+              })
+            ]
+          })),
+          { headers: { "Content-Type": "application/json" }, status: 200 }
+        );
+      }
+
+      if (requestBodies.length === 2) {
+        firstToolResult = requireToolResult(body, "upsert_report_section", "call-add-existing-field");
+        expect(firstToolResult).toContain("\"changed\":false");
+        expect(firstToolResult).toContain("field_already_exists");
+        expect(registerReport).toHaveBeenCalledTimes(0);
+        return new Response(
+          JSON.stringify(createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-read-existing-field", "read_report_excerpt", {
+                outputFileName,
+                queries: [{ cardName: "韩立", fields: ["核心性格"] }]
+              }),
+              createToolCall("call-replace-existing-field", "upsert_report_section", {
+                outputFileName,
+                updates: [
+                  {
+                    operation: "replace_field",
+                    cardName: "韩立",
+                    fieldName: "核心性格",
+                    content: "- 核心性格：更新后的内容"
+                  }
+                ]
+              })
+            ]
+          })),
+          { headers: { "Content-Type": "application/json" }, status: 200 }
+        );
+      }
+
+      return new Response(
+        JSON.stringify(createChatCompletionResponse({ content: "窗口完成。" })),
+        { headers: { "Content-Type": "application/json" }, status: 200 }
+      );
+    });
+
+    await fs.mkdir(path.dirname(windowTextPath), { recursive: true });
+    await fs.mkdir(reportsRoot, { recursive: true });
+    await fs.writeFile(windowTextPath, "第一章\n\n韩立的谨慎程度发生变化。", "utf8");
+    await fs.writeFile(path.join(reportsRoot, outputFileName), "### 韩立\n- 核心性格：谨慎\n", "utf8");
+
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      enabledToolNames: legacyDesktopToolNames,
+      fetch,
+      findExistingReport: () => ({
+        id: "report-1",
+        bookId: "book-1",
+        fileName: outputFileName,
+        displayName: "NPC性格与代表事件",
+        relativePath: `assets/books/book-1/reports/${outputFileName}`,
+        reportKind: "template-output",
+        templateId: "template-1",
+        byteSize: 100,
+        createdAt: "2026-07-01T00:00:00.000Z",
+        updatedAt: "2026-07-01T00:00:00.000Z"
+      }),
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeState: async () => {},
+      providerStore: createProviderStore(providerConfig),
+      registerReport
+    });
+
+    const result = await service.runJobWindows({
+      artifacts: createWindowArtifacts({
+        projectRoot,
+        templates: [createTemplate({ id: "template-1", name: "NPC性格与代表事件", fileName: outputFileName })]
+      }),
+      job: createWindowRunJob({ templateIds: ["template-1"] })
+    });
+
+    expect(firstToolResult).toContain("\"changed\":false");
+    expect(firstToolResult).toContain("field_already_exists");
+    expect(result).toMatchObject({ ok: true });
+    expect(requestBodies).toHaveLength(3);
+    expect(registerReport).toHaveBeenCalledTimes(1);
+    await expect(fs.readFile(path.join(reportsRoot, outputFileName), "utf8")).resolves.toContain(
+      "- 核心性格：更新后的内容"
+    );
+  }, 20000);
+
+  it("does not return benign existing add_field content to the model or task log", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-add-field-existing-safe-"));
+    scratchDirs.push(projectRoot);
+    const reportsRoot = path.join(projectRoot, "assets", "books", "book-1", "reports");
+    const windowTextPath = path.join(projectRoot, "runs", "job-1", "windows", "window-0001.txt");
+    const outputFileName = "NPC性格与代表事件.md";
+    const existingFieldContent = "既有字段正文不应进入模型";
+    const requestBodies: Record<string, unknown>[] = [];
+    const append = vi.fn(async () => {});
+    let firstToolResult = "";
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+    const providerConfig = createProviderConfig(apiKeyRef);
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requestBodies.push(body);
+
+      if (requestBodies.length === 1) {
+        return new Response(
+          JSON.stringify(createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-add-existing-field-safe", "upsert_report_section", {
+                outputFileName,
+                updates: [
+                  {
+                    operation: "add_field",
+                    cardName: "韩立",
+                    fieldName: "核心性格",
+                    content: "- 核心性格：本窗口只有安全新增文本。"
+                  }
+                ]
+              })
+            ]
+          })),
+          { headers: { "Content-Type": "application/json" }, status: 200 }
+        );
+      }
+
+      if (requestBodies.length === 2) {
+        firstToolResult = requireToolResult(body, "upsert_report_section", "call-add-existing-field-safe");
+        return new Response(
+          JSON.stringify(createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-mark-no-update-after-existing-field", "mark_no_update", {
+                path: outputFileName,
+                reason: "字段已存在，本窗口不覆盖。"
+              })
+            ]
+          })),
+          { headers: { "Content-Type": "application/json" }, status: 200 }
+        );
+      }
+
+      return new Response(
+        JSON.stringify(createChatCompletionResponse({ content: "窗口完成。" })),
+        { headers: { "Content-Type": "application/json" }, status: 200 }
+      );
+    });
+
+    await fs.mkdir(path.dirname(windowTextPath), { recursive: true });
+    await fs.mkdir(reportsRoot, { recursive: true });
+    await fs.writeFile(windowTextPath, "第一章\n\n韩立继续谨慎行事。", "utf8");
+    await fs.writeFile(path.join(reportsRoot, outputFileName), `### 韩立\n- 核心性格：${existingFieldContent}\n`, "utf8");
+
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      enabledToolNames: legacyDesktopToolNames,
+      fetch,
+      findExistingReport: () => ({
+        id: "report-1",
+        bookId: "book-1",
+        fileName: outputFileName,
+        displayName: "NPC性格与代表事件",
+        relativePath: `assets/books/book-1/reports/${outputFileName}`,
+        reportKind: "template-output",
+        templateId: "template-1",
+        byteSize: 100,
+        createdAt: "2026-07-01T00:00:00.000Z",
+        updatedAt: "2026-07-01T00:00:00.000Z"
+      }),
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeState: async () => {},
+      providerStore: createProviderStore(providerConfig),
+      registerReport: () => {},
+      taskLogger: { append, setSecrets: vi.fn() } as any
+    });
+
+    const result = await service.runJobWindows({
+      artifacts: createWindowArtifacts({
+        projectRoot,
+        templates: [createTemplate({ id: "template-1", name: "NPC性格与代表事件", fileName: outputFileName })]
+      }),
+      job: createWindowRunJob({ templateIds: ["template-1"] })
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(firstToolResult).toContain("\"changed\":false");
+    expect(firstToolResult).toContain("field_already_exists");
+    expect(firstToolResult).toContain("\"existingContentRedacted\":true");
+    expect(firstToolResult).toContain(`"existingContentLength":${`- 核心性格：${existingFieldContent}\n`.length}`);
+    expect(firstToolResult).not.toContain(existingFieldContent);
+    expect(JSON.stringify(requestBodies)).not.toContain(existingFieldContent);
+    expect(JSON.stringify(append.mock.calls)).not.toContain(existingFieldContent);
+  }, 20000);
+
+  it("uses upsert operations in the correction message after unchanged add_field without a final outcome", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-add-field-correction-"));
+    scratchDirs.push(projectRoot);
+    const reportsRoot = path.join(projectRoot, "assets", "books", "book-1", "reports");
+    const windowTextPath = path.join(projectRoot, "runs", "job-1", "windows", "window-0001.txt");
+    const outputFileName = "NPC性格与代表事件.md";
+    const requestBodies: Record<string, unknown>[] = [];
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+    const providerConfig = createProviderConfig(apiKeyRef);
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requestBodies.push(body);
+
+      if (requestBodies.length === 1) {
+        return new Response(
+          JSON.stringify(createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-add-existing-field", "upsert_report_section", {
+                outputFileName,
+                updates: [
+                  {
+                    operation: "add_field",
+                    cardName: "韩立",
+                    fieldName: "核心性格",
+                    content: "- 核心性格：不应覆盖。"
+                  }
+                ]
+              })
+            ]
+          })),
+          { headers: { "Content-Type": "application/json" }, status: 200 }
+        );
+      }
+
+      if (requestBodies.length === 2) {
+        expect(requireToolResult(body, "upsert_report_section", "call-add-existing-field")).toContain(
+          "\"changed\":false"
+        );
+        return new Response(
+          JSON.stringify(createChatCompletionResponse({ content: "窗口完成。" })),
+          { headers: { "Content-Type": "application/json" }, status: 200 }
+        );
+      }
+
+      if (requestBodies.length === 3) {
+        return new Response(
+          JSON.stringify(createChatCompletionResponse({
+            toolCalls: [
+              createToolCall("call-mark-no-update-after-correction", "mark_no_update", {
+                path: outputFileName,
+                reason: "本窗口没有可写入的新信息。"
+              })
+            ]
+          })),
+          { headers: { "Content-Type": "application/json" }, status: 200 }
+        );
+      }
+
+      return new Response(
+        JSON.stringify(createChatCompletionResponse({ content: "窗口完成。" })),
+        { headers: { "Content-Type": "application/json" }, status: 200 }
+      );
+    });
+
+    await fs.mkdir(path.dirname(windowTextPath), { recursive: true });
+    await fs.mkdir(reportsRoot, { recursive: true });
+    await fs.writeFile(windowTextPath, "第一章\n\n韩立继续谨慎行事。", "utf8");
+    await fs.writeFile(path.join(reportsRoot, outputFileName), "### 韩立\n- 核心性格：谨慎\n", "utf8");
+
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      enabledToolNames: legacyDesktopToolNames,
+      fetch,
+      findExistingReport: () => ({
+        id: "report-1",
+        bookId: "book-1",
+        fileName: outputFileName,
+        displayName: "NPC性格与代表事件",
+        relativePath: `assets/books/book-1/reports/${outputFileName}`,
+        reportKind: "template-output",
+        templateId: "template-1",
+        byteSize: 100,
+        createdAt: "2026-07-01T00:00:00.000Z",
+        updatedAt: "2026-07-01T00:00:00.000Z"
+      }),
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeState: async () => {},
+      providerStore: createProviderStore(providerConfig),
+      registerReport: async () => {}
+    });
+
+    await service.runJobWindows({
+      artifacts: createWindowArtifacts({
+        projectRoot,
+        templates: [createTemplate({ id: "template-1", name: "NPC性格与代表事件", fileName: outputFileName })]
+      }),
+      job: createWindowRunJob({ templateIds: ["template-1"] })
+    });
+
+    expect(requestBodies).toHaveLength(4);
+    const correctionPrompt = JSON.stringify(requestBodies[2]);
+    expect(correctionPrompt).toContain("upsert_report_section");
+    expect(correctionPrompt).toContain("add_card");
+    expect(correctionPrompt).toContain("add_field");
+    expect(correctionPrompt).toContain("replace_field");
+    expect(correctionPrompt).not.toContain("write_file/edit_file/multi_edit 写入正式报告");
   }, 20000);
 
   it("sends the full Reasonix tool protocol to the model and executes the bash job family through the desktop loop", async () => {
@@ -2535,6 +3210,11 @@ function createWindowRunJob(input: { skipAlreadyExtracted?: boolean; templateIds
 
 async function runWindowWithMockToolCall(input: {
   existingReports?: Record<string, string>;
+  expectToolResult?: {
+    toolName: string;
+    toolCallId: string;
+    assertContent(content: string): void;
+  };
   toolCall: Record<string, unknown>;
 }): Promise<{
   logText: string;
@@ -2575,10 +3255,18 @@ async function runWindowWithMockToolCall(input: {
       });
     }
 
-    const toolResult = requireToolResult(body, "upsert_report_section", "call-bad-updates");
-    expect(toolResult).toContain("tool_schema_invalid_arguments");
-    expect(toolResult).toContain("$.updates 必须是数组");
-    expect(toolResult).not.toContain("updates must be a non-empty array");
+    const expectedToolResult = input.expectToolResult ?? {
+      toolName: "upsert_report_section",
+      toolCallId: "call-bad-updates",
+      assertContent: (toolResult: string) => {
+        expect(toolResult).toContain("tool_schema_invalid_arguments");
+        expect(toolResult).toContain("$.updates 必须是数组");
+        expect(toolResult).not.toContain("updates must be a non-empty array");
+      }
+    };
+    expectedToolResult.assertContent(
+      requireToolResult(body, expectedToolResult.toolName, expectedToolResult.toolCallId)
+    );
     return new Response(JSON.stringify(createChatCompletionResponse({ content: "NO_UPDATE" })), {
       headers: { "Content-Type": "application/json" },
       status: 200
@@ -2604,10 +3292,12 @@ async function runWindowWithMockToolCall(input: {
 
   const reportContents = Object.fromEntries(
     await Promise.all(
-      Object.keys(input.existingReports ?? {}).map(async (fileName) => [
-        fileName,
-        await fs.readFile(path.join(reportsRoot, fileName), "utf8")
-      ])
+      Array.from(new Set(["[报告]NPC性格与代表事件.md", ...Object.keys(input.existingReports ?? {})])).map(
+        async (fileName) => [
+          fileName,
+          await fs.readFile(path.join(reportsRoot, fileName), "utf8").catch(() => undefined)
+        ]
+      )
     )
   );
 

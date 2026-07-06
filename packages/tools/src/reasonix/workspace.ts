@@ -124,7 +124,7 @@ const toolDescriptions: Record<ReasonixToolName, (workspace: Workspace) => strin
   read_report_excerpt: () =>
     "读取本批允许报告中的卡片字段块。输入 outputFileName 和 queries，每个 query 是 cardName + fields；卡片标题为 ### 卡片名，字段行为 - 字段名：内容，字段下缩进子项会一起返回。不要整读旧报告。",
   upsert_report_section: () =>
-    "按 cardName + fieldName 替换已有 Markdown 报告字段块。输入 outputFileName 和 updates；content 必须以对应 - 字段名： 开头。不接受 old_string、sectionId 或 writeMode，不隐式创建新卡片或新字段。",
+    "按 cardName + fieldName 新增或替换 Markdown 报告字段块，也可新增整张卡片。updates[].operation 支持 add_card、add_field、replace_field；缺省为 replace_field。add_card/add_field 命中已存在卡片或字段时不会覆盖，会返回 existingContent，并提示模型基于已有内容改用 replace_field。报告不存在时 add_card/add_field 会自动创建报告文件。",
   write_file: () => "Write content to a file at the given path (overwriting existing content). Creates parent directories as needed.",
   edit_file: () =>
     "Replace an exact string in a file with another. old_string must occur exactly once; add surrounding context to disambiguate. Use for targeted edits instead of rewriting the whole file.",
@@ -199,15 +199,19 @@ const toolSchemas: Record<ReasonixToolName, unknown> = {
       updates: {
         type: "array",
         minItems: 1,
-        description: "要替换的字段块数组。",
+        description: "要新增或替换的卡片/字段块数组；operation 支持 add_card、add_field、replace_field。",
         items: {
           type: "object",
           properties: {
+            operation: { type: "string", enum: ["add_card", "add_field", "replace_field"] },
             cardName: { type: "string", description: "三级标题卡片名，例如 韩立" },
             fieldName: { type: "string", description: "字段名，例如 核心性格" },
-            content: { type: "string", description: "完整字段块，必须以 - 字段名： 开头，并包含需要保留或更新的子项。" }
+            content: {
+              type: "string",
+              description: "add_card 时为整张卡片 Markdown 或卡片正文；add_field/replace_field 时为完整字段块，需以对应 - 字段名： 开头。"
+            }
           },
-          required: ["cardName", "fieldName", "content"],
+          required: ["cardName", "content"],
           additionalProperties: false
         }
       }

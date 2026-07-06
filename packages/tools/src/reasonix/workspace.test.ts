@@ -162,9 +162,10 @@ describe("Reasonix workspace parity", () => {
           minItems: 1,
           items: {
             type: "object",
-            required: ["cardName", "fieldName", "content"],
+            required: ["cardName", "content"],
             additionalProperties: false,
             properties: {
+              operation: { type: "string", enum: ["add_card", "add_field", "replace_field"] },
               cardName: { type: "string" },
               fieldName: { type: "string" },
               content: { type: "string" }

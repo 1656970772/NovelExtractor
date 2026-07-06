@@ -37,6 +37,7 @@ import {
   BashJobManager,
   executeBuiltinFileTool,
   getEnabledToolDefinitions,
+  normalizeToolArgumentsForSchema,
   ToolExecutionError,
   validateToolArguments,
   type BashTeardownResult
@@ -428,8 +429,9 @@ function renderReportInventoryPromptSection(reportInventory: readonly ReportInve
     `已有报告：${existingReportFileNames.length > 0 ? existingReportFileNames.join("、") : "无"}`,
     `待创建报告：${missingReportFileNames.length > 0 ? missingReportFileNames.join("、") : "无"}`,
     "不要再调用搜索、目录或 shell 类工具查找这些报告是否存在；需要读已有报告时，优先用 read_report_excerpt 读取目标字段块，必要时再用 read_file 读取允许范围内的短上下文。",
-    "已有报告可按需读取相关字段，并用 upsert_report_section 修改目标字段。",
-    "待创建报告不要先调用 read_file 或 read_report_excerpt；有可写入信息时直接用 write_file 创建并写入完整报告正文。"
+    "已有报告可按需读取相关字段；新增卡片/字段用 upsert_report_section 的 add_card/add_field，修改既有字段用 read_report_excerpt 后再 replace_field。",
+    "待创建报告有可写入卡片或字段时，直接用 upsert_report_section 的 add_card 或 add_field 创建报告内容。",
+    "不要先调用 read_file、read_report_excerpt 或 write_file 铺底。"
   ].join("\n");
 }
 
@@ -979,6 +981,49 @@ function stringifyToolResult(result: unknown, secrets: readonly string[]): strin
   return redactSecrets(JSON.stringify(result) ?? "null", secrets);
 }
 
+function redactUpsertExistingContentForModel(result: unknown): unknown {
+  if (typeof result !== "string") {
+    return result;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result) as unknown;
+  } catch {
+    return result;
+  }
+
+  if (!isPlainRecord(parsed) || !Array.isArray(parsed.operations)) {
+    return result;
+  }
+
+  const redacted = {
+    ...parsed,
+    operations: parsed.operations.map((operation) => {
+      if (!isPlainRecord(operation) || typeof operation.existingContent !== "string") {
+        return operation;
+      }
+
+      const { existingContent, ...rest } = operation;
+      return {
+        ...rest,
+        existingContentRedacted: true,
+        existingContentLength: existingContent.length
+      };
+    })
+  };
+
+  return JSON.stringify(redacted);
+}
+
+function projectToolResultForModel(toolName: string, result: unknown): unknown {
+  if (toolName !== UPSERT_REPORT_SECTION_TOOL_NAME) {
+    return result;
+  }
+
+  return redactUpsertExistingContentForModel(result);
+}
+
 function getToolPathArgument(args: unknown): string | undefined {
   if (!isPlainRecord(args) || typeof args.path !== "string") {
     return undefined;
@@ -1009,6 +1054,22 @@ function getWriteFileContentArgument(args: unknown): string | undefined {
 
 function isReportWriteTool(name: string): boolean {
   return name === "write_file" || name === "edit_file" || name === "multi_edit" || name === UPSERT_REPORT_SECTION_TOOL_NAME;
+}
+
+function reportWriteToolChanged(toolName: string, toolResult: unknown): boolean {
+  if (toolName !== UPSERT_REPORT_SECTION_TOOL_NAME) {
+    return true;
+  }
+  if (typeof toolResult !== "string") {
+    return true;
+  }
+
+  try {
+    const parsed = JSON.parse(toolResult) as unknown;
+    return !isPlainRecord(parsed) || parsed.changed !== false;
+  } catch {
+    return true;
+  }
 }
 
 function isBashToolFamily(name: string): boolean {
@@ -1499,6 +1560,24 @@ function collectUpsertReportFieldKeys(args: unknown): string[] {
   });
 }
 
+function collectReplaceUpsertReportFieldKeys(args: unknown): string[] {
+  const outputFileName = getToolOutputFileNameArgument(args);
+  if (!outputFileName || !isPlainRecord(args) || !Array.isArray(args.updates)) {
+    return [];
+  }
+
+  return args.updates.flatMap((update) => {
+    if (!isPlainRecord(update) || typeof update.cardName !== "string" || typeof update.fieldName !== "string") {
+      return [];
+    }
+    if (update.operation !== undefined && update.operation !== "replace_field") {
+      return [];
+    }
+
+    return [createReportFieldKey(outputFileName, update.cardName, update.fieldName)];
+  });
+}
+
 function createReportFieldKey(outputFileName: string, cardName: string, fieldName: string): string {
   return [
     normalizeReportFieldKeyPart(outputFileName),
@@ -1765,7 +1844,8 @@ const TOOL_EXECUTION_ERROR_CODES = new Set<string>([
   "CARD_NOT_FOUND",
   "FIELD_NOT_FOUND",
   "FIELD_AMBIGUOUS",
-  "INVALID_FIELD_CONTENT"
+  "INVALID_FIELD_CONTENT",
+  "INVALID_CARD_CONTENT"
 ]);
 
 function toToolExecutionErrorCode(code: unknown): ToolExecutionError["code"] {
@@ -2057,7 +2137,7 @@ async function createExistingReportWriteRecoverableResult(input: {
   }
 
   if (input.toolCall.name === UPSERT_REPORT_SECTION_TOOL_NAME) {
-    const missingFieldKeys = collectUpsertReportFieldKeys(input.toolCall.arguments).filter(
+    const missingFieldKeys = collectReplaceUpsertReportFieldKeys(input.toolCall.arguments).filter(
       (fieldKey) => !input.queriedReportFieldKeys.has(fieldKey)
     );
     if (missingFieldKeys.length > 0) {
@@ -2256,7 +2336,7 @@ function createBatchOutcomeCorrectionMessage(tracker: BatchOutcomeTracker): stri
   return [
     `上一轮尚未为本批次所有选中模板提供处理结果，缺少 outputFileName：${missingOutputs}。`,
     "下一轮只处理上述缺失 outputFileName；已完成处理结果的输出文件不要继续读取、编辑或重写。",
-    "请对每个缺失 outputFileName 调用 write_file 创建报告、调用 upsert_report_section 更新已读字段块，或调用 mark_no_update 标记本窗口无新增信息。",
+    "请对每个缺失 outputFileName 优先调用 upsert_report_section：新增整张卡片用 operation=add_card，新增字段块用 operation=add_field，修改既有字段块先 read_report_excerpt 再 operation=replace_field；没有当前窗口明确证据时调用 mark_no_update。",
     "如果缺失模板没有当前窗口明确证据，立即调用 mark_no_update；不要为了无新增模板继续查询或修改其他报告。",
     "如果本批所有模板都没有可写入的新信息，最终文本必须严格返回 NO_UPDATE。"
   ].join("\n");
@@ -2587,11 +2667,18 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         }
 
         const toolCalls = normalizeToolCalls(completion.toolCalls, roundIndex).map((toolCall) => {
+          const inputSchema = toolInputSchemasByName.get(toolCall.name);
+          const schemaNormalizedArguments = toToolCallArguments(
+            normalizeToolArgumentsForSchema(inputSchema, toolCall.arguments)
+          );
           const normalizedReadExecutionArguments = normalizeReadToolExecutionArguments({
             allowedOutputFileNames,
             artifacts: input.artifacts,
             manifestWindow: input.manifestWindow,
-            toolCall
+            toolCall: {
+              ...toolCall,
+              arguments: schemaNormalizedArguments
+            }
           });
           const executionSourceArguments = normalizeWriteToolExecutionArguments({
             allowedOutputFileNames,
@@ -2822,6 +2909,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             }
           }
 
+          const visibleToolResult = projectToolResultForModel(toolCall.name, toolResult);
           await options.taskLogger?.append(["工具返回", toolCall.name], {
             轮次: currentRoundIndex,
             工具调用ID: toolCall.id,
@@ -2829,7 +2917,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             是否可恢复错误: returnedRecoverableToolError,
             ...toToolLoopRoundReasonLogFields(toolLoopRoundReason),
             返回内容: replaceWindowTextReferencesForTaskLog({
-              value: toolResult,
+              value: visibleToolResult,
               windowFileName: input.manifestWindow.fileName,
               windowText: input.windowText
             })
@@ -2845,7 +2933,11 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             });
           }
 
-          if (isReportWriteTool(toolCall.name) && !returnedRecoverableToolError) {
+          if (
+            isReportWriteTool(toolCall.name) &&
+            !returnedRecoverableToolError &&
+            reportWriteToolChanged(toolCall.name, toolResult)
+          ) {
             const reportFileName = getReportTargetArgument(toolCall.name, toolCall.arguments);
             if (reportFileName === undefined) {
               throw new Error(`写工具 ${toolCall.name} 未提供报告目标`);
@@ -2882,7 +2974,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             role: "tool",
             toolCallId: toolCall.id,
             name: toolCall.name,
-            content: stringifyToolResult(toolResult, secrets)
+            content: stringifyToolResult(visibleToolResult, secrets)
           });
         }
 

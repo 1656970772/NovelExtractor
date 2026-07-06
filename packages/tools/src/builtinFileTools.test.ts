@@ -138,22 +138,24 @@ describe("builtin file tools", () => {
     );
     fs.writeFileSync(path.join(context.reportsRoot, "人物.md"), "# 人物\n\n韩立\n", "utf8");
 
-    await expect(
-      executeBuiltinFileTool(
-        "upsert_report_section",
-        {
-          outputFileName: "NPC性格与代表事件.md",
-          updates: JSON.stringify([
-            {
-              cardName: "舞岩",
-              fieldName: "基础性格",
-              content: "- 基础性格：傲慢自大"
-            }
-          ])
-        },
-        { ...context, allowedReportFileNames: ["NPC性格与代表事件.md"] }
-      )
-    ).resolves.toContain("updated report fields 舞岩/基础性格");
+    const upsertResult = await executeBuiltinFileTool(
+      "upsert_report_section",
+      {
+        outputFileName: "NPC性格与代表事件.md",
+        updates: JSON.stringify([
+          {
+            cardName: "舞岩",
+            fieldName: "基础性格",
+            content: "- 基础性格：傲慢自大"
+          }
+        ])
+      },
+      { ...context, allowedReportFileNames: ["NPC性格与代表事件.md"] }
+    );
+    expect(JSON.parse(upsertResult)).toMatchObject({
+      changed: true,
+      operations: [{ operation: "replace_field", status: "replaced_field", cardName: "舞岩", fieldName: "基础性格" }]
+    });
 
     await expect(
       executeBuiltinFileTool(
@@ -374,10 +376,212 @@ describe("builtin file tools", () => {
       { ...context, allowedReportFileNames: ["NPC性格与代表事件.md"] }
     );
 
-    expect(result).toContain("updated report fields 韩立/核心性格 in NPC性格与代表事件.md");
+    expect(JSON.parse(result)).toMatchObject({
+      changed: true,
+      operations: [{ operation: "replace_field", status: "replaced_field", cardName: "韩立", fieldName: "核心性格" }]
+    });
     expect(fs.readFileSync(path.join(context.reportsRoot, "NPC性格与代表事件.md"), "utf8")).toBe(
       "### 韩立\n- 核心性格：谨慎、隐忍\n  - 证据：当前窗口\n- 代表行为：旧行为\n"
     );
+  });
+
+  it("upsert_report_section add_card creates a missing selected report without write_file", async () => {
+    const context = makeContext();
+    const outputFileName = "NPC性格与代表事件.md";
+    const reportPath = path.join(context.reportsRoot, outputFileName);
+
+    const result = await executeBuiltinFileTool(
+      "upsert_report_section",
+      {
+        outputFileName,
+        updates: [{ operation: "add_card", cardName: "舞岩", content: "### 舞岩\n\n- 角色定位：七玄门少年。" }]
+      },
+      { ...context, allowedReportFileNames: [outputFileName] }
+    );
+
+    expect(JSON.parse(result)).toMatchObject({
+      outputFileName,
+      changed: true,
+      operations: [{ operation: "add_card", status: "created_report_and_card", cardName: "舞岩" }]
+    });
+    expect(fs.readFileSync(reportPath, "utf8")).toBe("# NPC性格与代表事件\n\n### 舞岩\n\n- 角色定位：七玄门少年。\n");
+  });
+
+  it("upsert_report_section add_field creates a missing selected report", async () => {
+    const context = makeContext();
+    const outputFileName = "NPC性格与代表事件.md";
+    const reportPath = path.join(context.reportsRoot, outputFileName);
+
+    const result = await executeBuiltinFileTool(
+      "upsert_report_section",
+      {
+        outputFileName,
+        updates: [{ operation: "add_field", cardName: "舞岩", fieldName: "角色定位", content: "- 角色定位：七玄门少年。" }]
+      },
+      { ...context, allowedReportFileNames: [outputFileName] }
+    );
+
+    expect(JSON.parse(result)).toMatchObject({
+      outputFileName,
+      changed: true,
+      operations: [{ operation: "add_field", status: "created_report_card_and_field", cardName: "舞岩", fieldName: "角色定位" }]
+    });
+    expect(fs.readFileSync(reportPath, "utf8")).toBe("# NPC性格与代表事件\n\n### 舞岩\n\n- 角色定位：七玄门少年。\n");
+  });
+
+  it("upsert_report_section add_card returns existingContent without rewriting existing cards", async () => {
+    const context = makeContext();
+    const outputFileName = "NPC性格与代表事件.md";
+    const reportPath = path.join(context.reportsRoot, outputFileName);
+    const original = "### 舞岩\n\n- 角色定位：旧定位\n";
+    fs.writeFileSync(reportPath, original, "utf8");
+
+    const result = await executeBuiltinFileTool(
+      "upsert_report_section",
+      {
+        outputFileName,
+        updates: [{ operation: "add_card", cardName: "舞岩", content: "### 舞岩\n\n- 角色定位：新定位" }]
+      },
+      { ...context, allowedReportFileNames: [outputFileName] }
+    );
+
+    expect(JSON.parse(result)).toMatchObject({
+      outputFileName,
+      changed: false,
+      operations: [{ operation: "add_card", status: "card_already_exists", cardName: "舞岩", existingContent: original }]
+    });
+    expect(fs.readFileSync(reportPath, "utf8")).toBe(original);
+  });
+
+  it("upsert_report_section add_card rejects mismatched headings", async () => {
+    const context = makeContext();
+    const outputFileName = "NPC性格与代表事件.md";
+
+    await expect(
+      executeBuiltinFileTool(
+        "upsert_report_section",
+        {
+          outputFileName,
+          updates: [{ operation: "add_card", cardName: "舞岩", content: "### 韩立\n\n- 角色定位：主角。" }]
+        },
+        { ...context, allowedReportFileNames: [outputFileName] }
+      )
+    ).rejects.toMatchObject({ code: "INVALID_CARD_CONTENT" });
+  });
+
+  it("upsert_report_section add_field creates missing card and returns JSON", async () => {
+    const context = makeContext();
+    const outputFileName = "NPC性格与代表事件.md";
+    const reportPath = path.join(context.reportsRoot, outputFileName);
+    fs.writeFileSync(reportPath, "# NPC性格与代表事件\n", "utf8");
+
+    const result = await executeBuiltinFileTool(
+      "upsert_report_section",
+      {
+        outputFileName,
+        updates: [{ operation: "add_field", cardName: "舞岩", fieldName: "角色定位", content: "- 角色定位：七玄门少年。" }]
+      },
+      { ...context, allowedReportFileNames: [outputFileName] }
+    );
+
+    expect(JSON.parse(result)).toMatchObject({
+      outputFileName,
+      changed: true,
+      operations: [{ operation: "add_field", status: "created_card_and_field", cardName: "舞岩", fieldName: "角色定位" }]
+    });
+    expect(fs.readFileSync(reportPath, "utf8")).toBe("# NPC性格与代表事件\n\n### 舞岩\n\n- 角色定位：七玄门少年。\n");
+  });
+
+  it("upsert_report_section add_field returns JSON without rewriting existing fields", async () => {
+    const context = makeContext();
+    const outputFileName = "NPC性格与代表事件.md";
+    const reportPath = path.join(context.reportsRoot, outputFileName);
+    const original = "### 舞岩\n\n- 角色定位：旧定位\n";
+    fs.writeFileSync(reportPath, original, "utf8");
+
+    const result = await executeBuiltinFileTool(
+      "upsert_report_section",
+      {
+        outputFileName,
+        updates: [{ operation: "add_field", cardName: "舞岩", fieldName: "角色定位", content: "- 角色定位：新定位" }]
+      },
+      { ...context, allowedReportFileNames: [outputFileName] }
+    );
+
+    expect(JSON.parse(result)).toMatchObject({
+      outputFileName,
+      changed: false,
+      operations: [
+        { operation: "add_field", status: "field_already_exists", cardName: "舞岩", fieldName: "角色定位", existingContent: "- 角色定位：旧定位\n" }
+      ]
+    });
+    expect(fs.readFileSync(reportPath, "utf8")).toBe(original);
+  });
+
+  it("upsert_report_section pre-scans batches before writing when a later add target exists", async () => {
+    const context = makeContext();
+    const outputFileName = "NPC性格与代表事件.md";
+    const reportPath = path.join(context.reportsRoot, outputFileName);
+    const original = "### 韩立\n\n- 核心性格：谨慎\n";
+    fs.writeFileSync(reportPath, original, "utf8");
+
+    const existingFieldResult = await executeBuiltinFileTool(
+      "upsert_report_section",
+      {
+        outputFileName,
+        updates: [
+          { operation: "add_card", cardName: "舞岩", content: "### 舞岩\n\n- 角色定位：七玄门少年。" },
+          { operation: "add_field", cardName: "韩立", fieldName: "核心性格", content: "- 核心性格：新内容" }
+        ]
+      },
+      { ...context, allowedReportFileNames: [outputFileName] }
+    );
+    const existingFieldParsed = JSON.parse(existingFieldResult);
+    expect(existingFieldParsed).toMatchObject({
+      changed: false,
+      operations: [{ operation: "add_field", status: "field_already_exists", cardName: "韩立", fieldName: "核心性格" }]
+    });
+    expect(existingFieldParsed.operations).toHaveLength(1);
+    expect(fs.readFileSync(reportPath, "utf8")).toBe(original);
+
+    const existingCardResult = await executeBuiltinFileTool(
+      "upsert_report_section",
+      {
+        outputFileName,
+        updates: [
+          { operation: "add_field", cardName: "舞岩", fieldName: "角色定位", content: "- 角色定位：七玄门少年。" },
+          { operation: "add_card", cardName: "韩立", content: "### 韩立\n\n- 核心性格：新内容" }
+        ]
+      },
+      { ...context, allowedReportFileNames: [outputFileName] }
+    );
+    const existingCardParsed = JSON.parse(existingCardResult);
+    expect(existingCardParsed).toMatchObject({
+      changed: false,
+      operations: [{ operation: "add_card", status: "card_already_exists", cardName: "韩立" }]
+    });
+    expect(existingCardParsed.operations).toHaveLength(1);
+    expect(fs.readFileSync(reportPath, "utf8")).toBe(original);
+  });
+
+  it.each([
+    [{ operation: "remove_field", cardName: "韩立", fieldName: "核心性格", content: "- 核心性格：新" }],
+    [{ operation: "add_field", cardName: "韩立", content: "- 核心性格：新" }],
+    [{ operation: "replace_field", cardName: "韩立", content: "- 核心性格：新" }],
+    [{ cardName: "韩立", content: "- 核心性格：新" }],
+    [{ operation: "add_card", cardName: "", content: "### 韩立\n\n- 核心性格：新" }],
+    [{ operation: "add_field", cardName: "韩立", fieldName: "", content: "- 核心性格：新" }],
+    [{ operation: "add_card", cardName: "韩立", content: "" }]
+  ])("upsert_report_section rejects invalid update arguments before field block handling: %#", async (updates) => {
+    const context = makeContext();
+
+    await expect(
+      executeBuiltinFileTool(
+        "upsert_report_section",
+        { outputFileName: "丹药分析.md", updates },
+        { ...context, allowedReportFileNames: ["丹药分析.md"] }
+      )
+    ).rejects.toMatchObject({ code: "INVALID_ARGUMENTS" });
   });
 
   it("includes field coordinate in FIELD_NOT_FOUND errors for upsert_report_section", async () => {

@@ -150,7 +150,7 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
       read_tool_invalid_arguments:
         "读取工具参数无效；请检查 path 或 queries 是否符合工具 schema，并缩小读取范围。",
       edit_target_not_found:
-        "目标报告不存在；如果需要创建报告，请改用 write_file 写入完整且合规的报告正文。",
+        "目标报告不存在；如果需要创建报告内容，请改用 upsert_report_section：operation=add_card 新增整张卡片，operation=add_field 新增字段块。",
       tool_not_enabled:
         "只能调用当前请求 tools 清单中列出的工具；不要调用未列出的 shell、搜索、目录列出或编辑工具。",
       tool_invalid_arguments:
@@ -166,7 +166,8 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
       "正式报告正文必须按模板案例的卡片样式组织：每张卡片用 `### 卡片名` 开头，卡片内字段统一写成 `- 字段名：内容说明`；必要子项缩进写在对应字段下，不要写成无卡片或无字段名的连续正文。",
       NO_WHOLE_BOOK_PRIOR_KNOWLEDGE_RULE,
       TEMPLATE_EXAMPLE_EVIDENCE_RULE,
-      "更新既有报告前，优先用 read_report_excerpt 按“卡片名-字段名/字段名”坐标读取目标字段块；字段块确认后用 upsert_report_section 按 cardName + fieldName 直接替换字段块，不要整读旧报告，不要用 old_string。",
+      "新增卡片或新增字段块时，直接用 upsert_report_section：operation=add_card 新增整张卡片，operation=add_field 新增某个字段块；报告不存在时工具会自动创建报告，不要先用 write_file 铺底。",
+      "修改既有字段块前，先用 read_report_excerpt 按“卡片名-字段名/字段名”坐标读取目标字段块；确认后用 upsert_report_section operation=replace_field 替换同一字段块，不要整读旧报告，不要用 old_string。",
       "工具参数必须严格按 schema 传入原生 JSON 值：updates、queries 等数组字段必须是真 JSON 数组（[...]），不要把数组写成字符串、Markdown 代码块或多层转义文本。",
       "字段坐标示例：韩立-角色定位/核心性格/代表行为；工具调用时拆成 cardName=韩立，fields=[角色定位,核心性格,代表行为]。",
       "如果本批次只有部分模板无新增信息，必须对这些模板调用 mark_no_update，并继续为其他模板写入或更新报告。",

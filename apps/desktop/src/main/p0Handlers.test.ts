@@ -2058,6 +2058,15 @@ describe("P0 desktop IPC handlers", () => {
       expect(firstUserPrompt).toContain("## 选中模板 Prompt Profile");
       expect(firstUserPrompt).toContain("## 当前窗口文本");
       expect(firstUserPrompt).not.toContain("本阶段不做模板路由");
+      expect(firstUserPrompt).toContain(
+        "已有报告可按需读取相关字段；新增卡片/字段用 upsert_report_section 的 add_card/add_field，修改既有字段用 read_report_excerpt 后再 replace_field。"
+      );
+      expect(firstUserPrompt).toContain(
+        "待创建报告有可写入卡片或字段时，直接用 upsert_report_section 的 add_card 或 add_field 创建报告内容"
+      );
+      expect(firstUserPrompt).toContain("不要先调用 read_file、read_report_excerpt 或 write_file 铺底。");
+      expect(firstUserPrompt).not.toContain("有可写入信息时直接用 write_file 创建并写入完整报告正文");
+      expect(firstUserPrompt).not.toContain("待创建报告不要先调用 read_file 或 read_report_excerpt");
       expect(firstRequestToolNames).toEqual(getDefaultConfig().toolLoopDefaults.enabledToolNames);
       expect(firstRequestToolNames).not.toContain("edit_file");
       expect(firstRequestToolNames).not.toContain("multi_edit");
@@ -2071,6 +2080,9 @@ describe("P0 desktop IPC handlers", () => {
       expect(readReportExcerptSchema?.properties).toHaveProperty("queries");
       expect(upsertReportSectionSchema?.properties).toHaveProperty("outputFileName");
       expect(upsertReportSectionSchema?.properties).toHaveProperty("updates");
+      expect(JSON.stringify(upsertReportSectionSchema)).toContain("add_card");
+      expect(JSON.stringify(upsertReportSectionSchema)).toContain("add_field");
+      expect(JSON.stringify(upsertReportSectionSchema)).toContain("replace_field");
       expect(firstRequestJson).not.toContain(`窗口文件：${firstWindowTextPath}`);
       expect(firstRequestJson).not.toContain("read_file/grep 如需读取当前窗口文件");
       expect(firstRequestJson).not.toContain("不要使用裸文件名 window-0001.txt");

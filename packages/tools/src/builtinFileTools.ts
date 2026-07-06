@@ -20,10 +20,10 @@ import {
   createWaitTool
 } from "./reasonix/tools/bashTool";
 import {
+  applyReportFieldUpdates,
   readReportFieldBlocks,
-  replaceReportFieldBlocks,
   type ReportFieldQuery,
-  type ReportFieldUpdate
+  type ReportFieldWriteUpdate
 } from "./reportFieldBlocks";
 
 export interface ToolExecutionContext {
@@ -57,7 +57,8 @@ export class ToolExecutionError extends Error {
       | "CARD_NOT_FOUND"
       | "FIELD_NOT_FOUND"
       | "FIELD_AMBIGUOUS"
-      | "INVALID_FIELD_CONTENT",
+      | "INVALID_FIELD_CONTENT"
+      | "INVALID_CARD_CONTENT",
     readonly output?: string
   ) {
     super(message);
@@ -128,14 +129,21 @@ async function executeUpsertReportSection(rawArguments: unknown, context: ToolEx
   await assertExistingReportFileIsSafe(reportPath);
 
   const currentContent = await readReportFileIfExists(reportPath);
-  const result = replaceReportFieldBlocks({ content: currentContent, updates });
+  const result = applyReportFieldUpdates({ outputFileName, content: currentContent, updates });
   if (!result.ok) {
     throw new ToolExecutionError(result.message, result.code);
   }
 
-  await mkdir(path.dirname(reportPath), { recursive: true });
-  await writeFile(reportPath, result.content, "utf8");
-  return `updated report fields ${result.updated.map((item) => `${item.cardName}/${item.fieldName}`).join(", ")} in ${outputFileName}`;
+  if (result.changed) {
+    await mkdir(path.dirname(reportPath), { recursive: true });
+    await writeFile(reportPath, result.content, "utf8");
+  }
+  return JSON.stringify({
+    outputFileName: result.outputFileName,
+    changed: result.changed,
+    operations: result.operations,
+    message: result.message
+  });
 }
 
 function assertAllowedUpsertReportSectionArguments(args: Record<string, unknown>): void {
@@ -246,7 +254,7 @@ function normalizeReportFieldQueries(value: unknown): ReportFieldQuery[] {
   });
 }
 
-function normalizeReportFieldUpdates(value: unknown): ReportFieldUpdate[] {
+function normalizeReportFieldUpdates(value: unknown): ReportFieldWriteUpdate[] {
   const updates = parseJsonArrayString(value) ?? value;
   if (!Array.isArray(updates) || updates.length === 0) {
     throw new ToolExecutionError("updates must be a non-empty array", "INVALID_ARGUMENTS");
@@ -254,23 +262,47 @@ function normalizeReportFieldUpdates(value: unknown): ReportFieldUpdate[] {
 
   return updates.map((item) => {
     const record = isPlainRecord(item) ? item : undefined;
-    if (
-      record === undefined ||
-      typeof record.cardName !== "string" ||
-      typeof record.fieldName !== "string" ||
-      typeof record.content !== "string"
-    ) {
-      throw new ToolExecutionError("updates items must include cardName, fieldName, and content", "INVALID_ARGUMENTS");
+    if (record === undefined || typeof record.cardName !== "string" || typeof record.content !== "string") {
+      throw new ToolExecutionError("updates items must include cardName and content", "INVALID_ARGUMENTS");
+    }
+
+    const operation = normalizeReportFieldOperation(record.operation);
+    if (operation === undefined) {
+      throw new ToolExecutionError("updates operation must be add_card, add_field, or replace_field", "INVALID_ARGUMENTS");
     }
 
     const cardName = record.cardName.trim();
-    const fieldName = record.fieldName.trim();
-    if (cardName === "" || fieldName === "" || record.content.trim() === "") {
-      throw new ToolExecutionError("updates cardName, fieldName, and content must be non-empty", "INVALID_ARGUMENTS");
+    if (cardName === "" || record.content.trim() === "") {
+      throw new ToolExecutionError("updates cardName and content must be non-empty", "INVALID_ARGUMENTS");
     }
 
-    return { cardName, fieldName, content: record.content };
+    if (operation === "add_card") {
+      if (record.fieldName !== undefined && (typeof record.fieldName !== "string" || record.fieldName.trim() === "")) {
+        throw new ToolExecutionError("updates fieldName must be non-empty when provided", "INVALID_ARGUMENTS");
+      }
+      return { operation, cardName, content: record.content };
+    }
+
+    if (typeof record.fieldName !== "string") {
+      throw new ToolExecutionError("updates items must include fieldName for add_field and replace_field", "INVALID_ARGUMENTS");
+    }
+    const fieldName = record.fieldName.trim();
+    if (fieldName === "") {
+      throw new ToolExecutionError("updates fieldName must be non-empty", "INVALID_ARGUMENTS");
+    }
+
+    return { operation, cardName, fieldName, content: record.content };
   });
+}
+
+function normalizeReportFieldOperation(value: unknown): "add_card" | "add_field" | "replace_field" | undefined {
+  if (value === undefined) {
+    return "replace_field";
+  }
+  if (value === "add_card" || value === "add_field" || value === "replace_field") {
+    return value;
+  }
+  return undefined;
 }
 
 function normalizeMaxChars(value: unknown): number | undefined {

@@ -176,7 +176,7 @@ describe("default config", () => {
         read_tool_invalid_arguments:
           "读取工具参数无效；请检查 path 或 queries 是否符合工具 schema，并缩小读取范围。",
         edit_target_not_found:
-          "目标报告不存在；如果需要创建报告，请改用 write_file 写入完整且合规的报告正文。",
+          "目标报告不存在；如果需要创建报告内容，请改用 upsert_report_section：operation=add_card 新增整张卡片，operation=add_field 新增字段块。",
         tool_not_enabled:
           "只能调用当前请求 tools 清单中列出的工具；不要调用未列出的 shell、搜索、目录列出或编辑工具。",
         tool_invalid_arguments:
@@ -194,6 +194,9 @@ describe("default config", () => {
     const windowInstructions = getDefaultConfig().toolLoopDefaults.windowInstructionLines.join("\n");
     expect(windowInstructions).toContain("read_report_excerpt");
     expect(windowInstructions).toContain("upsert_report_section");
+    expect(windowInstructions).toContain("add_card");
+    expect(windowInstructions).toContain("add_field");
+    expect(windowInstructions).toContain("replace_field");
     expect(windowInstructions).toContain("卡片名");
     expect(windowInstructions).toContain("字段名");
     expect(windowInstructions).toContain("韩立-角色定位/核心性格/代表行为");
@@ -207,6 +210,17 @@ describe("default config", () => {
     expect(windowInstructions).not.toContain("ls");
     expect(windowInstructions).not.toContain("glob");
     expect(windowInstructions).not.toContain("bash");
+    expect(windowInstructions).not.toContain("待创建报告");
+  });
+
+  it("guides missing report recovery through upsert report operations", () => {
+    const hint = getDefaultConfig().toolLoopDefaults.recoverableToolErrorHints.edit_target_not_found;
+
+    expect(hint).toContain("upsert_report_section");
+    expect(hint).toContain("operation=add_card");
+    expect(hint).toContain("operation=add_field");
+    expect(hint).not.toContain("write_file 写入完整");
+    expect(hint).not.toContain("写入完整且合规的报告正文");
   });
 
   it("provides configurable extraction batching defaults", () => {

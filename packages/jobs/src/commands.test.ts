@@ -51,7 +51,7 @@ function timeout<T>(ms: number, value: T): Promise<T> {
 }
 
 describe("job command service", () => {
-  it("creates, starts, pauses, resumes, and deletes through typed command results", async () => {
+  it("creates, starts, rejects configured pause while running, completes, and deletes through typed command results", async () => {
     const repository = createMemoryCommandRepository();
     const firstWindow = createDeferred<{
       content: string;
@@ -95,16 +95,15 @@ describe("job command service", () => {
     });
     await vi.waitFor(async () => expect((await repository.findJobById("job-1"))?.status).toBe("running"));
 
-    await expect(service.pause("job-1")).resolves.toEqual({ ok: true });
+    await expect(service.pause("job-1")).resolves.toEqual({
+      ok: false,
+      error: { code: "invalid_job_state", currentStatus: "running", action: "pause" }
+    });
     firstWindow.resolve({
       content: "done",
       usage: { inputTokens: 2, outputTokens: 3, totalTokens: 5 },
       fee: { amount: 0.05, currency: "USD" }
     });
-    await vi.waitFor(async () => expect((await repository.findJobById("job-1"))?.status).toBe("paused"));
-
-    await expect(service.resume("job-1")).resolves.toEqual({ ok: true });
-    await expect(startPromise).resolves.toMatchObject({ ok: true, job: { status: "running" } });
     await vi.waitFor(async () => expect((await repository.findJobById("job-1"))?.status).toBe("completed"));
 
     await expect(service.delete("job-1")).resolves.toMatchObject({ ok: true, job: { status: "deleted" } });

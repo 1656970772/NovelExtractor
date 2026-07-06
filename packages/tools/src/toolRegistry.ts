@@ -83,6 +83,84 @@ export function validateToolArguments(schema: unknown, value: unknown): ToolVali
   return validateJsonSchemaValue(schema, value, "$");
 }
 
+export function normalizeToolArgumentsForSchema(schema: unknown, value: unknown): unknown {
+  return normalizeJsonSchemaValue(schema, value);
+}
+
+function normalizeJsonSchemaValue(schema: unknown, value: unknown): unknown {
+  if (schema === null || typeof schema !== "object" || Array.isArray(schema)) {
+    return value;
+  }
+
+  const record = schema as Record<string, unknown>;
+  const type = record.type;
+
+  if (type === "object") {
+    const objectValue = parseJsonContainerString(value, "object") ?? value;
+    if (objectValue === null || typeof objectValue !== "object" || Array.isArray(objectValue)) {
+      return objectValue;
+    }
+
+    const properties = objectRecord(record.properties);
+    const valueRecord = objectValue as Record<string, unknown>;
+    let changed = false;
+    const normalized: Record<string, unknown> = {};
+
+    for (const [key, childValue] of Object.entries(valueRecord)) {
+      const childSchema = properties[key];
+      const normalizedChild =
+        childSchema === undefined ? childValue : normalizeJsonSchemaValue(childSchema, childValue);
+      normalized[key] = normalizedChild;
+      changed ||= normalizedChild !== childValue;
+    }
+
+    return changed ? normalized : objectValue;
+  }
+
+  if (type === "array") {
+    const arrayValue = parseJsonContainerString(value, "array") ?? value;
+    if (!Array.isArray(arrayValue)) {
+      return arrayValue;
+    }
+
+    let changed = false;
+    const normalized = arrayValue.map((item) => {
+      const normalizedItem = normalizeJsonSchemaValue(record.items, item);
+      changed ||= normalizedItem !== item;
+      return normalizedItem;
+    });
+
+    return changed ? normalized : arrayValue;
+  }
+
+  return value;
+}
+
+function parseJsonContainerString(value: unknown, expectedType: "array" | "object"): unknown {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (expectedType === "array" && (!trimmed.startsWith("[") || !trimmed.endsWith("]"))) {
+    return undefined;
+  }
+  if (expectedType === "object" && (!trimmed.startsWith("{") || !trimmed.endsWith("}"))) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (expectedType === "array") {
+      return Array.isArray(parsed) ? parsed : undefined;
+    }
+
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function validateJsonSchemaValue(schema: unknown, value: unknown, path: string): ToolValidationError[] {
   if (schema === null || typeof schema !== "object" || Array.isArray(schema)) {
     return [];

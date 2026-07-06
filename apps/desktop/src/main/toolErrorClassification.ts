@@ -86,7 +86,8 @@ const FIELD_REPORT_ARGUMENT_ERROR_CODES = new Set([
   "CARD_NOT_FOUND",
   "FIELD_NOT_FOUND",
   "FIELD_AMBIGUOUS",
-  "INVALID_FIELD_CONTENT"
+  "INVALID_FIELD_CONTENT",
+  "INVALID_CARD_CONTENT"
 ]);
 
 export function classifyToolExecutionError(input: {

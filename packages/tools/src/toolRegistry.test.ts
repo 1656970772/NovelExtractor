@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { getEnabledToolDefinitions, getEnabledTools, validateToolArguments } from "./toolRegistry";
+import {
+  getEnabledToolDefinitions,
+  getEnabledTools,
+  normalizeToolArgumentsForSchema,
+  validateToolArguments
+} from "./toolRegistry";
 
 describe("P0 tool registry", () => {
   it("exposes the configured Reasonix tools in deterministic order", () => {
@@ -111,7 +116,8 @@ describe("P0 tool registry", () => {
       required: ["outputFileName", "queries"],
       additionalProperties: false
     });
-    expect(tools[7].parameters).toMatchObject({
+    const upsertTool = tools.find((tool) => tool.name === "upsert_report_section");
+    expect(upsertTool?.parameters).toMatchObject({
       type: "object",
       properties: {
         outputFileName: { type: "string" },
@@ -120,9 +126,10 @@ describe("P0 tool registry", () => {
           minItems: 1,
           items: {
             type: "object",
-            required: ["cardName", "fieldName", "content"],
+            required: ["cardName", "content"],
             additionalProperties: false,
             properties: {
+              operation: { type: "string", enum: ["add_card", "add_field", "replace_field"] },
               cardName: { type: "string" },
               fieldName: { type: "string" },
               content: { type: "string" }
@@ -133,9 +140,31 @@ describe("P0 tool registry", () => {
       required: ["outputFileName", "updates"],
       additionalProperties: false
     });
-    expect(JSON.stringify(tools[7].parameters)).not.toContain("old_string");
-    expect(JSON.stringify(tools[7].parameters)).not.toContain("sectionId");
-    expect(JSON.stringify(tools[7].parameters)).not.toContain("writeMode");
+    const upsertParameters = upsertTool?.parameters as
+      | {
+          properties: {
+            updates: {
+              description?: string;
+              items: {
+                properties: {
+                  content: { description?: string };
+                };
+              };
+            };
+          };
+        }
+      | undefined;
+    const updatesSchema = upsertParameters?.properties.updates;
+    const contentSchema = updatesSchema?.items.properties.content;
+    expect(updatesSchema?.description).toContain("add_card");
+    expect(updatesSchema?.description).toContain("add_field");
+    expect(updatesSchema?.description).toContain("replace_field");
+    expect(updatesSchema?.description).not.toContain("要替换的字段块数组");
+    expect(contentSchema?.description).toMatch(/add_card|卡片/u);
+    expect(contentSchema?.description).not.toContain("必须以 - 字段名");
+    expect(JSON.stringify(upsertTool?.parameters)).not.toContain("old_string");
+    expect(JSON.stringify(upsertTool?.parameters)).not.toContain("sectionId");
+    expect(JSON.stringify(upsertTool?.parameters)).not.toContain("writeMode");
   });
 
   it("describes read_report_excerpt as card field block reading", () => {
@@ -196,6 +225,39 @@ describe("P0 tool registry", () => {
     expect(errors).toEqual([{ path: "$.updates", message: "必须是数组" }]);
   });
 
+  it("normalizes JSON-stringified container fields according to schema", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        updates: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              cardName: { type: "string" },
+              tags: { type: "array", items: { type: "string" } }
+            }
+          }
+        },
+        rawText: { type: "string" }
+      }
+    };
+
+    expect(
+      normalizeToolArgumentsForSchema(schema, {
+        updates: JSON.stringify([{ cardName: "韩立", tags: JSON.stringify(["谨慎"]) }]),
+        rawText: JSON.stringify(["保持字符串"])
+      })
+    ).toEqual({
+      updates: [{ cardName: "韩立", tags: ["谨慎"] }],
+      rawText: "[\"保持字符串\"]"
+    });
+
+    expect(normalizeToolArgumentsForSchema(schema, { updates: "韩立,核心性格" })).toEqual({
+      updates: "韩立,核心性格"
+    });
+  });
+
   it("reports missing required fields and extra object fields", () => {
     const errors = validateToolArguments(
       {
@@ -234,10 +296,11 @@ describe("P0 tool registry", () => {
   it("describes upsert_report_section as field-block writing without old_string", () => {
     const [tool] = getEnabledTools(["upsert_report_section"]);
 
-    expect(tool.description).toContain("字段块");
-    expect(tool.description).toContain("fieldName");
-    expect(tool.description).toContain("old_string");
-    expect(tool.description).toContain("sectionId");
+    expect(tool.description).toContain("add_card");
+    expect(tool.description).toContain("add_field");
+    expect(tool.description).toContain("replace_field");
+    expect(tool.description).toContain("已存在");
+    expect(tool.description).not.toContain("不隐式" + "创建新卡片或新字段");
   });
 
   it("describes mark_no_update as recording an outcome without writing a report", () => {

@@ -3,11 +3,40 @@ export interface ReportFieldQuery {
   fields: string[];
 }
 
-export interface ReportFieldUpdate {
+export type ReportFieldReplaceUpdate = {
+  operation?: "replace_field";
   cardName: string;
   fieldName: string;
   content: string;
-}
+};
+
+export type ReportFieldAddFieldUpdate = {
+  operation: "add_field";
+  cardName: string;
+  fieldName: string;
+  content: string;
+};
+
+export type ReportFieldAddCardUpdate = {
+  operation: "add_card";
+  cardName: string;
+  content: string;
+};
+
+type ReportFieldUpdateOperation = "replace_field" | "add_field" | "add_card";
+
+export type ReportFieldUpdate<Operation extends ReportFieldUpdateOperation = "replace_field"> = Operation extends "replace_field"
+  ? ReportFieldReplaceUpdate
+  : Operation extends "add_field"
+    ? ReportFieldAddFieldUpdate
+    : ReportFieldAddCardUpdate;
+
+export type ReportFieldWriteUpdate = ReportFieldUpdate<ReportFieldUpdateOperation>;
+
+export type NormalizedReportFieldUpdate =
+  | (Omit<ReportFieldReplaceUpdate, "operation"> & { operation: "replace_field" })
+  | ReportFieldAddFieldUpdate
+  | ReportFieldAddCardUpdate;
 
 export interface ReportFieldReadResult {
   outputFileName: string;
@@ -37,6 +66,44 @@ export type ReportFieldReplaceResult =
   | {
       ok: false;
       code: "CARD_NOT_FOUND" | "FIELD_NOT_FOUND" | "FIELD_AMBIGUOUS" | "INVALID_FIELD_CONTENT";
+      message: string;
+    };
+
+export type ReportFieldWriteOperationResult =
+  | {
+      operation: "add_card";
+      status: "created_report_and_card" | "created_card" | "card_already_exists";
+      cardName: string;
+      existingContent?: string;
+      message?: string;
+    }
+  | {
+      operation: "add_field";
+      status: "created_report_card_and_field" | "created_card_and_field" | "created_field" | "field_already_exists";
+      cardName: string;
+      fieldName: string;
+      existingContent?: string;
+      message?: string;
+    }
+  | {
+      operation: "replace_field";
+      status: "replaced_field";
+      cardName: string;
+      fieldName: string;
+    };
+
+export type ReportFieldWriteResult =
+  | {
+      ok: true;
+      outputFileName: string;
+      changed: boolean;
+      content: string;
+      operations: ReportFieldWriteOperationResult[];
+      message: string;
+    }
+  | {
+      ok: false;
+      code: "CARD_NOT_FOUND" | "FIELD_NOT_FOUND" | "FIELD_AMBIGUOUS" | "INVALID_FIELD_CONTENT" | "INVALID_CARD_CONTENT";
       message: string;
     };
 
@@ -127,7 +194,7 @@ export function readReportFieldBlocks(input: {
 
 export function replaceReportFieldBlocks(input: {
   content: string;
-  updates: readonly ReportFieldUpdate[];
+  updates: readonly ReportFieldReplaceUpdate[];
 }): ReportFieldReplaceResult {
   const cards = parseCards(input.content);
   const lineEnding = detectDominantLineEnding(input.content);
@@ -185,6 +252,286 @@ export function replaceReportFieldBlocks(input: {
     content,
     updated: replacements.map((replacement) => ({ cardName: replacement.cardName, fieldName: replacement.fieldName }))
   };
+}
+
+export function applyReportFieldUpdates(input: {
+  outputFileName: string;
+  content: string;
+  updates: readonly ReportFieldWriteUpdate[];
+}): ReportFieldWriteResult {
+  const updates = input.updates.map(normalizeReportFieldUpdate);
+  const existingTarget = findExistingAddTarget(input.content, updates);
+  if (existingTarget !== undefined) {
+    return {
+      ok: true,
+      outputFileName: input.outputFileName,
+      changed: false,
+      content: input.content,
+      operations: [existingTarget],
+      message: "没有写入文件；请基于返回的既有内容继续修改。"
+    };
+  }
+
+  let content = input.content;
+  const originalContent = input.content;
+  const operations: ReportFieldWriteOperationResult[] = [];
+
+  for (const update of updates) {
+    if (update.operation === "replace_field") {
+      const result = replaceReportFieldBlocks({ content, updates: [update] });
+      if (!result.ok) {
+        return result;
+      }
+      content = result.content;
+      operations.push({
+        operation: "replace_field",
+        status: "replaced_field",
+        cardName: update.cardName,
+        fieldName: update.fieldName
+      });
+      continue;
+    }
+
+    if (update.operation === "add_card") {
+      const result = appendCard(content, input.outputFileName, update);
+      if (!result.ok) {
+        return result;
+      }
+      content = result.content;
+      operations.push({
+        operation: "add_card",
+        status: result.createdReport ? "created_report_and_card" : "created_card",
+        cardName: update.cardName
+      });
+      continue;
+    }
+
+    const result = appendField(content, input.outputFileName, update);
+    if (!result.ok) {
+      return result;
+    }
+    content = result.content;
+    operations.push({
+      operation: "add_field",
+      status: result.createdReport
+        ? "created_report_card_and_field"
+        : result.createdCard
+          ? "created_card_and_field"
+          : "created_field",
+      cardName: update.cardName,
+      fieldName: update.fieldName
+    });
+  }
+
+  const changed = content !== originalContent;
+  return {
+    ok: true,
+    outputFileName: input.outputFileName,
+    changed,
+    content,
+    operations,
+    message: changed ? "报告字段写入完成。" : "没有写入文件。"
+  };
+}
+
+function normalizeReportFieldUpdate(update: ReportFieldWriteUpdate): NormalizedReportFieldUpdate {
+  return { ...update, operation: update.operation ?? "replace_field" } as NormalizedReportFieldUpdate;
+}
+
+function findExistingAddTarget(
+  content: string,
+  updates: readonly NormalizedReportFieldUpdate[]
+): ReportFieldWriteOperationResult | undefined {
+  let virtualContent = content;
+
+  for (const update of updates) {
+    if (update.operation === "add_card") {
+      const cards = parseCards(virtualContent);
+      const card = findSingleCard(cards, update.cardName);
+      if (card !== undefined) {
+        return {
+          operation: "add_card",
+          status: "card_already_exists",
+          cardName: update.cardName,
+          existingContent: virtualContent.slice(card.range.start, card.range.end),
+          message: `卡片已存在：${update.cardName}`
+        };
+      }
+      const cardBlock = normalizeAddCardBlock(update, detectDominantLineEnding(virtualContent));
+      if (cardBlock !== undefined) {
+        virtualContent = appendVirtualBlock(virtualContent, cardBlock);
+      }
+      continue;
+    }
+
+    if (update.operation === "add_field") {
+      const cards = parseCards(virtualContent);
+      const card = findSingleCard(cards, update.cardName);
+      if (card !== undefined) {
+        const fields = parseFieldsInCard(virtualContent, card).filter(
+          (field) => normalizeName(field.name) === normalizeName(update.fieldName)
+        );
+        if (fields.length > 0) {
+          return {
+            operation: "add_field",
+            status: "field_already_exists",
+            cardName: update.cardName,
+            fieldName: update.fieldName,
+            existingContent: virtualContent.slice(fields[0].range.start, fields[0].range.end),
+            message: `字段块已存在：${update.cardName}/${update.fieldName}`
+          };
+        }
+      }
+      const fieldBlock = normalizeAddFieldBlock(update, detectDominantLineEnding(virtualContent));
+      if (fieldBlock !== undefined) {
+        virtualContent = appendVirtualField(virtualContent, update.cardName, fieldBlock);
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function appendVirtualBlock(content: string, block: string): string {
+  if (content.trim().length === 0) {
+    return block;
+  }
+
+  const lineEnding = detectDominantLineEnding(content);
+  return `${trimEndLineEndings(content)}${lineEnding}${lineEnding}${block}`;
+}
+
+function appendVirtualField(content: string, cardName: string, fieldBlock: string): string {
+  const lineEnding = detectDominantLineEnding(content);
+  if (content.trim().length === 0) {
+    return `### ${cardName}${lineEnding}${lineEnding}${fieldBlock}`;
+  }
+
+  const card = findSingleCard(parseCards(content), cardName);
+  if (card === undefined) {
+    return `${trimEndLineEndings(content)}${lineEnding}${lineEnding}### ${cardName}${lineEnding}${lineEnding}${fieldBlock}`;
+  }
+
+  return `${trimEndLineEndings(content.slice(0, card.bodyRange.end))}${lineEnding}${fieldBlock}${content.slice(
+    card.bodyRange.end
+  )}`;
+}
+
+function appendCard(
+  content: string,
+  outputFileName: string,
+  update: ReportFieldAddCardUpdate
+):
+  | { ok: true; content: string; createdReport: boolean }
+  | { ok: false; code: "INVALID_CARD_CONTENT"; message: string } {
+  const lineEnding = detectDominantLineEnding(content);
+  const cardBlock = normalizeAddCardBlock(update, lineEnding);
+  if (cardBlock === undefined) {
+    return {
+      ok: false,
+      code: "INVALID_CARD_CONTENT",
+      message: `INVALID_CARD_CONTENT: content 的卡片标题必须是 ### ${update.cardName}。`
+    };
+  }
+
+  if (content.trim().length === 0) {
+    return {
+      ok: true,
+      content: `# ${reportTitleFromFileName(outputFileName)}${lineEnding}${lineEnding}${cardBlock}`,
+      createdReport: true
+    };
+  }
+
+  return { ok: true, content: `${trimEndLineEndings(content)}${lineEnding}${lineEnding}${cardBlock}`, createdReport: false };
+}
+
+function appendField(
+  content: string,
+  outputFileName: string,
+  update: ReportFieldAddFieldUpdate
+):
+  | { ok: true; content: string; createdReport: boolean; createdCard: boolean }
+  | { ok: false; code: "INVALID_FIELD_CONTENT"; message: string } {
+  const parsedField = parseFieldLine(update.content.split(/\r\n|\r|\n/u)[0] ?? "");
+  if (parsedField === undefined || normalizeName(parsedField.name) !== normalizeName(update.fieldName)) {
+    return {
+      ok: false,
+      code: "INVALID_FIELD_CONTENT",
+      message: `INVALID_FIELD_CONTENT: content 必须以 - ${update.fieldName}： 开头。`
+    };
+  }
+
+  const lineEnding = detectDominantLineEnding(content);
+  const fieldBlock = normalizeReplacementBlock(update.content, lineEnding);
+  if (content.trim().length === 0) {
+    return {
+      ok: true,
+      content: `# ${reportTitleFromFileName(outputFileName)}${lineEnding}${lineEnding}### ${update.cardName}${lineEnding}${lineEnding}${fieldBlock}`,
+      createdReport: true,
+      createdCard: true
+    };
+  }
+
+  const card = findSingleCard(parseCards(content), update.cardName);
+  if (card === undefined) {
+    return {
+      ok: true,
+      content: `${trimEndLineEndings(content)}${lineEnding}${lineEnding}### ${update.cardName}${lineEnding}${lineEnding}${fieldBlock}`,
+      createdReport: false,
+      createdCard: true
+    };
+  }
+
+  return {
+    ok: true,
+    content: `${trimEndLineEndings(content.slice(0, card.bodyRange.end))}${lineEnding}${fieldBlock}${content.slice(
+      card.bodyRange.end
+    )}`,
+    createdReport: false,
+    createdCard: false
+  };
+}
+
+function normalizeAddCardBlock(update: ReportFieldAddCardUpdate, lineEnding: string): string | undefined {
+  if (update.content.trim().length === 0) {
+    return undefined;
+  }
+
+  const normalizedContent = update.content.trimEnd().replace(/\r\n|\r|\n/gu, lineEnding);
+  const lines = normalizedContent.split(lineEnding);
+  const firstLine = lines[0] ?? "";
+  const headingPattern = /^###\s+(.+?)\s*#*\s*$/u;
+  const heading = headingPattern.exec(firstLine);
+  if (heading !== null) {
+    if (normalizeName(heading[1]) !== normalizeName(update.cardName)) {
+      return undefined;
+    }
+    if (lines.slice(1).some((line) => headingPattern.test(line))) {
+      return undefined;
+    }
+    return `${normalizedContent}${lineEnding}`;
+  }
+
+  if (lines.some((line) => /^###\s+/u.test(line))) {
+    return undefined;
+  }
+
+  return `### ${update.cardName}${lineEnding}${lineEnding}${normalizedContent}${lineEnding}`;
+}
+
+function normalizeAddFieldBlock(update: ReportFieldAddFieldUpdate, lineEnding: string): string | undefined {
+  const parsedField = parseFieldLine(update.content.split(/\r\n|\r|\n/u)[0] ?? "");
+  if (parsedField === undefined || normalizeName(parsedField.name) !== normalizeName(update.fieldName)) {
+    return undefined;
+  }
+
+  return normalizeReplacementBlock(update.content, lineEnding);
+}
+
+function reportTitleFromFileName(outputFileName: string): string {
+  const leafName = outputFileName.split(/[\\/]/u).pop() ?? outputFileName;
+  const extensionStart = leafName.lastIndexOf(".");
+  return extensionStart > 0 ? leafName.slice(0, extensionStart) : leafName;
 }
 
 function parseCards(content: string): ParsedCard[] {
@@ -307,4 +654,8 @@ function splitLinesWithEndings(content: string): string[] {
 
 function stripLineEnding(value: string): string {
   return value.replace(/\r?\n$/u, "");
+}
+
+function trimEndLineEndings(value: string): string {
+  return value.replace(/(?:\r\n|\r|\n)+$/u, "");
 }
