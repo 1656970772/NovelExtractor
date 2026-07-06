@@ -11,7 +11,8 @@
     "./openAiCompatibleClient": "./src/openAiCompatibleClient.ts",
     "./deepseekAdapter": "./src/deepseekAdapter.ts",
     "./toolDefinition": "./src/toolDefinition.ts",
-    "./redaction": "./src/redaction.ts"
+    "./redaction": "./src/redaction.ts",
+    "./protocols/toolSchemaProjection": "./src/protocols/toolSchemaProjection.ts"
   },
   "scripts": {
     "test": "vitest run",

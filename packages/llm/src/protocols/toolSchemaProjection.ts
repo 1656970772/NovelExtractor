@@ -3,6 +3,34 @@ import { isJsonObject, stableJsonValue } from "../toolDefinition";
 
 export type ToolSchemaProjectionTarget = "openai" | "anthropic" | "gemini" | "bedrock";
 
+const GEMINI_SCHEMA_INTENT_KEYS = [
+  "type",
+  "properties",
+  "items",
+  "prefixItems",
+  "enum",
+  "const",
+  "$ref",
+  "additionalProperties",
+  "patternProperties",
+  "required",
+  "not",
+  "if",
+  "then",
+  "else",
+];
+
+function hasCombiner(schema: unknown): boolean {
+  return (
+    isJsonObject(schema) &&
+    (Array.isArray(schema.anyOf) || Array.isArray(schema.oneOf) || Array.isArray(schema.allOf))
+  );
+}
+
+function hasSchemaIntent(schema: unknown): boolean {
+  return isJsonObject(schema) && (hasCombiner(schema) || GEMINI_SCHEMA_INTENT_KEYS.some((key) => key in schema));
+}
+
 function removeNullSchemas(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(removeNullSchemas);
@@ -33,29 +61,112 @@ function removeNullSchemas(value: unknown): unknown {
   return { ...fields, anyOf: variants };
 }
 
-function stripKeys(value: unknown, blockedKeys: ReadonlySet<string>): unknown {
+function sanitizeGeminiNode(value: unknown): unknown {
   if (Array.isArray(value)) {
-    return value.map((item) => stripKeys(item, blockedKeys));
+    return value.map(sanitizeGeminiNode);
   }
 
   if (!isJsonObject(value)) {
     return value;
   }
 
+  const result: Record<string, unknown> = Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [
+      key,
+      key === "enum" && Array.isArray(item) ? item.map(String) : sanitizeGeminiNode(item),
+    ]),
+  );
+
+  if (Array.isArray(result.enum) && (result.type === "integer" || result.type === "number")) {
+    result.type = "string";
+  }
+
+  const properties = result.properties;
+  if (result.type === "object" && isJsonObject(properties) && Array.isArray(result.required)) {
+    result.required = result.required.filter((field) => typeof field === "string" && field in properties);
+  }
+
+  if (result.type === "array" && !hasCombiner(result)) {
+    result.items = result.items ?? {};
+    if (isJsonObject(result.items) && !hasSchemaIntent(result.items)) {
+      result.items = { ...result.items, type: "string" };
+    }
+  }
+
+  if (typeof result.type === "string" && result.type !== "object" && !hasCombiner(result)) {
+    delete result.properties;
+    delete result.required;
+  }
+
+  return result;
+}
+
+function isEmptyObjectSchema(schema: JsonObject): boolean {
+  return (
+    schema.type === "object" &&
+    (!isJsonObject(schema.properties) || Object.keys(schema.properties).length === 0) &&
+    !schema.additionalProperties
+  );
+}
+
+function projectGeminiNode(value: unknown): Record<string, unknown> | undefined {
+  if (!isJsonObject(value) || isEmptyObjectSchema(value)) {
+    return undefined;
+  }
+
   return Object.fromEntries(
-    Object.entries(value)
-      .filter(([key]) => !blockedKeys.has(key))
-      .map(([key, item]) => [key, stripKeys(item, blockedKeys)]),
+    [
+      ["description", value.description],
+      ["required", value.required],
+      ["format", value.format],
+      ["type", Array.isArray(value.type) ? value.type.filter((type) => type !== "null")[0] : value.type],
+      ["nullable", Array.isArray(value.type) && value.type.includes("null") ? true : undefined],
+      ["enum", value.const !== undefined ? [value.const] : value.enum],
+      [
+        "properties",
+        isJsonObject(value.properties)
+          ? Object.fromEntries(Object.entries(value.properties).map(([key, item]) => [key, projectGeminiNode(item)]))
+          : undefined,
+      ],
+      [
+        "items",
+        Array.isArray(value.items)
+          ? value.items.map(projectGeminiNode)
+          : value.items === undefined
+            ? undefined
+            : projectGeminiNode(value.items),
+      ],
+      ["allOf", Array.isArray(value.allOf) ? value.allOf.map(projectGeminiNode) : undefined],
+      ["anyOf", Array.isArray(value.anyOf) ? value.anyOf.map(projectGeminiNode) : undefined],
+      ["oneOf", Array.isArray(value.oneOf) ? value.oneOf.map(projectGeminiNode) : undefined],
+      ["minLength", value.minLength],
+    ].filter((entry) => entry[1] !== undefined),
   );
 }
 
 function openAiProjection(schema: JsonObject): JsonObject {
-  const normalized = removeNullSchemas({ ...schema, type: "object" });
+  const variants = Array.isArray(schema.anyOf) ? schema.anyOf.filter(isJsonObject) : [];
+  const flattened =
+    variants.length === 0
+      ? { ...schema, type: "object" }
+      : {
+          ...Object.fromEntries(Object.entries(schema).filter(([key]) => key !== "anyOf")),
+          type: "object",
+          properties: variants.reduce<Record<string, unknown>>(
+            (properties, variant) => ({
+              ...(isJsonObject(variant.properties) ? variant.properties : {}),
+              ...properties,
+            }),
+            {},
+          ),
+          additionalProperties: false,
+        };
+  const normalized = removeNullSchemas(flattened);
   return (isJsonObject(normalized) ? stableJsonValue(normalized) : { type: "object" }) as JsonObject;
 }
 
 function geminiProjection(schema: JsonObject): JsonObject {
-  const projected = stripKeys(schema, new Set(["additionalProperties", "$schema", "$defs", "definitions"]));
+  const projected = projectGeminiNode(sanitizeGeminiNode(schema));
   return (isJsonObject(projected) ? stableJsonValue(projected) : { type: "object" }) as JsonObject;
 }
 

@@ -46,6 +46,25 @@ describe("projectToolSchema", () => {
     });
   });
 
+  it("flattens top-level anyOf object variants for OpenAI-compatible tool parameters", () => {
+    const projected = projectToolSchema("openai", {
+      anyOf: [
+        { type: "object", properties: { path: { type: "string" } } },
+        { type: "object", properties: { content: { type: "string" } } },
+      ],
+    });
+
+    expect(projected).toEqual({
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        content: { type: "string" },
+      },
+      additionalProperties: false,
+    });
+    expect(projected).not.toHaveProperty("anyOf");
+  });
+
   it("removes Gemini-incompatible additionalProperties while keeping array items", () => {
     const projected = projectToolSchema("gemini", schema);
 
@@ -64,5 +83,39 @@ describe("projectToolSchema", () => {
         },
       },
     });
+  });
+
+  it("cleans Gemini-incompatible schema shapes while preserving compatible intent", () => {
+    const projected = projectToolSchema("gemini", {
+      type: "object",
+      properties: {
+        numericChoice: { type: "number", enum: [1, 2] },
+        integerChoice: { type: "integer", enum: [3, 4] },
+        listWithoutItems: { type: "array" },
+        scalarWithObjectFields: {
+          type: "string",
+          properties: { ignored: { type: "string" } },
+          required: ["ignored"],
+        },
+        nullableName: { type: ["string", "null"] },
+      },
+      required: ["numericChoice", "missing"],
+      additionalProperties: false,
+    });
+
+    expect(projected).toMatchObject({
+      type: "object",
+      required: ["numericChoice"],
+      properties: {
+        numericChoice: { type: "string", enum: ["1", "2"] },
+        integerChoice: { type: "string", enum: ["3", "4"] },
+        listWithoutItems: { type: "array", items: { type: "string" } },
+        scalarWithObjectFields: { type: "string" },
+        nullableName: { type: "string", nullable: true },
+      },
+    });
+    const properties = projected.properties as Record<string, unknown>;
+    expect(properties.scalarWithObjectFields).not.toHaveProperty("properties");
+    expect(properties.scalarWithObjectFields).not.toHaveProperty("required");
   });
 });
