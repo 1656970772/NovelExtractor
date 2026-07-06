@@ -47,6 +47,34 @@ function createResponsesProvider(): OpenAiCompatibleProviderDefinition {
   };
 }
 
+function createAnthropicProvider(): OpenAiCompatibleProviderDefinition {
+  return {
+    ...createProvider(),
+    id: "anthropic-native",
+    presetId: "anthropic",
+    displayName: "Anthropic Native",
+    baseUrl: "https://api.anthropic.com/v1",
+    authScheme: "anthropic-api-key",
+    apiFormat: "anthropic_messages",
+    apiKeyRef: { id: "key-1", providerConfigId: "anthropic-native" },
+    models: []
+  };
+}
+
+function createBedrockProvider(): OpenAiCompatibleProviderDefinition {
+  return {
+    ...createProvider(),
+    id: "bedrock-native",
+    presetId: "bedrock",
+    displayName: "Bedrock Converse",
+    baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+    authScheme: "aws-sigv4",
+    apiFormat: "bedrock_converse",
+    apiKeyRef: { id: "key-1", providerConfigId: "bedrock-native" },
+    models: []
+  };
+}
+
 describe("OpenAiCompatibleClient", () => {
   it("resolves API keys through ApiKeyRef and sends an OpenAI-compatible chat request", async () => {
     const apiKey = "sk-" + "request-secret";
@@ -70,6 +98,7 @@ describe("OpenAiCompatibleClient", () => {
             type: "function",
             function: {
               name: "record_pill",
+              description: "记录丹药信息。",
               parameters: { type: "object" }
             }
           }
@@ -92,11 +121,9 @@ describe("OpenAiCompatibleClient", () => {
       messages: [{ role: "user", content: "提取丹药信息" }],
       tools: [
         {
-          type: "function",
-          function: {
-            name: "record_pill",
-            parameters: { type: "object" }
-          }
+          name: "record_pill",
+          description: "记录丹药信息。",
+          inputSchema: { type: "object" }
         }
       ]
     });
@@ -603,11 +630,9 @@ describe("OpenAiCompatibleClient", () => {
       messages: [{ role: "user", content: "提取窗口 1" }],
       tools: [
         {
-          type: "function",
-          function: {
-            name: "write_file",
-            parameters: { type: "object" }
-          }
+          name: "write_file",
+          description: "写入报告文件。",
+          inputSchema: { type: "object" }
         }
       ]
     });
@@ -620,7 +645,9 @@ describe("OpenAiCompatibleClient", () => {
         {
           type: "function",
           name: "write_file",
-          parameters: { type: "object" }
+          description: "写入报告文件。",
+          parameters: { type: "object" },
+          strict: false
         }
       ]
     });
@@ -691,6 +718,89 @@ describe("OpenAiCompatibleClient", () => {
         }
       ]
     });
+  });
+
+  it("sends Anthropic native tools through the protocol adapter", async () => {
+    const calls: Array<{ url: string; headers: Record<string, string>; body: unknown }> = [];
+    const client = new OpenAiCompatibleClient(
+      createAnthropicProvider(),
+      { resolveApiKey: async () => "sk-ant-test" },
+      {
+        fetch: vi.fn(async (url, init) => {
+          calls.push({
+            url: String(url),
+            headers: Object.fromEntries(new Headers(init?.headers).entries()),
+            body: JSON.parse(String(init?.body)),
+          });
+
+          return new Response(JSON.stringify({ content: [{ type: "text", text: "完成" }] }), { status: 200 });
+        }),
+      },
+    );
+
+    const result = await client.chatCompletion({
+      providerId: "anthropic-native",
+      modelId: "claude-test",
+      messages: [
+        { role: "system", content: "你是小说资料抽取助手" },
+        { role: "user", content: "处理窗口" },
+      ],
+      tools: [
+        {
+          name: "read_report_excerpt",
+          description: "读取本批允许报告中的卡片字段块。",
+          inputSchema: {
+            type: "object",
+            properties: { queries: { type: "array", items: { type: "object" } } },
+            required: ["queries"],
+          },
+        },
+      ],
+    });
+
+    expect(calls[0].url).toBe("https://api.anthropic.com/v1/messages");
+    expect(calls[0].headers["x-api-key"]).toBe("sk-ant-test");
+    expect(calls[0].headers.authorization).toBeUndefined();
+    expect(calls[0].body).toMatchObject({
+      model: "claude-test",
+      system: "你是小说资料抽取助手",
+      messages: [{ role: "user", content: [{ type: "text", text: "处理窗口" }] }],
+      tools: [
+        {
+          name: "read_report_excerpt",
+          description: "读取本批允许报告中的卡片字段块。",
+          input_schema: {
+            properties: {
+              queries: { type: "array", items: { type: "object" } },
+            },
+          },
+        },
+      ],
+    });
+    expect(result.content).toBe("完成");
+  });
+
+  it("blocks Bedrock Converse until SigV4 signing is implemented", async () => {
+    const credentials: CredentialStore = { resolveApiKey: vi.fn(async () => "aws-secret") };
+    const fetchMock = vi.fn();
+    const client = new OpenAiCompatibleClient(createBedrockProvider(), credentials, {
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+    const request = {
+      providerId: "bedrock-native",
+      modelId: "anthropic.claude-test",
+      messages: [{ role: "user" as const, content: "hello" }],
+    };
+
+    await expect(client.chatCompletion(request)).rejects.toThrow(/SigV4 signing/);
+    const connection = await client.testConnection(request);
+
+    expect(connection).toEqual({
+      ok: false,
+      error: "Bedrock Converse requires AWS SigV4 signing before native Bedrock requests can be sent.",
+    });
+    expect(credentials.resolveApiKey).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("does not call fetch when the API key reference is missing", async () => {

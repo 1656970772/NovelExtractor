@@ -1,21 +1,16 @@
 import type { CredentialStore as DomainCredentialStore } from "@novel-extractor/domain";
 import type { OpenAiCompatibleProviderDefinition } from "./providerRegistry";
+import { getProtocolAdapter } from "./protocols";
 import { redactSecrets, type RedactSecretsOptions } from "./redaction";
+import type { ToolDefinition } from "./toolDefinition";
 
-export interface ToolSchema {
-  type: "function";
-  function: {
-    name: string;
-    description?: string;
-    parameters?: Record<string, unknown>;
-  };
-}
+export type ToolSchema = ToolDefinition;
 
 export interface ChatCompletionRequest {
   providerId: string;
   modelId: string;
   messages: ChatCompletionMessage[];
-  tools?: ToolSchema[];
+  tools?: ToolDefinition[];
 }
 
 export type ToolCallArguments =
@@ -101,74 +96,6 @@ export interface OpenAiCompatibleClientOptions {
   retry?: Partial<OpenAiCompatibleRetryOptions>;
 }
 
-interface OpenAiCompatibleResponseBody {
-  choices?: Array<{
-    message?: {
-      content?: unknown;
-      tool_calls?: unknown;
-    };
-  }>;
-  usage?: unknown;
-}
-
-interface OpenAiResponsesResponseBody {
-  output_text?: unknown;
-  output?: unknown;
-  usage?: unknown;
-}
-
-interface OpenAiCompatibleRequestToolCall {
-  id: string;
-  type: "function";
-  function: {
-    name: string;
-    arguments: string;
-  };
-}
-
-type OpenAiCompatibleRequestMessage =
-  | ChatCompletionContentMessage
-  | {
-      role: "assistant";
-      content: string;
-      tool_calls?: OpenAiCompatibleRequestToolCall[];
-    }
-  | {
-      role: "tool";
-      tool_call_id: string;
-      name?: string;
-      content: string;
-    };
-
-interface OpenAiResponsesRequestTool {
-  type: "function";
-  name: string;
-  description?: string;
-  parameters?: Record<string, unknown>;
-}
-
-interface OpenAiResponsesRequestFunctionCall {
-  type: "function_call";
-  call_id: string;
-  name: string;
-  arguments: string;
-}
-
-interface OpenAiResponsesRequestFunctionCallOutput {
-  type: "function_call_output";
-  call_id: string;
-  output: string;
-}
-
-type OpenAiResponsesInputItem =
-  | ChatCompletionContentMessage
-  | {
-      role: "assistant";
-      content: string;
-    }
-  | OpenAiResponsesRequestFunctionCall
-  | OpenAiResponsesRequestFunctionCallOutput;
-
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   if (value !== null && typeof value === "object" && !Array.isArray(value)) {
     return value as Record<string, unknown>;
@@ -215,250 +142,6 @@ function normalizeUsage(usage: unknown): NormalizedUsage {
   };
 }
 
-function parseToolCallArguments(value: unknown): unknown {
-  if (typeof value !== "string") {
-    return value;
-  }
-
-  try {
-    return JSON.parse(value);
-  } catch {
-    return parseEmptyObjectPrefixedJsonObject(value) ?? value;
-  }
-}
-
-function parseEmptyObjectPrefixedJsonObject(value: string): unknown {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("{}")) {
-    return undefined;
-  }
-
-  const suffix = trimmed.slice(2).trimStart();
-  if (!suffix.startsWith("{")) {
-    return undefined;
-  }
-
-  try {
-    return JSON.parse(suffix);
-  } catch {
-    return undefined;
-  }
-}
-
-function parseToolCalls(toolCalls: unknown): ToolCall[] {
-  if (!Array.isArray(toolCalls)) {
-    return [];
-  }
-
-  return toolCalls.flatMap((toolCall) => {
-    const toolCallRecord = asRecord(toolCall);
-    if (toolCallRecord?.type !== "function") {
-      return [];
-    }
-
-    const functionRecord = asRecord(toolCallRecord?.function);
-    const name = functionRecord?.name;
-    if (typeof name !== "string" || name.trim() === "") {
-      return [];
-    }
-
-    return [{
-      id: typeof toolCallRecord?.id === "string" ? toolCallRecord.id : "",
-      name,
-      arguments: parseToolCallArguments(functionRecord?.arguments)
-    }];
-  });
-}
-
-function stableJsonValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(stableJsonValue);
-  }
-
-  const record = asRecord(value);
-  if (!record) {
-    return value;
-  }
-
-  return Object.keys(record)
-    .sort()
-    .reduce<Record<string, unknown>>((result, key) => {
-      result[key] = stableJsonValue(record[key]);
-      return result;
-    }, {});
-}
-
-function serializeToolCallArguments(value: ToolCallArguments): string {
-  if (typeof value === "string") {
-    return value;
-  }
-
-  return JSON.stringify(stableJsonValue(value)) ?? "";
-}
-
-function serializeToolCall(toolCall: ChatCompletionRequestToolCall): OpenAiCompatibleRequestToolCall {
-  return {
-    id: toolCall.id,
-    type: "function",
-    function: {
-      name: toolCall.name,
-      arguments: serializeToolCallArguments(toolCall.arguments)
-    }
-  };
-}
-
-function serializeMessage(message: ChatCompletionMessage): OpenAiCompatibleRequestMessage {
-  if (message.role === "assistant") {
-    const serialized: OpenAiCompatibleRequestMessage = {
-      role: "assistant",
-      content: message.content
-    };
-
-    if (message.toolCalls?.length) {
-      serialized.tool_calls = message.toolCalls.map(serializeToolCall);
-    }
-
-    return serialized;
-  }
-
-  if (message.role === "tool") {
-    return {
-      role: "tool",
-      tool_call_id: message.toolCallId,
-      ...(message.name ? { name: message.name } : {}),
-      content: message.content
-    };
-  }
-
-  return message;
-}
-
-function serializeResponsesTool(tool: ToolSchema): OpenAiResponsesRequestTool {
-  return {
-    type: "function",
-    name: tool.function.name,
-    ...(tool.function.description !== undefined ? { description: tool.function.description } : {}),
-    ...(tool.function.parameters !== undefined ? { parameters: tool.function.parameters } : {})
-  };
-}
-
-function serializeResponsesToolCall(
-  toolCall: ChatCompletionRequestToolCall
-): OpenAiResponsesRequestFunctionCall {
-  return {
-    type: "function_call",
-    call_id: toolCall.id,
-    name: toolCall.name,
-    arguments: serializeToolCallArguments(toolCall.arguments)
-  };
-}
-
-function serializeResponsesMessage(message: ChatCompletionMessage): OpenAiResponsesInputItem[] {
-  if (message.role === "assistant") {
-    return [
-      ...(message.content
-        ? [
-            {
-              role: "assistant" as const,
-              content: message.content
-            }
-          ]
-        : []),
-      ...(message.toolCalls?.map(serializeResponsesToolCall) ?? [])
-    ];
-  }
-
-  if (message.role === "tool") {
-    return [
-      {
-        type: "function_call_output",
-        call_id: message.toolCallId,
-        output: message.content
-      }
-    ];
-  }
-
-  return [message];
-}
-
-function createChatCompletionsBody(request: ChatCompletionRequest): Record<string, unknown> {
-  const body: Record<string, unknown> = {
-    model: request.modelId,
-    messages: request.messages.map(serializeMessage)
-  };
-
-  if (request.tools) {
-    body.tools = request.tools;
-  }
-
-  return body;
-}
-
-function createResponsesBody(request: ChatCompletionRequest): Record<string, unknown> {
-  const body: Record<string, unknown> = {
-    model: request.modelId,
-    input: request.messages.flatMap(serializeResponsesMessage)
-  };
-
-  if (request.tools) {
-    body.tools = request.tools.map(serializeResponsesTool);
-  }
-
-  return body;
-}
-
-function parseResponsesContent(responseBody: OpenAiResponsesResponseBody): string {
-  if (typeof responseBody.output_text === "string") {
-    return responseBody.output_text;
-  }
-
-  if (!Array.isArray(responseBody.output)) {
-    return "";
-  }
-
-  return responseBody.output
-    .flatMap((outputItem) => {
-      const outputRecord = asRecord(outputItem);
-      const content = outputRecord?.content;
-      if (!Array.isArray(content)) {
-        return [];
-      }
-
-      return content.flatMap((contentItem) => {
-        const contentRecord = asRecord(contentItem);
-        const text = contentRecord?.text;
-        return typeof text === "string" ? [text] : [];
-      });
-    })
-    .join("");
-}
-
-function parseResponsesToolCalls(output: unknown): ToolCall[] {
-  if (!Array.isArray(output)) {
-    return [];
-  }
-
-  return output.flatMap((outputItem) => {
-    const outputRecord = asRecord(outputItem);
-    if (outputRecord?.type !== "function_call") {
-      return [];
-    }
-
-    const name = outputRecord.name;
-    if (typeof name !== "string" || name.trim() === "") {
-      return [];
-    }
-
-    return [
-      {
-        id: typeof outputRecord.call_id === "string" ? outputRecord.call_id : "",
-        name,
-        arguments: parseToolCallArguments(outputRecord.arguments)
-      }
-    ];
-  });
-}
-
 function getFetch(options: OpenAiCompatibleClientOptions): FetchLike {
   const fetcher = options.fetch ?? globalThis.fetch;
 
@@ -469,16 +152,33 @@ function getFetch(options: OpenAiCompatibleClientOptions): FetchLike {
   return fetcher;
 }
 
-function completionUrl(baseUrl: string): string {
-  return `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
-}
-
-function responsesUrl(baseUrl: string): string {
-  return `${baseUrl.replace(/\/+$/, "")}/responses`;
-}
-
 function redactionOptionsFor(apiKey: string): RedactSecretsOptions {
   return { knownSecrets: [apiKey] };
+}
+
+function assertSendableAuthScheme(provider: OpenAiCompatibleProviderDefinition): void {
+  if (provider.authScheme === "aws-sigv4") {
+    throw new Error("Bedrock Converse requires AWS SigV4 signing before native Bedrock requests can be sent.");
+  }
+}
+
+function createAuthHeaders(
+  authScheme: OpenAiCompatibleProviderDefinition["authScheme"],
+  apiKey: string
+): Record<string, string> {
+  switch (authScheme) {
+    case "bearer":
+      return { Authorization: `Bearer ${apiKey}` };
+    case "anthropic-api-key":
+      return {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01"
+      };
+    case "google-api-key":
+      return { "x-goog-api-key": apiKey };
+    case "aws-sigv4":
+      throw new Error("Bedrock Converse requires AWS SigV4 signing before native Bedrock requests can be sent.");
+  }
 }
 
 function formatSafeError(error: unknown, options?: RedactSecretsOptions): string {
@@ -595,6 +295,7 @@ export class OpenAiCompatibleClient {
 
   async chatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResult> {
     this.assertProviderMatches(request);
+    assertSendableAuthScheme(this.provider);
     const apiKey = await this.resolveApiKey();
 
     return this.sendChatCompletion(request, apiKey);
@@ -605,6 +306,7 @@ export class OpenAiCompatibleClient {
 
     try {
       this.assertProviderMatches(request);
+      assertSendableAuthScheme(this.provider);
       apiKey = await this.resolveApiKey();
       const result = await this.sendChatCompletion(request, apiKey);
       return { ok: true, raw: redactSecrets(result.raw, redactionOptionsFor(apiKey)) };
@@ -627,21 +329,23 @@ export class OpenAiCompatibleClient {
     apiKey: string
   ): Promise<ChatCompletionResult> {
     const redactionOptions = redactionOptionsFor(apiKey);
-    const apiFormat = this.provider.apiFormat;
-    const body =
-      apiFormat === "openai_responses"
-        ? createResponsesBody(request)
-        : createChatCompletionsBody(request);
-    const url =
-      apiFormat === "openai_responses"
-        ? responsesUrl(this.provider.baseUrl)
-        : completionUrl(this.provider.baseUrl);
+    const adapter = getProtocolAdapter(this.provider.apiFormat);
+    const body = adapter.buildBody({
+      modelId: request.modelId,
+      messages: request.messages,
+      tools: request.tools ?? [],
+      providerOptions: {}
+    });
+    const url = `${this.provider.baseUrl.replace(/\/+$/, "")}${adapter.path({
+      baseUrl: this.provider.baseUrl,
+      modelId: request.modelId
+    })}`;
 
     const retryOptions = normalizeRetryOptions(this.options.retry);
 
     for (let attempt = 1; attempt <= retryOptions.maxAttempts; attempt += 1) {
       try {
-        return await this.sendChatCompletionOnce(body, apiKey, redactionOptions, apiFormat, url);
+        return await this.sendChatCompletionOnce(body, apiKey, redactionOptions, url);
       } catch (error) {
         const hasMoreAttempts = attempt < retryOptions.maxAttempts;
         if (!hasMoreAttempts || !isRetryableRequestError(error, retryOptions)) {
@@ -659,7 +363,6 @@ export class OpenAiCompatibleClient {
     body: Record<string, unknown>,
     apiKey: string,
     redactionOptions: RedactSecretsOptions,
-    apiFormat: OpenAiCompatibleProviderDefinition["apiFormat"],
     url: string
   ): Promise<ChatCompletionResult> {
     let response: Response;
@@ -667,7 +370,7 @@ export class OpenAiCompatibleClient {
       response = await getFetch(this.options)(url, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${apiKey}`,
+          ...createAuthHeaders(this.provider.authScheme, apiKey),
           "Content-Type": "application/json"
         },
         body: JSON.stringify(body)
@@ -687,26 +390,14 @@ export class OpenAiCompatibleClient {
       throw new Error(formatHttpError(response, responseBody, redactionOptions));
     }
 
-    if (apiFormat === "openai_responses") {
-      const completion = responseBody as OpenAiResponsesResponseBody;
-      return {
-        content: parseResponsesContent(completion),
-        usage: completion.usage,
-        normalizedUsage: normalizeUsage(completion.usage),
-        toolCalls: parseResponsesToolCalls(completion.output),
-        raw: responseBody
-      };
-    }
-
-    const completion = responseBody as OpenAiCompatibleResponseBody;
-    const message = completion.choices?.[0]?.message;
-    const content = message?.content;
+    const adapter = getProtocolAdapter(this.provider.apiFormat);
+    const parsed = adapter.parseResponse(responseBody);
 
     return {
-      content: typeof content === "string" ? content : "",
-      usage: completion.usage,
-      normalizedUsage: normalizeUsage(completion.usage),
-      toolCalls: parseToolCalls(message?.tool_calls),
+      content: parsed.content,
+      usage: parsed.usage,
+      normalizedUsage: parsed.normalizedUsage ?? normalizeUsage(parsed.usage),
+      toolCalls: parsed.toolCalls,
       raw: responseBody
     };
   }
