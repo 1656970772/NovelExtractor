@@ -108,6 +108,127 @@ tools:
     expect(metrics.expandedToolSchemaCount).toBe(1);
   });
 
+  it("counts provider-native tool descriptions without counting nested schema descriptions", () => {
+    const metrics = parseRunLogMetrics(`[2026-07-03 10:00:00][大模型请求][ProviderBody]
+providerBody:
+  tools:
+    -
+      type: function
+      function:
+        name: read_report_excerpt
+        description: 读取本批允许报告中的卡片字段块。
+        parameters:
+          type: object
+          properties:
+            queries:
+              type: array
+              description: schema 字段描述不应计数
+              items:
+                type: object
+                properties:
+                  fields:
+                    type: array
+                    description: nested schema 字段描述不应计数
+                    items:
+                      type: string`);
+
+    expect(metrics.expandedToolSchemaCount).toBe(1);
+  });
+
+  it("counts Anthropic provider-native input_schema tool descriptions", () => {
+    const metrics = parseRunLogMetrics(`[2026-07-03 10:00:00][大模型请求][ProviderBody]
+providerBody:
+  tools:
+    -
+      name: read_report_excerpt
+      description: 读取本批允许报告中的卡片字段块。
+      input_schema:
+        type: object
+        properties:
+          queries:
+            type: array
+            description: schema 字段描述不应计数`);
+
+    expect(metrics.expandedToolSchemaCount).toBe(1);
+  });
+
+  it("counts OpenAI Responses provider-native tool descriptions", () => {
+    const metrics = parseRunLogMetrics(`[2026-07-03 10:00:00][大模型请求][ProviderBody]
+providerBody:
+  tools:
+    -
+      type: function
+      name: upsert_report_section
+      description: 更新报告字段块。
+      parameters:
+        type: object
+        properties:
+          updates:
+            type: array
+            description: schema 字段描述不应计数`);
+
+    expect(metrics.expandedToolSchemaCount).toBe(1);
+  });
+
+  it("counts Gemini provider-native function declaration descriptions", () => {
+    const metrics = parseRunLogMetrics(`[2026-07-03 10:00:00][大模型请求][ProviderBody]
+providerBody:
+  tools:
+    -
+      functionDeclarations:
+        -
+          name: wait
+          description: 等待后台任务完成。
+          parameters:
+            type: object
+            properties:
+              job_ids:
+                type: array
+                description: schema 字段描述不应计数`);
+
+    expect(metrics.expandedToolSchemaCount).toBe(1);
+  });
+
+  it("counts Bedrock provider-native toolSpec descriptions", () => {
+    const metrics = parseRunLogMetrics(`[2026-07-03 10:00:00][大模型请求][ProviderBody]
+providerBody:
+  toolConfig:
+    tools:
+      -
+        toolSpec:
+          name: multi_edit
+          description: 批量更新报告。
+          inputSchema:
+            json:
+              type: object
+              properties:
+                edits:
+                  type: array
+                  description: schema 字段描述不应计数`);
+
+    expect(metrics.expandedToolSchemaCount).toBe(1);
+  });
+
+  it("prefers provider-native schema metrics when prompt and provider body logs coexist", () => {
+    const metrics = parseRunLogMetrics(`[2026-07-03 10:00:00][大模型请求][Prompt]
+tools:
+  - name: legacy_tool
+    description: 旧版拍扁工具说明
+    parameters:
+      type: object
+[2026-07-03 10:00:00][大模型请求][ProviderBody]
+providerBody:
+  tools:
+    -
+      type: function
+      name: native_tool
+      description: 真实 provider body 工具说明。
+      parameters:
+        type: object`);
+
+    expect(metrics.expandedToolSchemaCount).toBe(1);
+  });
+
   it("does not count nested markdown outside report paths as full report reads", () => {
     const metrics = parseRunLogMetrics(
       [

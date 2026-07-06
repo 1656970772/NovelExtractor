@@ -22,6 +22,7 @@ import {
 import {
   createProviderRegistry,
   OpenAiCompatibleClient,
+  toToolDefinition,
   type ChatCompletionMessage,
   type ChatCompletionRequestToolCall,
   type ChatCompletionResult,
@@ -29,13 +30,13 @@ import {
   type FetchLike,
   type ToolCall,
   type ToolCallArguments,
-  type ToolSchema as LlmToolSchema
+  type ToolDefinition
 } from "@novel-extractor/llm";
 import type { RuntimeWindowManifest, RuntimeWindowManifestWindow } from "@novel-extractor/extraction/runtimeWindows";
 import {
   BashJobManager,
   executeBuiltinFileTool,
-  getEnabledTools,
+  getEnabledToolDefinitions,
   ToolExecutionError,
   type BashTeardownResult
 } from "@novel-extractor/tools";
@@ -239,15 +240,12 @@ function addUsage(left: TokenUsage, right: TokenUsage): TokenUsage {
   };
 }
 
-function toLlmToolSchema(tool: ReturnType<typeof getEnabledTools>[number]): LlmToolSchema {
-  return {
-    type: "function",
-    function: {
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters as unknown as Record<string, unknown>
-    }
-  };
+function toLlmToolDefinition(tool: ReturnType<typeof getEnabledToolDefinitions>[number]): ToolDefinition {
+  return toToolDefinition({
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.inputSchema
+  });
 }
 
 function toPromptDate(timestamp: string): string {
@@ -2283,7 +2281,7 @@ function replaceBatchOutcomeCorrectionMessage(
 export function createWindowRunService(options: WindowRunServiceOptions): WindowRunService {
   const enabledToolNames = options.enabledToolNames ?? DEFAULT_ENABLED_TOOL_NAMES;
   const enabledToolNameSet = new Set<string>(enabledToolNames);
-  const toolSchemas = getEnabledTools([...enabledToolNames]).map(toLlmToolSchema);
+  const toolDefinitions = getEnabledToolDefinitions([...enabledToolNames]).map(toLlmToolDefinition);
 
   const llmCredentialStore: LlmCredentialStore = {
     async resolveApiKey(ref) {
@@ -2494,8 +2492,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
               窗口: `${input.manifestWindow.index + 1}/${input.totalWindowCount}`,
               批次: `${input.batchIndex + 1}/${input.batchTotal}`,
               轮次: currentRoundIndex,
-              messages,
-              tools: toolSchemas
+              messages
             },
             windowFileName: input.manifestWindow.fileName,
             windowText: input.windowText
@@ -2505,7 +2502,26 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
           providerId: input.providerId,
           modelId: input.modelId,
           messages,
-          tools: toolSchemas
+          tools: toolDefinitions,
+          onRequestPrepared: async (snapshot) => {
+            await options.taskLogger?.append(
+              ["大模型请求", "ProviderBody"],
+              serializeModelRequestForTaskLog({
+                value: {
+                  供应商: input.providerId,
+                  模型: input.modelId,
+                  协议: snapshot.apiFormat,
+                  请求URL: snapshot.url,
+                  窗口: `${input.manifestWindow.index + 1}/${input.totalWindowCount}`,
+                  批次: `${input.batchIndex + 1}/${input.batchTotal}`,
+                  轮次: currentRoundIndex,
+                  providerBody: snapshot.body
+                },
+                windowFileName: input.manifestWindow.fileName,
+                windowText: input.windowText
+              })
+            );
+          }
         });
         const usageDelta = mapUsage(completion.normalizedUsage);
         usage = addUsage(usage, usageDelta);

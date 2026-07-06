@@ -54,6 +54,11 @@ function countModelRequests(logText: string): number {
     return fullLogCount;
   }
 
+  const providerBodyCount = countMatches(logText, /\[[^\]\r\n]+\]\[大模型请求\]\[ProviderBody\]/gu);
+  if (providerBodyCount > 0) {
+    return providerBodyCount;
+  }
+
   return countMatches(logText, /请求模型：窗口\s+[^，,\r\n]+[，,]第\s+\d+\s+轮/gu);
 }
 
@@ -251,39 +256,48 @@ function isReportReadPath(value: string): boolean {
 }
 
 function countExpandedToolSchemaDescriptions(logText: string): number {
-  let count = 0;
-  let promptLines: string[] = [];
-  let inPromptBlock = false;
+  let promptCount = 0;
+  let providerBodyCount = 0;
+  let requestLines: string[] = [];
+  let requestBlock: "Prompt" | "ProviderBody" | undefined;
+
+  const flush = () => {
+    if (requestBlock === "Prompt") {
+      promptCount += countPromptToolSchemaDescriptions(requestLines);
+    }
+    if (requestBlock === "ProviderBody") {
+      providerBodyCount += countProviderBodyToolDescriptions(requestLines);
+    }
+    requestLines = [];
+    requestBlock = undefined;
+  };
 
   for (const line of logText.split(/\r?\n/u)) {
     if (/^\[[^\]\r\n]+\]\[大模型请求\]\[Prompt\]/u.test(line)) {
-      if (inPromptBlock) {
-        count += countPromptToolSchemaDescriptions(promptLines);
-      }
-      promptLines = [];
-      inPromptBlock = true;
+      flush();
+      requestBlock = "Prompt";
+      continue;
+    }
+
+    if (/^\[[^\]\r\n]+\]\[大模型请求\]\[ProviderBody\]/u.test(line)) {
+      flush();
+      requestBlock = "ProviderBody";
       continue;
     }
 
     if (/^\[[^\]\r\n]+\]\[[^\]\r\n]+\]/u.test(line)) {
-      if (inPromptBlock) {
-        count += countPromptToolSchemaDescriptions(promptLines);
-      }
-      promptLines = [];
-      inPromptBlock = false;
+      flush();
       continue;
     }
 
-    if (inPromptBlock) {
-      promptLines.push(line);
+    if (requestBlock) {
+      requestLines.push(line);
     }
   }
 
-  if (inPromptBlock) {
-    count += countPromptToolSchemaDescriptions(promptLines);
-  }
+  flush();
 
-  return count;
+  return providerBodyCount > 0 ? providerBodyCount : promptCount;
 }
 
 function countPromptToolSchemaDescriptions(lines: string[]): number {
@@ -330,6 +344,31 @@ function countPromptToolSchemaDescriptions(lines: string[]): number {
 
     if (/^\s*parameters:\s*/u.test(line)) {
       parameterBlockIndents.push(indent);
+    }
+  }
+
+  return count;
+}
+
+function countProviderBodyToolDescriptions(lines: string[]): number {
+  let count = 0;
+  let schemaBlockIndents: number[] = [];
+
+  for (const line of lines) {
+    if (line.trim() === "") {
+      continue;
+    }
+
+    const indent = line.match(/^\s*/u)?.[0].length ?? 0;
+    schemaBlockIndents = schemaBlockIndents.filter((schemaIndent) => indent > schemaIndent);
+
+    if (/^\s*(?:parameters|input_schema|inputSchema|json|properties):\s*$/u.test(line)) {
+      schemaBlockIndents.push(indent);
+      continue;
+    }
+
+    if (schemaBlockIndents.length === 0 && /^\s*description:\s+.+/u.test(line)) {
+      count += 1;
     }
   }
 

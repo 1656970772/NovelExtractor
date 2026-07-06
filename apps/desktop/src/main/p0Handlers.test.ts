@@ -2259,9 +2259,16 @@ describe("P0 desktop IPC handlers", () => {
       expect(logText).toContain("role: user");
       expect(logText).toContain("[窗口原文见 window-0001.txt]");
       expect(logText).not.toContain("韩立在青石坊市遇见一瓶凝气丹");
-      expect(logText).toContain("name: grep");
-      expect(logText).toContain("parameters:");
-      expect(logText).not.toContain("报告是否存在已由宿主清单提供");
+      const firstPromptLogBlock = logText.split("[大模型请求][Prompt]")[1]?.split("[大模型请求][ProviderBody]")[0] ?? "";
+      const firstProviderBodyLogBlock = logText.split("[大模型请求][ProviderBody]")[1] ?? "";
+      expect(firstPromptLogBlock).not.toContain("tools:");
+      expect(firstPromptLogBlock).not.toContain("name: grep");
+      expect(firstProviderBodyLogBlock).toContain("providerBody:");
+      expect(firstProviderBodyLogBlock).toContain("type: function");
+      expect(firstProviderBodyLogBlock).toContain("function:");
+      expect(firstProviderBodyLogBlock).toContain("name: grep");
+      expect(firstProviderBodyLogBlock).toContain("parameters:");
+      expect(firstProviderBodyLogBlock).toContain("报告是否存在已由宿主清单提供");
       expect(logText).toContain("窗口序号：1/1");
       expect(logText).toContain("[大模型返回]");
       expect(logText).toContain("准备查询窗口文本 ***");
@@ -2282,9 +2289,9 @@ describe("P0 desktop IPC handlers", () => {
         invalidArgumentsCount: 0,
         unknownToolFailures: [],
         roundReasonCounts: {},
-        fullReportReadCount: 0,
-        expandedToolSchemaCount: 0
+        fullReportReadCount: 0
       });
+      expect(metrics.expandedToolSchemaCount).toBeGreaterThan(0);
       expect(metrics.toolCallCountByName).toMatchObject({
         grep: 1,
         write_file: 1
@@ -2292,7 +2299,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(metrics.toolCallCountByName.glob ?? 0).toBe(0);
       expect(metrics.toolCallCountByName.ls ?? 0).toBe(0);
       expect(metrics.toolCallCountByName.bash ?? 0).toBe(0);
-      expect(metrics.windowTextReferenceCount).toBe(metrics.modelRequestCount);
+      expect(metrics.windowTextReferenceCount).toBeGreaterThanOrEqual(metrics.modelRequestCount);
       expect(metrics.fullLogBytes).toBe(Buffer.byteLength(`${logText}\n${simpleLogText}`, "utf8"));
       expect(JSON.stringify(mockServer.requests[0].body)).toContain("韩立在青石坊市遇见一瓶凝气丹");
       expect(JSON.stringify(mockServer.requests[0].body)).toContain("报告是否存在已由宿主清单提供");

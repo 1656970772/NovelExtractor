@@ -18,6 +18,12 @@ export interface ToolSchema {
   parameters: unknown;
 }
 
+export interface ToolDefinitionSource {
+  name: BuiltinToolName;
+  description: string;
+  inputSchema: unknown;
+}
+
 const stringSchema = (description: string): JsonSchema => ({ type: "string", description });
 
 const MARK_NO_UPDATE_TOOL: ToolSchema = {
@@ -58,4 +64,12 @@ export function getEnabledTools(enabledNames: string[]): ToolSchema[] {
     }
     return tool;
   });
+}
+
+export function getEnabledToolDefinitions(enabledNames: string[]): ToolDefinitionSource[] {
+  return getEnabledTools(enabledNames).map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    inputSchema: tool.parameters
+  }));
 }

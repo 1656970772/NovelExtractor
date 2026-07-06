@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { ChatCompletionMessage, ToolSchema } from "@novel-extractor/llm";
+import type { ChatCompletionMessage } from "@novel-extractor/llm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createTaskTextLogger,
@@ -104,7 +104,7 @@ describe("task text logger", () => {
     expect(second.simpleRelativePath).toBe("runs/job-1/logs/20260630-153012-001.simple.txt");
   });
 
-  it("logs model requests with a window text reference and compact tool schemas without mutating messages", async () => {
+  it("logs model requests with provider-native tool schemas instead of flattened tool tables", async () => {
     const windowText = "这里是很长很长的窗口原文。\n第二行仍然属于窗口原文。";
     const messages: ChatCompletionMessage[] = [
       {
@@ -135,21 +135,33 @@ describe("task text logger", () => {
         content: "1→这里是很长很长的窗口原文。\n2→第二行仍然属于窗口原文。\n"
       }
     ];
-    const tools: ToolSchema[] = [
-      {
-        type: "function",
-        function: {
-          name: "read_file",
-          description: "非常长的工具说明文本不应该写入完整日志",
-          parameters: {
-            type: "object",
-            properties: {
-              path: { type: "string" }
+    const providerRequestBody = {
+      model: "gpt-test",
+      messages: [{ role: "user", content: `## 当前窗口文本\n${windowText}` }],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "read_report_excerpt",
+            description: "读取本批允许报告中的卡片字段块。",
+            parameters: {
+              type: "object",
+              properties: {
+                queries: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      fields: { type: "array", items: { type: "string" } }
+                    }
+                  }
+                }
+              }
             }
           }
         }
-      }
-    ];
+      ]
+    };
     const originalMessages = JSON.parse(JSON.stringify(messages));
     const logger = await createTaskTextLogger({
       clock: createSequenceClock([
@@ -165,16 +177,18 @@ describe("task text logger", () => {
       value: {
         轮次: 1,
         messages,
-        tools
+        协议: "openai_chat",
+        providerBody: providerRequestBody
       },
       windowFileName: "window-0005.txt",
       windowText
     });
-    await logger.append(["大模型请求", "Prompt"], loggedRequest);
+    await logger.append(["大模型请求", "ProviderBody"], loggedRequest);
 
     const content = await fs.readFile(path.join(tempRoot, logger.relativePath), "utf8");
     expect(messages).toEqual(originalMessages);
     expect(loggedRequest.messages).not.toBe(messages);
+    expect(content).toContain("[大模型请求][ProviderBody]");
     expect(content).toContain("messages:");
     expect(content).toContain("role: system");
     expect(content).toContain("role: user");
@@ -184,10 +198,15 @@ describe("task text logger", () => {
     expect(content).toContain("结尾指令保留");
     expect(content).not.toContain("1→这里是很长很长的窗口原文");
     expect(content).not.toContain("这里是很长很长的窗口原文");
-    expect(content).toContain("tools:");
-    expect(content).toContain("name: read_file");
+    expect(content).toContain("providerBody:");
+    expect(content).toContain("type: function");
+    expect(content).toContain("function:");
+    expect(content).toContain("name: read_report_excerpt");
+    expect(content).toContain("description: 读取本批允许报告中的卡片字段块。");
+    expect(content).toContain("queries:");
+    expect(content).toContain("type: array");
     expect(content).toContain("parameters:");
-    expect(content).not.toContain("非常长的工具说明文本");
+    expect(content).not.toContain("name: read_report_excerpt\n    parameters:");
   });
 
   it("logs the current-window prompt section as a window file reference even when text matching would be brittle", async () => {

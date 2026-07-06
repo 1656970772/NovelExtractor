@@ -12,6 +12,7 @@ export interface ChatCompletionRequest {
   messages: ChatCompletionMessage[];
   tools?: ToolDefinition[];
   providerOptions?: Record<string, unknown>;
+  onRequestPrepared?: (snapshot: PreparedChatCompletionRequest) => void | Promise<void>;
 }
 
 export type ToolCallArguments =
@@ -57,6 +58,14 @@ export interface ChatCompletionResult {
   normalizedUsage: NormalizedUsage;
   toolCalls: ToolCall[];
   raw: unknown;
+  requestBody?: unknown;
+  requestApiFormat?: OpenAiCompatibleProviderDefinition["apiFormat"];
+}
+
+export interface PreparedChatCompletionRequest {
+  apiFormat: OpenAiCompatibleProviderDefinition["apiFormat"];
+  url: string;
+  body: unknown;
 }
 
 export interface NormalizedUsage {
@@ -330,7 +339,8 @@ export class OpenAiCompatibleClient {
     apiKey: string
   ): Promise<ChatCompletionResult> {
     const redactionOptions = redactionOptionsFor(apiKey);
-    const adapter = getProtocolAdapter(this.provider.apiFormat);
+    const apiFormat = this.provider.apiFormat;
+    const adapter = getProtocolAdapter(apiFormat);
     const body = adapter.buildBody({
       modelId: request.modelId,
       messages: request.messages,
@@ -341,12 +351,17 @@ export class OpenAiCompatibleClient {
       baseUrl: this.provider.baseUrl,
       modelId: request.modelId
     })}`;
+    await request.onRequestPrepared?.({
+      apiFormat,
+      url,
+      body
+    });
 
     const retryOptions = normalizeRetryOptions(this.options.retry);
 
     for (let attempt = 1; attempt <= retryOptions.maxAttempts; attempt += 1) {
       try {
-        return await this.sendChatCompletionOnce(body, apiKey, redactionOptions, url);
+        return await this.sendChatCompletionOnce(body, apiKey, redactionOptions, apiFormat, url);
       } catch (error) {
         const hasMoreAttempts = attempt < retryOptions.maxAttempts;
         if (!hasMoreAttempts || !isRetryableRequestError(error, retryOptions)) {
@@ -364,6 +379,7 @@ export class OpenAiCompatibleClient {
     body: Record<string, unknown>,
     apiKey: string,
     redactionOptions: RedactSecretsOptions,
+    apiFormat: OpenAiCompatibleProviderDefinition["apiFormat"],
     url: string
   ): Promise<ChatCompletionResult> {
     let response: Response;
@@ -399,7 +415,9 @@ export class OpenAiCompatibleClient {
       usage: parsed.usage,
       normalizedUsage: parsed.normalizedUsage ?? normalizeUsage(parsed.usage),
       toolCalls: parsed.toolCalls,
-      raw: responseBody
+      raw: responseBody,
+      requestBody: body,
+      requestApiFormat: apiFormat
     };
   }
 

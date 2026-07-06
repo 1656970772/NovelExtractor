@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Clock } from "@novel-extractor/domain";
-import type { ChatCompletionMessage, ToolCallArguments, ToolSchema } from "@novel-extractor/llm";
+import type { ChatCompletionMessage, ToolCallArguments, ToolDefinition } from "@novel-extractor/llm";
 import { formatBuildInfo, resolveBuildInfo, type BuildInfo } from "./buildInfo";
 import { redactSecrets } from "./credentials";
 import { summarizeTaskLogEntry } from "./taskProgressLog";
@@ -28,7 +28,8 @@ interface CreateTaskTextLoggerInput {
 export interface ModelRequestTaskLogValue {
   [key: string]: unknown;
   messages?: readonly ChatCompletionMessage[];
-  tools?: readonly ToolSchema[];
+  tools?: readonly ToolDefinition[];
+  providerBody?: unknown;
 }
 
 export interface SerializeModelRequestForTaskLogInput {
@@ -135,17 +136,20 @@ function redactTaskLogText(value: string, secrets: readonly string[]): string {
 }
 
 export function serializeModelRequestForTaskLog(input: SerializeModelRequestForTaskLogInput): Record<string, unknown> {
-  return {
-    ...input.value,
-    messages: input.value.messages
-      ? serializeMessagesForTaskLog({
-          messages: input.value.messages,
-          windowFileName: input.windowFileName,
-          windowText: input.windowText
-        })
-      : input.value.messages,
-    tools: input.value.tools ? serializeToolsForTaskLog(input.value.tools) : input.value.tools
-  };
+  const output = replaceWindowTextReferencesInValue(input.value, {
+    windowFileName: input.windowFileName,
+    windowText: input.windowText
+  }) as Record<string, unknown>;
+
+  if (input.value.messages) {
+    output.messages = serializeMessagesForTaskLog({
+      messages: input.value.messages,
+      windowFileName: input.windowFileName,
+      windowText: input.windowText
+    });
+  }
+
+  return output;
 }
 
 export function replaceWindowTextReferencesForTaskLog(input: ReplaceWindowTextReferencesForTaskLogInput): unknown {
@@ -320,16 +324,6 @@ function parseReadFileWindowText(content: string): string | undefined {
   }
 
   return textLines.join("\n");
-}
-
-function serializeToolsForTaskLog(tools: readonly ToolSchema[]): Array<{
-  name: string;
-  parameters?: Record<string, unknown>;
-}> {
-  return tools.map((tool) => ({
-    name: tool.function.name,
-    parameters: cloneLogValue(tool.function.parameters) as Record<string, unknown> | undefined
-  }));
 }
 
 function cloneLogValue(value: unknown): unknown {

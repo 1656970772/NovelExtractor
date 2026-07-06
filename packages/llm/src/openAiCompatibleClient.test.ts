@@ -134,6 +134,67 @@ describe("OpenAiCompatibleClient", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("exposes the prepared provider-native request body before sending", async () => {
+    const snapshots: unknown[] = [];
+    const events: string[] = [];
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      events.push("fetch");
+      expect(snapshots).toHaveLength(1);
+      expect(JSON.parse(String(init?.body))).toEqual((snapshots[0] as { body: unknown }).body);
+
+      return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    });
+    const client = new OpenAiCompatibleClient(
+      createProvider(),
+      { resolveApiKey: async () => "sk-prepared-secret" },
+      { fetch: fetchMock }
+    );
+
+    const result = await client.chatCompletion({
+      providerId: "deepseek-user",
+      modelId: "novel-analysis",
+      messages: [{ role: "user", content: "提取丹药信息" }],
+      tools: [
+        {
+          name: "record_pill",
+          description: "记录丹药信息。",
+          inputSchema: { type: "object" }
+        }
+      ],
+      onRequestPrepared: (snapshot) => {
+        events.push("prepared");
+        snapshots.push(snapshot);
+      }
+    });
+
+    expect(events).toEqual(["prepared", "fetch"]);
+    expect(snapshots).toEqual([
+      {
+        apiFormat: "openai_chat",
+        url: "https://api.deepseek.com/chat/completions",
+        body: {
+          model: "novel-analysis",
+          messages: [{ role: "user", content: "提取丹药信息" }],
+          tools: [
+            {
+              type: "function",
+              function: {
+                name: "record_pill",
+                description: "记录丹药信息。",
+                parameters: { type: "object" }
+              }
+            }
+          ]
+        }
+      }
+    ]);
+    expect(result.requestApiFormat).toBe("openai_chat");
+    expect(result.requestBody).toEqual((snapshots[0] as { body: unknown }).body);
+  });
+
   it("keeps raw usage and normalizes OpenAI-compatible token details", async () => {
     const usage = {
       prompt_tokens: 100,

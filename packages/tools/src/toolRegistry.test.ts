@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getEnabledTools } from "./toolRegistry";
+import { getEnabledToolDefinitions, getEnabledTools } from "./toolRegistry";
 
 describe("P0 tool registry", () => {
   it("exposes the configured Reasonix tools in deterministic order", () => {
@@ -144,6 +144,27 @@ describe("P0 tool registry", () => {
     expect(tool.description).toContain("卡片字段块");
     expect(tool.description).toContain("cardName");
     expect(tool.description).toContain("fields");
+  });
+
+  it("exposes canonical tool definition sources without OpenAI wrappers", () => {
+    const [tool] = getEnabledToolDefinitions(["upsert_report_section"]);
+
+    expect(tool).toMatchObject({
+      name: "upsert_report_section",
+      description: expect.stringContaining("字段块"),
+      inputSchema: {
+        type: "object",
+        properties: {
+          updates: {
+            type: "array",
+            items: { type: "object" }
+          }
+        }
+      }
+    });
+    expect(JSON.stringify(tool)).not.toContain("\"function\"");
+    expect(JSON.stringify(tool)).not.toContain("\"parameters\"");
+    expect(getEnabledTools(["upsert_report_section"])[0].parameters).toEqual(tool.inputSchema);
   });
 
   it("describes upsert_report_section as field-block writing without old_string", () => {
