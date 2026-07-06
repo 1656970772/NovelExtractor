@@ -10,6 +10,7 @@
     "./providerRegistry": "./src/providerRegistry.ts",
     "./openAiCompatibleClient": "./src/openAiCompatibleClient.ts",
     "./deepseekAdapter": "./src/deepseekAdapter.ts",
+    "./toolDefinition": "./src/toolDefinition.ts",
     "./redaction": "./src/redaction.ts"
   },
   "scripts": {

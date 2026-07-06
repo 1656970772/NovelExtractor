@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  encodeToolArguments,
   isJsonObject,
   normalizeInputSchema,
   stableJsonValue,
@@ -82,6 +83,21 @@ describe("ToolDefinition", () => {
     expect(isJsonObject(["array"])).toBe(false);
   });
 
+  it("rejects non-JSON objects and invalid nested fields", () => {
+    expect(isJsonObject(new Date())).toBe(false);
+    expect(isJsonObject(new Map())).toBe(false);
+    expect(isJsonObject({ ok: true })).toBe(true);
+    expect(isJsonObject({ bad: undefined })).toBe(false);
+    expect(isJsonObject({ bad: () => undefined })).toBe(false);
+    expect(isJsonObject({ nested: [{ a: null }] })).toBe(true);
+  });
+
+  it("falls back for non-JSON object input schemas", () => {
+    expect(normalizeInputSchema(new Date())).toEqual({
+      type: "object",
+    });
+  });
+
   it("sorts object keys but keeps array order for stable JSON encoding", () => {
     const result: unknown = stableJsonValue({
       b: 2,
@@ -103,5 +119,13 @@ describe("ToolDefinition", () => {
       { c: 3, d: 4 },
       { a: 1, b: 2 },
     ]);
+  });
+
+  it("encodes tool arguments with string passthrough and stable JSON output", () => {
+    expect(encodeToolArguments("raw text")).toBe("raw text");
+    expect(encodeToolArguments({ b: 2, a: 1 })).toBe('{"a":1,"b":2}');
+    expect(encodeToolArguments({ items: [{ b: 2, a: 1 }, "next"] })).toBe(
+      '{"items":[{"a":1,"b":2},"next"]}',
+    );
   });
 });

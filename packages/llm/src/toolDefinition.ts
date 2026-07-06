@@ -26,8 +26,33 @@ const EMPTY_OBJECT_SCHEMA: JsonObject = {
   type: "object",
 };
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function isJsonSchemaValue(value: unknown): value is JsonSchemaValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return true;
+  }
+
+  if (typeof value === "number") {
+    return Number.isFinite(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.every(isJsonSchemaValue);
+  }
+
+  return isJsonObject(value);
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
-  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+  if (isPlainRecord(value)) {
     return value as Record<string, unknown>;
   }
 
@@ -35,7 +60,8 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 export function isJsonObject(value: unknown): value is JsonObject {
-  return asRecord(value) !== undefined;
+  const record = asRecord(value);
+  return record !== undefined && Object.values(record).every(isJsonSchemaValue);
 }
 
 export function normalizeInputSchema(value: unknown): JsonObject {
