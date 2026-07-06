@@ -14,7 +14,8 @@
     "./redaction": "./src/redaction.ts",
     "./protocols/types": "./src/protocols/types.ts",
     "./protocols/toolSchemaProjection": "./src/protocols/toolSchemaProjection.ts",
-    "./protocols/openaiChat": "./src/protocols/openaiChat.ts"
+    "./protocols/openaiChat": "./src/protocols/openaiChat.ts",
+    "./protocols/openaiResponses": "./src/protocols/openaiResponses.ts"
   },
   "scripts": {
     "test": "vitest run",
