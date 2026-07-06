@@ -12,6 +12,7 @@
     "./deepseekAdapter": "./src/deepseekAdapter.ts",
     "./toolDefinition": "./src/toolDefinition.ts",
     "./redaction": "./src/redaction.ts",
+    "./protocols/types": "./src/protocols/types.ts",
     "./protocols/toolSchemaProjection": "./src/protocols/toolSchemaProjection.ts"
   },
   "scripts": {
