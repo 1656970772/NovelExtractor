@@ -172,7 +172,6 @@ export const bedrockConverseAdapter: LlmProtocolAdapter = {
     const toolConfig = lowerTools(input.tools);
 
     return {
-      modelId: input.modelId,
       ...(system ? { system } : {}),
       messages: lowerMessages(input.messages),
       ...(toolConfig ? { toolConfig } : {}),

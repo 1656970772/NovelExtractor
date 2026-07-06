@@ -125,12 +125,22 @@ function splitSystemMessages(messages: ChatCompletionMessage[]): {
   };
 }
 
+function lowerProviderOptions(providerOptions: Record<string, unknown>): Record<string, unknown> {
+  const maxTokens = providerOptions.max_tokens;
+
+  return typeof maxTokens === "number" && Number.isFinite(maxTokens) && maxTokens > 0
+    ? { max_tokens: maxTokens }
+    : {};
+}
+
 function buildBody(input: BuildProtocolBodyInput): Record<string, unknown> {
   const { system, messages } = splitSystemMessages(input.messages);
   const tools = input.tools.map(lowerTool);
+  const providerOptions = lowerProviderOptions(input.providerOptions);
 
   return {
     model: input.modelId,
+    ...providerOptions,
     ...(system ? { system } : {}),
     messages: messages.map(lowerMessage),
     ...(tools.length ? { tools } : {}),

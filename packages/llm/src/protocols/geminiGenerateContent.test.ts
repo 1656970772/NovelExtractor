@@ -113,6 +113,70 @@ describe("geminiGenerateContentAdapter", () => {
     });
   });
 
+  it("preserves provider functionCall ids when parsing Gemini tool calls", () => {
+    const parsed = geminiGenerateContentAdapter.parseResponse({
+      candidates: [
+        {
+          content: {
+            parts: [
+              {
+                functionCall: {
+                  id: "provider-call-7",
+                  name: "wait",
+                  args: { job_ids: ["a"] },
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(parsed.toolCalls).toEqual([
+      {
+        id: "provider-call-7",
+        name: "wait",
+        arguments: { job_ids: ["a"] },
+      },
+    ]);
+  });
+
+  it("replays Gemini tool messages with their provider functionCall id", () => {
+    const body = geminiGenerateContentAdapter.buildBody({
+      modelId: "gemini-test",
+      providerOptions: {},
+      tools: [],
+      messages: [
+        {
+          role: "tool",
+          toolCallId: "provider-call-7",
+          name: "wait",
+          content: "done",
+        },
+      ],
+    });
+
+    expect(body).toEqual({
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              functionResponse: {
+                id: "provider-call-7",
+                name: "wait",
+                response: {
+                  name: "wait",
+                  content: "done",
+                },
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("replays assistant tool calls and tool messages in Gemini history shape", () => {
     const body = geminiGenerateContentAdapter.buildBody({
       modelId: "gemini-test",
@@ -150,9 +214,10 @@ describe("geminiGenerateContentAdapter", () => {
           role: "model",
           parts: [
             { text: "Thinking." },
-            { functionCall: { name: "wait", args: { job_ids: ["bash-1"] } } },
+            { functionCall: { id: "call-1", name: "wait", args: { job_ids: ["bash-1"] } } },
             {
               functionCall: {
+                id: "call-2",
                 name: "mark_no_update",
                 args: { outputFileName: "[报告]NPC.md", reason: "本窗口无新增信息" },
               },
@@ -164,6 +229,7 @@ describe("geminiGenerateContentAdapter", () => {
           parts: [
             {
               functionResponse: {
+                id: "call-1",
                 name: "wait",
                 response: {
                   name: "wait",

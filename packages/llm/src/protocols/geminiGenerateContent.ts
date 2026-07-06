@@ -22,6 +22,7 @@ interface GeminiTextPart {
 
 interface GeminiFunctionCallPart {
   functionCall: {
+    id?: string;
     name: string;
     args: unknown;
   };
@@ -29,6 +30,7 @@ interface GeminiFunctionCallPart {
 
 interface GeminiFunctionResponsePart {
   functionResponse: {
+    id: string;
     name: string;
     response: {
       name: string;
@@ -55,6 +57,7 @@ function lowerTool(tool: ToolDefinition): GeminiFunctionDeclaration {
 function lowerToolCall(toolCall: ChatCompletionRequestToolCall): GeminiFunctionCallPart {
   return {
     functionCall: {
+      id: toolCall.id,
       name: toolCall.name,
       args: toolCall.arguments,
     },
@@ -79,6 +82,7 @@ function lowerToolMessage(message: ChatCompletionToolMessage): GeminiContent {
     parts: [
       {
         functionResponse: {
+          id: message.toolCallId,
           name,
           response: {
             name,
@@ -173,7 +177,10 @@ function parseResponseToolCalls(parts: unknown): ToolCall[] {
       return [];
     }
 
-    const id = `gemini-call-${nextToolCallId}`;
+    const providerId = functionCall.id;
+    const id = typeof providerId === "string" && providerId.trim() !== ""
+      ? providerId
+      : `gemini-call-${nextToolCallId}`;
     nextToolCallId += 1;
 
     return [

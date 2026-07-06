@@ -11,6 +11,27 @@ describe("bedrockConverseAdapter", () => {
     ).toBe("/model/anthropic.claude%203%2Fsonnet/converse");
   });
 
+  it("omits modelId from the Converse body because the path carries the model", () => {
+    const input = {
+      modelId: "anthropic.claude-test",
+      messages: [{ role: "user" as const, content: "hi" }],
+      providerOptions: {},
+      tools: [],
+    };
+
+    const path = bedrockConverseAdapter.path({
+      baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      modelId: input.modelId,
+    });
+    const body = bedrockConverseAdapter.buildBody(input);
+
+    expect(path).toBe("/model/anthropic.claude-test/converse");
+    expect(body).not.toHaveProperty("modelId");
+    expect(body).toMatchObject({
+      messages: [{ role: "user", content: [{ text: "hi" }] }],
+    });
+  });
+
   it("lowers system messages and tools to Bedrock toolSpec inputSchema.json", () => {
     const body = bedrockConverseAdapter.buildBody({
       modelId: "anthropic.claude-test",
@@ -35,7 +56,6 @@ describe("bedrockConverseAdapter", () => {
     });
 
     expect(body).toEqual({
-      modelId: "anthropic.claude-test",
       system: [{ text: "你是小说资料抽取助手" }],
       messages: [{ role: "user", content: [{ text: "处理窗口" }] }],
       toolConfig: {
@@ -90,7 +110,6 @@ describe("bedrockConverseAdapter", () => {
     });
 
     expect(body).toEqual({
-      modelId: "anthropic.claude-test",
       messages: [
         {
           role: "assistant",

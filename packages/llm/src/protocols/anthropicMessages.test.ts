@@ -81,6 +81,26 @@ describe("anthropicMessagesAdapter", () => {
     });
   });
 
+  it("passes through finite positive max_tokens from providerOptions", () => {
+    const body = anthropicMessagesAdapter.buildBody({
+      modelId: "claude-test",
+      messages: [{ role: "user", content: "hi" }],
+      providerOptions: { max_tokens: 1024 },
+      tools: [],
+    });
+
+    expect(body).toMatchObject({
+      model: "claude-test",
+      max_tokens: 1024,
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "hi" }],
+        },
+      ],
+    });
+  });
+
   it("replays assistant tool_use blocks and tool_result history", () => {
     const body = anthropicMessagesAdapter.buildBody({
       modelId: "claude-test",
