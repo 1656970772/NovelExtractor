@@ -3,8 +3,25 @@ import type { ProviderConfig } from "@novel-extractor/domain";
 import { describe, expect, it } from "vitest";
 import { createDeepSeekProviderDefinition } from "./deepseekAdapter";
 import { createProviderRegistry, parseModelRef } from "./providerRegistry";
+import type {
+  LlmProviderDefinition,
+  OpenAiCompatibleProviderDefinition
+} from "./providerRegistry";
+
+type ProviderDefinitionCompatibilityCheck =
+  LlmProviderDefinition extends OpenAiCompatibleProviderDefinition
+    ? OpenAiCompatibleProviderDefinition extends LlmProviderDefinition
+      ? true
+      : false
+    : false;
 
 describe("LLM provider registry", () => {
+  it("exposes the generic provider definition type as the OpenAI-compatible alias", () => {
+    const compatibilityCheck: ProviderDefinitionCompatibilityCheck = true;
+
+    expect(compatibilityCheck).toBe(true);
+  });
+
   it("parses provider scoped model references", () => {
     expect(parseModelRef("deepseek/novel-analysis")).toEqual({
       providerId: "deepseek",

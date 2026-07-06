@@ -25,7 +25,7 @@ export interface LlmModelDefinition {
   usageMapping: "openai-compatible";
 }
 
-export interface OpenAiCompatibleProviderDefinition {
+export interface LlmProviderDefinition {
   id: string;
   presetId?: string;
   displayName: string;
@@ -38,6 +38,8 @@ export interface OpenAiCompatibleProviderDefinition {
   allowsUserModels: boolean;
   models: LlmModelDefinition[];
 }
+
+export type OpenAiCompatibleProviderDefinition = LlmProviderDefinition;
 
 export interface ProviderRegistryOptions {
   presets: ProviderPreset[];
