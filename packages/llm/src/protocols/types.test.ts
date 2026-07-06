@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import "./types";
 import { parseProtocolToolArguments } from "./shared";
-import type { LlmProtocolAdapter } from "./types";
+import type { LlmProtocolAdapter, ParsedProtocolResponse } from "./types";
+
+type Assert<T extends true> = T;
+type IsOptional<T, K extends keyof T> = Record<string, never> extends Pick<T, K> ? true : false;
+type UsageMustBeRequired = Assert<IsOptional<ParsedProtocolResponse, "usage"> extends false ? true : false>;
 
 describe("LlmProtocolAdapter contract", () => {
   it("allows adapters to compile provider-native request bodies and parse tool calls", () => {
@@ -16,13 +20,15 @@ describe("LlmProtocolAdapter contract", () => {
       })
     };
 
-    expect(adapter.path({ baseUrl: "https://api.example.com", modelId: "m" })).toBe("/chat/completions");
-    expect(adapter.buildBody({
+    const body: Record<string, unknown> = adapter.buildBody({
       modelId: "m",
       messages: [],
       tools: [],
       providerOptions: {}
-    })).toEqual({ model: "m", messages: [], tools: [] });
+    });
+
+    expect(adapter.path({ baseUrl: "https://api.example.com", modelId: "m" })).toBe("/chat/completions");
+    expect(body).toEqual({ model: "m", messages: [], tools: [] });
     expect(adapter.parseResponse({}).toolCalls[0].arguments).toEqual({ path: "a.md" });
   });
 });

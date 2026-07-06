@@ -26,7 +26,7 @@ export interface BuildProtocolBodyInput {
 
 export interface ParsedProtocolResponse {
   content: string;
-  usage?: unknown;
+  usage: unknown;
   normalizedUsage?: NormalizedUsage;
   toolCalls: ToolCall[];
 }
@@ -34,6 +34,6 @@ export interface ParsedProtocolResponse {
 export interface LlmProtocolAdapter {
   apiFormat: LlmProtocolApiFormat;
   path(input: ProtocolPathInput): string;
-  buildBody(input: BuildProtocolBodyInput): unknown;
+  buildBody(input: BuildProtocolBodyInput): Record<string, unknown>;
   parseResponse(response: unknown): ParsedProtocolResponse;
 }
