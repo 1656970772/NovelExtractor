@@ -123,10 +123,6 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
   },
   toolLoopDefaults: {
     enabledToolNames: [
-      "edit_file",
-      "grep",
-      "ls",
-      "multi_edit",
       "read_file",
       "read_report_excerpt",
       "upsert_report_section",
@@ -140,9 +136,9 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
       replacement_text_not_unique:
         "old_string 在文件中匹配到多处；更新既有报告优先改用 read_report_excerpt 按卡片字段读取，再用 upsert_report_section 替换同一字段。",
       read_tool_target_not_found:
-        "读取目标不存在；请先用 ls 确认可读路径，或改用当前窗口文本、reports 目录或本批选中报告文件名。",
+        "读取目标不存在；请改用当前窗口文本、reports 目录、本批选中报告文件名，或用 read_report_excerpt 读取报告字段块。",
       read_tool_scope_denied:
-        "只能读取、搜索、列出或匹配当前窗口文本、当前书籍 reports 目录或本批选中输出报告；请改用窗口文件路径、reports 或选中报告文件名。",
+        "只能读取当前窗口文本、当前书籍 reports 目录或本批选中输出报告；请改用窗口文件路径、reports、选中报告文件名或 read_report_excerpt。",
       bash_tool_scope_denied:
         "桌面端 bash 只能在当前书籍 reports 目录内执行；不要读取 source、runs、rules、项目根路径、绝对路径或通过 .. 跳出 reports。",
       write_tool_scope_denied:
@@ -150,13 +146,13 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
       bash_runtime_failure:
         "bash 命令执行失败；请根据 stderr/stdout 调整命令、参数或先用文件工具确认目标。",
       tool_schema_invalid_arguments:
-        "工具参数结构不符合 schema；请只传入该工具支持的字段，并确保 path/content/pattern/old_string/new_string 等字段类型正确。",
+        "工具参数结构不符合 schema；请只传入该工具支持的字段，并确保 path/content/outputFileName/updates/queries/reason 等字段类型正确。",
       read_tool_invalid_arguments:
-        "读取工具参数无效；请检查 path/pattern 是否为字符串，并缩小读取或搜索范围。",
+        "读取工具参数无效；请检查 path 或 queries 是否符合工具 schema，并缩小读取范围。",
       edit_target_not_found:
         "目标报告不存在；如果需要创建报告，请改用 write_file 写入完整且合规的报告正文。",
       tool_not_enabled:
-        "只能调用当前请求 tools 清单中列出的工具；不要调用未列出的 shell、匹配或报告片段工具。",
+        "只能调用当前请求 tools 清单中列出的工具；不要调用未列出的 shell、搜索、目录列出或编辑工具。",
       tool_invalid_arguments:
         "工具参数无效；请根据错误消息修正参数后重试，必要时先读取文件确认当前状态。"
     },
@@ -171,7 +167,7 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
       NO_WHOLE_BOOK_PRIOR_KNOWLEDGE_RULE,
       TEMPLATE_EXAMPLE_EVIDENCE_RULE,
       "更新既有报告前，优先用 read_report_excerpt 按“卡片名-字段名/字段名”坐标读取目标字段块；字段块确认后用 upsert_report_section 按 cardName + fieldName 直接替换字段块，不要整读旧报告，不要用 old_string。",
-      "工具参数必须严格按 schema 传入原生 JSON 值：updates、edits、queries 等数组字段必须是真 JSON 数组（[...]），不要把数组写成字符串、Markdown 代码块或多层转义文本。",
+      "工具参数必须严格按 schema 传入原生 JSON 值：updates、queries 等数组字段必须是真 JSON 数组（[...]），不要把数组写成字符串、Markdown 代码块或多层转义文本。",
       "字段坐标示例：韩立-角色定位/核心性格/代表行为；工具调用时拆成 cardName=韩立，fields=[角色定位,核心性格,代表行为]。",
       "如果本批次只有部分模板无新增信息，必须对这些模板调用 mark_no_update，并继续为其他模板写入或更新报告。",
       "如果当前窗口没有可写入的新信息，且未执行写工具，最终文本必须严格返回 NO_UPDATE。"

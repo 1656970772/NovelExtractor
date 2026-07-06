@@ -330,7 +330,8 @@ describe("window run report inventory", () => {
     const userPrompt = promptMessages.find((message) => message.role === "user")?.content;
     expect(userPrompt).toContain("已有报告：NPC性格与代表事件.md、势力设定.md、材料分析.md");
     expect(userPrompt).toContain("待创建报告：事件因果链（长程因果图）.md");
-    expect(userPrompt).toContain("不要再调用目录或 shell 类工具查找这些报告是否存在");
+    expect(userPrompt).toContain("不要再调用搜索、目录或 shell 类工具查找这些报告是否存在");
+    expect(userPrompt).toContain("优先用 read_report_excerpt 读取目标字段块");
     expect(userPrompt).toMatch(/outputFileName: NPC性格与代表事件\.md[\s\S]*reportStatus: 已存在/u);
     expect(userPrompt).toMatch(/outputFileName: 事件因果链（长程因果图）\.md[\s\S]*reportStatus: 待创建/u);
     expect(userPrompt).toContain("已有报告可按需读取相关字段，并用 upsert_report_section 修改目标字段。");

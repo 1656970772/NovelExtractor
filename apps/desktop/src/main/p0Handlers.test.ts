@@ -2042,8 +2042,12 @@ describe("P0 desktop IPC handlers", () => {
         function?: { name?: string; parameters?: { properties?: Record<string, unknown> } };
       }>;
       const firstRequestToolNames = firstRequestTools.map((tool) => tool.function?.name);
-      const editFileSchema = firstRequestTools.find((tool) => tool.function?.name === "edit_file")?.function?.parameters;
-      const multiEditSchema = firstRequestTools.find((tool) => tool.function?.name === "multi_edit")?.function?.parameters;
+      const readReportExcerptSchema = firstRequestTools.find(
+        (tool) => tool.function?.name === "read_report_excerpt"
+      )?.function?.parameters;
+      const upsertReportSectionSchema = firstRequestTools.find(
+        (tool) => tool.function?.name === "upsert_report_section"
+      )?.function?.parameters;
 
       expect(firstSystemPrompt).toContain("你是小说资料抽取助手");
       expect(firstSystemPrompt).toContain("## 窗口处理规则");
@@ -2055,16 +2059,18 @@ describe("P0 desktop IPC handlers", () => {
       expect(firstUserPrompt).toContain("## 当前窗口文本");
       expect(firstUserPrompt).not.toContain("本阶段不做模板路由");
       expect(firstRequestToolNames).toEqual(getDefaultConfig().toolLoopDefaults.enabledToolNames);
+      expect(firstRequestToolNames).not.toContain("edit_file");
+      expect(firstRequestToolNames).not.toContain("multi_edit");
+      expect(firstRequestToolNames).not.toContain("grep");
+      expect(firstRequestToolNames).not.toContain("ls");
       expect(firstRequestToolNames).not.toContain("bash");
       expect(firstRequestToolNames).not.toContain("glob");
       expect(firstRequestToolNames).toContain("read_report_excerpt");
       expect(firstRequestToolNames).toContain("upsert_report_section");
-      expect(editFileSchema?.properties).toHaveProperty("old_string");
-      expect(editFileSchema?.properties).toHaveProperty("new_string");
-      expect(editFileSchema?.properties).not.toHaveProperty("oldText");
-      expect(editFileSchema?.properties).not.toHaveProperty("newText");
-      expect(JSON.stringify(multiEditSchema)).toContain("old_string");
-      expect(JSON.stringify(multiEditSchema)).toContain("new_string");
+      expect(readReportExcerptSchema?.properties).toHaveProperty("outputFileName");
+      expect(readReportExcerptSchema?.properties).toHaveProperty("queries");
+      expect(upsertReportSectionSchema?.properties).toHaveProperty("outputFileName");
+      expect(upsertReportSectionSchema?.properties).toHaveProperty("updates");
       expect(firstRequestJson).not.toContain(`窗口文件：${firstWindowTextPath}`);
       expect(firstRequestJson).not.toContain("read_file/grep 如需读取当前窗口文件");
       expect(firstRequestJson).not.toContain("不要使用裸文件名 window-0001.txt");
@@ -2160,9 +2166,8 @@ describe("P0 desktop IPC handlers", () => {
             body: createChatCompletionResponse({
               content: `准备查询窗口文本 ${apiKey}`,
               toolCalls: [
-                createToolCall("call-grep-window", "grep", {
-                  path: `runs/${createdJobId}/windows/window-0001.txt`,
-                  pattern: "初入坊市"
+                createToolCall("call-read-window", "read_file", {
+                  path: `runs/${createdJobId}/windows/window-0001.txt`
                 })
               ],
               totalTokens: 31
@@ -2177,7 +2182,7 @@ describe("P0 desktop IPC handlers", () => {
               toolCalls: [
                 createToolCall("call-write-report", "write_file", {
                   path: "丹药分析.md",
-                  content: "# 丹药分析\n\n窗口 grep 后写入的完整报告正文。"
+                  content: "# 丹药分析\n\n窗口读取后写入的完整报告正文。"
                 })
               ],
               totalTokens: 29
@@ -2245,7 +2250,7 @@ describe("P0 desktop IPC handlers", () => {
       });
       expect(simpleLogText).toContain("开始任务：凡人修仙传.txt");
       expect(simpleLogText).toContain("请求模型：窗口 1/1，第 1 轮");
-      expect(simpleLogText).toContain("搜索文件：window-0001.txt");
+      expect(simpleLogText).toContain("读取文件：window-0001.txt");
       expect(simpleLogText).toContain("窗口 1/1 多轮原因：无");
       expect(simpleLogText).not.toContain("[大模型请求][Prompt]");
       expect(simpleLogText).not.toContain("role: system");
@@ -2266,17 +2271,17 @@ describe("P0 desktop IPC handlers", () => {
       expect(firstProviderBodyLogBlock).toContain("providerBody:");
       expect(firstProviderBodyLogBlock).toContain("type: function");
       expect(firstProviderBodyLogBlock).toContain("function:");
-      expect(firstProviderBodyLogBlock).toContain("name: grep");
+      expect(firstProviderBodyLogBlock).toContain("name: read_file");
+      expect(firstProviderBodyLogBlock).not.toContain("name: grep");
       expect(firstProviderBodyLogBlock).toContain("parameters:");
       expect(firstProviderBodyLogBlock).toContain("报告是否存在已由宿主清单提供");
       expect(logText).toContain("窗口序号：1/1");
       expect(logText).toContain("[大模型返回]");
       expect(logText).toContain("准备查询窗口文本 ***");
-      expect(logText).toContain("call-grep-window");
-      expect(logText).toContain("[工具调用][grep]");
+      expect(logText).toContain("call-read-window");
+      expect(logText).toContain("[工具调用][read_file]");
       expect(logText).toContain("path: runs/");
-      expect(logText).toContain("pattern: 初入坊市");
-      expect(logText).toContain("[工具返回][grep]");
+      expect(logText).toContain("[工具返回][read_file]");
       expect(logText).toContain("[上下文][窗口]");
       expect(logText).toContain("[上下文][多轮原因汇总]");
       expect(logText).toContain("章节范围");
@@ -2293,7 +2298,7 @@ describe("P0 desktop IPC handlers", () => {
       });
       expect(metrics.expandedToolSchemaCount).toBeGreaterThan(0);
       expect(metrics.toolCallCountByName).toMatchObject({
-        grep: 1,
+        read_file: 1,
         write_file: 1
       });
       expect(metrics.toolCallCountByName.glob ?? 0).toBe(0);
@@ -2413,7 +2418,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -2505,7 +2510,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -2635,7 +2640,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -2928,7 +2933,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -3117,7 +3122,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -3250,7 +3255,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -3395,7 +3400,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -3538,7 +3543,7 @@ describe("P0 desktop IPC handlers", () => {
       });
       const contract = createIpcContract();
       const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-      const handlers = createHandlers({
+      const handlers = createHandlersWithLegacyTools({
         credentialStore,
         providerStore: createProviderStore(
           createProviderConfig({
@@ -4909,7 +4914,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlersWithLegacyTools({
+    const handlers = createHandlers({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -5041,7 +5046,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-upsert-report-section");
-    const handlers = createHandlersWithLegacyTools({
+    const handlers = createHandlers({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -5152,7 +5157,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-consecutive-upsert-report-section");
-    const handlers = createHandlersWithLegacyTools({
+    const handlers = createHandlers({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -6045,7 +6050,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -7595,7 +7600,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -7729,7 +7734,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -7836,7 +7841,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -8180,7 +8185,7 @@ describe("P0 desktop IPC handlers", () => {
       });
       const contract = createIpcContract();
       const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-      const handlers = createHandlers({
+      const handlers = createHandlersWithLegacyTools({
         credentialStore,
         providerStore: createProviderStore(
           createProviderConfig({
@@ -8415,7 +8420,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture(apiKey);
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -8609,7 +8614,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -8933,7 +8938,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -9976,7 +9981,7 @@ describe("P0 desktop IPC handlers", () => {
   it("freezes failed job timing when pre-run template validation fails", async () => {
     const contract = createIpcContract();
     let now = "2026-07-02T10:00:00.000Z";
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       clock: { now: () => now }
     });
 
@@ -10337,7 +10342,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-parallel-books");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(createProviderConfig({ apiKeyRef, baseUrl: mockServer.baseUrl }))
     });
@@ -10411,7 +10416,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-book-lock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(createProviderConfig({ apiKeyRef, baseUrl: mockServer.baseUrl }))
     });

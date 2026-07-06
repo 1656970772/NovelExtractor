@@ -427,7 +427,7 @@ function renderReportInventoryPromptSection(reportInventory: readonly ReportInve
     "宿主已基于本批次选中模板和 reports 目录提供报告清单，清单只包含本批次允许触达的报告文件。",
     `已有报告：${existingReportFileNames.length > 0 ? existingReportFileNames.join("、") : "无"}`,
     `待创建报告：${missingReportFileNames.length > 0 ? missingReportFileNames.join("、") : "无"}`,
-    "不要再调用目录或 shell 类工具查找这些报告是否存在；需要读已有报告时，直接使用允许的文件读取或搜索工具。",
+    "不要再调用搜索、目录或 shell 类工具查找这些报告是否存在；需要读已有报告时，优先用 read_report_excerpt 读取目标字段块，必要时再用 read_file 读取允许范围内的短上下文。",
     "已有报告可按需读取相关字段，并用 upsert_report_section 修改目标字段。",
     "待创建报告不要先调用 read_file 或 read_report_excerpt；有可写入信息时直接用 write_file 创建并写入完整报告正文。"
   ].join("\n");
@@ -1886,7 +1886,7 @@ function createToolNotEnabledRecoverableResult(input: {
 
 const REPORT_INVENTORY_ALREADY_PROVIDED_CODE = "REPORT_INVENTORY_ALREADY_PROVIDED";
 const REPORT_INVENTORY_ALREADY_PROVIDED_MESSAGE =
-  "报告清单已提供；请直接根据清单判断已有报告和待创建报告，不要再调用目录或 shell 类工具查找报告是否存在。";
+  "报告清单已提供；请直接根据清单判断已有报告和待创建报告，不要再调用搜索、目录或 shell 类工具查找报告是否存在。";
 
 export function interceptReportDiscoveryToolCall(input: {
   args: unknown;
@@ -2256,7 +2256,7 @@ function createBatchOutcomeCorrectionMessage(tracker: BatchOutcomeTracker): stri
   return [
     `上一轮尚未为本批次所有选中模板提供处理结果，缺少 outputFileName：${missingOutputs}。`,
     "下一轮只处理上述缺失 outputFileName；已完成处理结果的输出文件不要继续读取、编辑或重写。",
-    "请对每个缺失 outputFileName 调用 write_file/edit_file/multi_edit 写入正式报告，或调用 mark_no_update 标记本窗口无新增信息。",
+    "请对每个缺失 outputFileName 调用 write_file 创建报告、调用 upsert_report_section 更新已读字段块，或调用 mark_no_update 标记本窗口无新增信息。",
     "如果缺失模板没有当前窗口明确证据，立即调用 mark_no_update；不要为了无新增模板继续查询或修改其他报告。",
     "如果本批所有模板都没有可写入的新信息，最终文本必须严格返回 NO_UPDATE。"
   ].join("\n");
