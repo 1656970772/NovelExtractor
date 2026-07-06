@@ -61,6 +61,33 @@ function removeNullSchemas(value: unknown): unknown {
   return { ...fields, anyOf: variants };
 }
 
+function sanitizeOpenAiNode(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(sanitizeOpenAiNode);
+  }
+
+  if (typeof value === "boolean") {
+    return {};
+  }
+
+  if (!isJsonObject(value)) {
+    return value;
+  }
+
+  const result: Record<string, unknown> = Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [
+      key,
+      key === "additionalProperties" ? item : sanitizeOpenAiNode(item),
+    ]),
+  );
+
+  if (result.type === "array" && result.items === undefined) {
+    result.items = {};
+  }
+
+  return result;
+}
+
 function sanitizeGeminiNode(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(sanitizeGeminiNode);
@@ -109,38 +136,52 @@ function isEmptyObjectSchema(schema: JsonObject): boolean {
   );
 }
 
+function entriesWithProjectedValues(entries: [string, unknown][]): [string, unknown][] {
+  return entries.filter((entry): entry is [string, unknown] => entry[1] !== undefined);
+}
+
 function projectGeminiNode(value: unknown): Record<string, unknown> | undefined {
   if (!isJsonObject(value) || isEmptyObjectSchema(value)) {
     return undefined;
   }
 
+  const properties = isJsonObject(value.properties)
+    ? Object.fromEntries(
+        entriesWithProjectedValues(
+          Object.entries(value.properties).map(([key, item]) => [key, projectGeminiNode(item)]),
+        ),
+      )
+    : undefined;
+  const required = Array.isArray(value.required)
+    ? value.required.filter((field) => typeof field === "string" && properties !== undefined && field in properties)
+    : undefined;
+
+  const projectNodeList = (items: unknown[]) => entriesWithProjectedValues(items.map((item) => ["", projectGeminiNode(item)])).map(
+    ([, item]) => item,
+  );
+
   return Object.fromEntries(
-    [
+    entriesWithProjectedValues([
       ["description", value.description],
-      ["required", value.required],
+      ["required", required],
       ["format", value.format],
       ["type", Array.isArray(value.type) ? value.type.filter((type) => type !== "null")[0] : value.type],
       ["nullable", Array.isArray(value.type) && value.type.includes("null") ? true : undefined],
       ["enum", value.const !== undefined ? [value.const] : value.enum],
-      [
-        "properties",
-        isJsonObject(value.properties)
-          ? Object.fromEntries(Object.entries(value.properties).map(([key, item]) => [key, projectGeminiNode(item)]))
-          : undefined,
-      ],
+      ["properties", properties],
       [
         "items",
         Array.isArray(value.items)
-          ? value.items.map(projectGeminiNode)
+          ? projectNodeList(value.items)
           : value.items === undefined
             ? undefined
             : projectGeminiNode(value.items),
       ],
-      ["allOf", Array.isArray(value.allOf) ? value.allOf.map(projectGeminiNode) : undefined],
-      ["anyOf", Array.isArray(value.anyOf) ? value.anyOf.map(projectGeminiNode) : undefined],
-      ["oneOf", Array.isArray(value.oneOf) ? value.oneOf.map(projectGeminiNode) : undefined],
+      ["allOf", Array.isArray(value.allOf) ? projectNodeList(value.allOf) : undefined],
+      ["anyOf", Array.isArray(value.anyOf) ? projectNodeList(value.anyOf) : undefined],
+      ["oneOf", Array.isArray(value.oneOf) ? projectNodeList(value.oneOf) : undefined],
       ["minLength", value.minLength],
-    ].filter((entry) => entry[1] !== undefined),
+    ]),
   );
 }
 
@@ -161,7 +202,7 @@ function openAiProjection(schema: JsonObject): JsonObject {
           ),
           additionalProperties: false,
         };
-  const normalized = removeNullSchemas(flattened);
+  const normalized = sanitizeOpenAiNode(removeNullSchemas(flattened));
   return (isJsonObject(normalized) ? stableJsonValue(normalized) : { type: "object" }) as JsonObject;
 }
 

@@ -65,6 +65,28 @@ describe("projectToolSchema", () => {
     expect(projected).not.toHaveProperty("anyOf");
   });
 
+  it("sanitizes OpenAI-compatible boolean property schemas and bare arrays", () => {
+    const projected = projectToolSchema("openai", {
+      type: "object",
+      properties: {
+        flag: true,
+        list: { type: "array" },
+        nullableName: { anyOf: [{ type: "string" }, { type: "null" }] },
+      },
+    });
+
+    expect(projected).toMatchObject({
+      type: "object",
+      properties: {
+        flag: {},
+        list: { type: "array", items: {} },
+        nullableName: { type: "string" },
+      },
+    });
+    const properties = projected.properties as Record<string, unknown>;
+    expect(properties.flag).not.toBe(true);
+  });
+
   it("removes Gemini-incompatible additionalProperties while keeping array items", () => {
     const projected = projectToolSchema("gemini", schema);
 
@@ -117,5 +139,28 @@ describe("projectToolSchema", () => {
     const properties = projected.properties as Record<string, unknown>;
     expect(properties.scalarWithObjectFields).not.toHaveProperty("properties");
     expect(properties.scalarWithObjectFields).not.toHaveProperty("required");
+  });
+
+  it("keeps Gemini-compatible properties when sibling children project away", () => {
+    const projected = projectToolSchema("gemini", {
+      type: "object",
+      properties: {
+        meta: { type: "object", properties: {} },
+        list: { type: "array" },
+        name: { type: "string" },
+      },
+      required: ["meta", "list", "name"],
+    });
+
+    expect(projected).not.toEqual({ type: "object" });
+    expect(projected).toMatchObject({
+      type: "object",
+      required: ["list", "name"],
+      properties: {
+        list: { type: "array", items: { type: "string" } },
+        name: { type: "string" },
+      },
+    });
+    expect(JSON.stringify(projected)).not.toContain("undefined");
   });
 });
