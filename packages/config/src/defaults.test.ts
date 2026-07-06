@@ -306,4 +306,14 @@ describe("default config", () => {
     );
     expect(getDefaultConfig().coverageIndexDefaults.keyFields).not.toContain("customKey");
   });
+
+  it("provides job scheduler defaults for multi-book concurrency", () => {
+    expect(getDefaultConfig().jobSchedulerDefaults).toEqual({
+      maxConcurrentJobs: 2,
+      maxAllowedConcurrentJobs: 3,
+      maxConcurrentJobsPerBook: 1,
+      queuedByGlobalLimitText: "等待可用运行槽",
+      queuedByBookLimitText: "等待同书任务完成"
+    });
+  });
 });

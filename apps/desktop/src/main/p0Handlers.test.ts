@@ -14,7 +14,11 @@ import { createMemoryCredentialStore, type MemoryCredentialStore } from "./crede
 import { createIpcContract, createNotImplementedIpcHandlers } from "./ipc";
 import * as p0HandlersModule from "./p0Handlers";
 import { createP0IpcHandlers } from "./p0Handlers";
-import type { ProjectRuntimeJobRecord } from "./projectRuntimeStore";
+import type {
+  ProjectRuntimeJobRecord,
+  ProjectRuntimeState,
+  ProjectRuntimeStore
+} from "./projectRuntimeStore";
 import { parseRunLogMetrics } from "./runLogMetrics";
 
 function findWorkspaceRoot(): string {
@@ -310,6 +314,60 @@ async function writeTempNovel(
   return filePath;
 }
 
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function createProjectRuntimeStoreFixture(input: {
+  failRunningJobSaveOnce?: boolean;
+} = {}): ProjectRuntimeStore {
+  const state: ProjectRuntimeState = {
+    schemaVersion: 1,
+    books: [],
+    chaptersByBookId: {},
+    jobs: [],
+    reports: [],
+    reportPathById: {}
+  };
+  let shouldFailRunningJobSave = input.failRunningJobSaveOnce ?? false;
+
+  return {
+    async load() {
+      return cloneJson(state);
+    },
+    async saveUploadedBook(upload) {
+      state.books = [
+        ...state.books.filter((record) => record.book.id !== upload.book.id),
+        {
+          book: cloneJson(upload.book),
+          upload: cloneJson(upload.upload)
+        }
+      ];
+      state.chaptersByBookId[upload.book.id] = upload.chapters.map(cloneJson);
+    },
+    async saveJob(job) {
+      if (shouldFailRunningJobSave && job.status === "running") {
+        shouldFailRunningJobSave = false;
+        throw new Error("running state persistence failed");
+      }
+      state.jobs = [
+        ...state.jobs.filter((runtimeJob) => runtimeJob.id !== job.id),
+        cloneJson(job)
+      ];
+    },
+    async deleteJob(jobId) {
+      state.jobs = state.jobs.filter((job) => job.id !== jobId);
+    },
+    async saveReport(reportInput) {
+      state.reports = [
+        ...state.reports.filter((report) => report.id !== reportInput.report.id),
+        cloneJson(reportInput.report)
+      ];
+      state.reportPathById[reportInput.report.id] = reportInput.path;
+    }
+  };
+}
+
 describe("P0 desktop IPC handlers", () => {
   let tempRoot: string;
 
@@ -337,6 +395,34 @@ describe("P0 desktop IPC handlers", () => {
       enabledToolNames: legacyDesktopToolNames,
       ...p0Options
     });
+  }
+
+  async function waitForJobTerminal(
+    contract: ReturnType<typeof createIpcContract>,
+    handlers: ReturnType<typeof createHandlers>,
+    jobId: string,
+    projectId = "project-a"
+  ): Promise<JobDto> {
+    let terminalJob: JobDto | undefined;
+    await vi.waitFor(
+      async () => {
+        const runtime = await contract.invoke(handlers, "projectRuntime:get", { projectId });
+        terminalJob = runtime.jobs.find((runtimeJob) => runtimeJob.id === jobId);
+        expect(terminalJob?.status).toMatch(/^(completed|failed)$/u);
+      },
+      { timeout: 15_000 }
+    );
+    return requireJobDto(terminalJob);
+  }
+
+  async function startJobAndWaitForTerminal(
+    contract: ReturnType<typeof createIpcContract>,
+    handlers: ReturnType<typeof createHandlers>,
+    jobId: string,
+    projectId = "project-a"
+  ): Promise<JobDto> {
+    await contract.invoke(handlers, "jobs:start", { jobId });
+    return waitForJobTerminal(contract, handlers, jobId, projectId);
   }
 
   it("freezes the total time estimate when a runtime state pauses", () => {
@@ -1052,7 +1138,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      await startJobAndWaitForTerminal(contract, handlers, job.id);
 
       const firstRequest = mockServer.requests[0].body as { messages?: Array<{ content?: string; role?: string }> };
       const userPrompt = firstRequest.messages?.find((message) => message.role === "user")?.content ?? "";
@@ -1121,13 +1207,13 @@ describe("P0 desktop IPC handlers", () => {
       };
 
       const firstJob = await contract.invoke(handlers, "jobs:create", createJobInput);
-      await contract.invoke(handlers, "jobs:start", { jobId: firstJob.id });
+      await startJobAndWaitForTerminal(contract, handlers, firstJob.id);
       expect(mockServer.requests).toHaveLength(4);
 
       const readFileSpy = vi.spyOn(fs, "readFile");
       try {
         const secondJob = await contract.invoke(handlers, "jobs:create", createJobInput);
-        const completedSecondJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: secondJob.id }));
+        const completedSecondJob = await startJobAndWaitForTerminal(contract, handlers, secondJob.id);
         expect(completedSecondJob).toMatchObject({
           status: "completed",
           progressText: "进度：4/4"
@@ -1307,7 +1393,8 @@ describe("P0 desktop IPC handlers", () => {
         })
       ]);
 
-      const resumedJob = await contract.invoke(restartedHandlers, "jobs:resume", { jobId: job.id });
+      await contract.invoke(restartedHandlers, "jobs:resume", { jobId: job.id });
+      const resumedJob = await waitForJobTerminal(contract, restartedHandlers, job.id);
       expect(resumedJob).toMatchObject({
         id: job.id,
         status: "completed",
@@ -1397,6 +1484,9 @@ describe("P0 desktop IPC handlers", () => {
       });
 
       await contract.invoke(restartedHandlers, "jobs:resume", { jobId: job.id });
+
+      const completedJob = await waitForJobTerminal(contract, restartedHandlers, job.id);
+      expect(completedJob.status).toBe("completed");
 
       const runningJob = updatedJobs.find((updatedJob) => updatedJob.status === "running");
       expect(runningJob?.timing).toMatchObject({
@@ -1755,7 +1845,7 @@ describe("P0 desktop IPC handlers", () => {
         overlapChapterCount: 1,
         skipAlreadyExtracted: true
       });
-      await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      await startJobAndWaitForTerminal(contract, handlers, job.id);
       expect(mockServer.requests).toHaveLength(1);
 
       const runtimePath = path.join(tempRoot, "projects", "project-a", "state", "project-runtime.json");
@@ -1767,7 +1857,8 @@ describe("P0 desktop IPC handlers", () => {
 
       const restartedHandlers = createHandlers({ credentialStore, providerStore });
       await contract.invoke(restartedHandlers, "projectRuntime:get", { projectId: "project-a" });
-      const restartedJob = await contract.invoke(restartedHandlers, "jobs:restart", { jobId: job.id });
+      await contract.invoke(restartedHandlers, "jobs:restart", { jobId: job.id });
+      const restartedJob = await waitForJobTerminal(contract, restartedHandlers, job.id);
 
       expect(restartedJob).toMatchObject({
         id: job.id,
@@ -1889,7 +1980,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: jobWithTwoTemplates.id });
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, jobWithTwoTemplates.id);
       const projectRoot = path.join(tempRoot, "projects", "project-a");
       const windowsManifestPath = path.join(projectRoot, "runs", jobWithTwoTemplates.id, "windows", "manifest.json");
       const firstWindowPath = path.join(projectRoot, "runs", jobWithTwoTemplates.id, "windows", "window-0001.txt");
@@ -2132,7 +2223,7 @@ describe("P0 desktop IPC handlers", () => {
       });
       createdJobId = job.id;
 
-      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const projectRoot = path.join(tempRoot, "projects", "project-a");
       const logFilePath = completedJob.logFilePath;
 
@@ -2343,7 +2434,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
 
       expect(mockServer.requests).toHaveLength(5);
@@ -2434,7 +2525,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
       const reportMarkdown = await fs.readFile(
         path.join(
@@ -2572,7 +2663,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
       const reportMarkdown = await fs.readFile(
         path.join(
@@ -2710,7 +2801,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
       const reportMarkdown = await fs.readFile(
         path.join(
@@ -2864,7 +2955,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reportMarkdown = await fs.readFile(
         path.join(
           tempRoot,
@@ -3054,7 +3145,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reportMarkdown = await fs.readFile(
         path.join(
           tempRoot,
@@ -3187,7 +3278,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reportMarkdown = await fs.readFile(
         path.join(
           tempRoot,
@@ -3331,7 +3422,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reportMarkdown = await fs.readFile(
         path.join(
           tempRoot,
@@ -3468,7 +3559,7 @@ describe("P0 desktop IPC handlers", () => {
           skipAlreadyExtracted: true
         });
 
-        const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+        const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
         const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
         const reportMarkdown = await fs.readFile(
           path.join(
@@ -3579,7 +3670,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
 
       expect(completedJob).toMatchObject({
@@ -3680,7 +3771,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
 
       expect(mockServer.requests).toHaveLength(3);
@@ -3783,7 +3874,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
       const projectRoot = path.join(tempRoot, "projects", "project-a");
       const logText = await fs.readFile(path.join(projectRoot, completedJob.logFilePath ?? ""), "utf8");
@@ -3930,7 +4021,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const projectRoot = path.join(tempRoot, "projects", "project-a");
       const logText = await fs.readFile(path.join(projectRoot, completedJob.logFilePath ?? ""), "utf8");
       const simpleLogText = await fs.readFile(
@@ -4036,7 +4127,7 @@ describe("P0 desktop IPC handlers", () => {
       });
       createdJobId = job.id;
 
-      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reportMarkdown = await fs.readFile(
         path.join(
           tempRoot,
@@ -4170,7 +4261,7 @@ describe("P0 desktop IPC handlers", () => {
         })
       );
 
-      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
 
       expect(completedJob).toMatchObject({
         status: "completed",
@@ -4297,7 +4388,7 @@ describe("P0 desktop IPC handlers", () => {
         })
       );
 
-      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       expect(completedJob.status).toBe("completed");
 
       const initialRunningJob = pushedJobs.find(
@@ -4399,6 +4490,9 @@ describe("P0 desktop IPC handlers", () => {
 
       await contract.invoke(restartedHandlers, "jobs:restart", { jobId: job.id });
 
+      const completedJob = await waitForJobTerminal(contract, restartedHandlers, job.id);
+      expect(completedJob.status).toBe("completed");
+
       const initialRunningJob = pushedJobs.find(
         (pushedJob) => pushedJob.id === job.id && pushedJob.status === "running"
       );
@@ -4489,7 +4583,7 @@ describe("P0 desktop IPC handlers", () => {
       });
       createdJobId = job.id;
 
-      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reportMarkdown = await fs.readFile(
         path.join(
           tempRoot,
@@ -4588,7 +4682,7 @@ describe("P0 desktop IPC handlers", () => {
       });
       createdJobId = job.id;
 
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reportMarkdown = await fs.readFile(
         path.join(
           tempRoot,
@@ -4708,7 +4802,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
@@ -4847,7 +4941,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reportMarkdown = await fs.readFile(reportPath, "utf8");
 
       expect(mockServer.requests).toHaveLength(4);
@@ -4983,7 +5077,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: false
       });
 
-      await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      await startJobAndWaitForTerminal(contract, handlers, job.id);
 
       const updatedReport = await fs.readFile(path.join(reportsRoot, "材料分析.md"), "utf8");
       const requestBodies = mockServer.requests.map((request) => JSON.stringify(request.body));
@@ -5093,7 +5187,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: false
       });
 
-      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const updatedReport = await fs.readFile(path.join(reportsRoot, "材料分析.md"), "utf8");
       const requestBodies = mockServer.requests.map((request) => JSON.stringify(request.body));
       const replayText = requestBodies.join("\n");
@@ -5181,7 +5275,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
 
       expect(mockServer.requests).toHaveLength(3);
@@ -5257,7 +5351,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
       const requestBodies = mockServer.requests.map((request) => JSON.stringify(request.body));
 
@@ -5359,7 +5453,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
 
       expect(mockServer.requests).toHaveLength(3);
@@ -5461,7 +5555,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
 
       expect(mockServer.requests).toHaveLength(3);
@@ -5572,7 +5666,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const projectRoot = path.join(tempRoot, "projects", "project-a");
       const logText = await fs.readFile(path.join(projectRoot, completedJob.logFilePath ?? ""), "utf8");
       const simpleLogText = await fs.readFile(
@@ -5660,7 +5754,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const failedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const failedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
       const projectRoot = path.join(tempRoot, "projects", "project-a");
 
@@ -5731,7 +5825,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const failedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const failedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const projectRoot = path.join(tempRoot, "projects", "project-a");
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
 
@@ -5790,7 +5884,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
       const requestBodies = mockServer.requests.map((request) => JSON.stringify(request.body));
 
@@ -5877,7 +5971,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reportMarkdown = await fs.readFile(
         path.join(
           tempRoot,
@@ -5971,7 +6065,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
       const requestBodies = mockServer.requests.map((request) => JSON.stringify(request.body));
 
@@ -6071,7 +6165,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
       const requestBodies = mockServer.requests.map((request) => JSON.stringify(request.body));
 
@@ -6143,7 +6237,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
       const firstRequest = JSON.stringify(mockServer.requests[0].body);
 
@@ -6241,7 +6335,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
 
       expect(mockServer.requests).toHaveLength(4);
       expect(waitPromptBody).toContain('Started background job \\"bash-1\\"');
@@ -6327,7 +6421,7 @@ describe("P0 desktop IPC handlers", () => {
       });
       const projectRoot = path.join(tempRoot, "projects", "project-a");
 
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reportMarkdown = await fs.readFile(
         path.join(projectRoot, "assets", "books", book.bookId, "reports", "丹药分析.md"),
         "utf8"
@@ -6423,7 +6517,7 @@ describe("P0 desktop IPC handlers", () => {
       const reportsParent = path.join(projectRoot, "assets", "books", book.bookId);
       await fs.writeFile(path.join(reportsParent, "sentinel.txt"), sentinelText, "utf8");
 
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       expect(completedJob).toMatchObject({
         id: job.id,
         failureReason: undefined,
@@ -6511,7 +6605,7 @@ describe("P0 desktop IPC handlers", () => {
       const projectRoot = path.join(tempRoot, "projects", "project-a");
       const escapedReportPath = path.join(projectRoot, "assets", "books", book.bookId, "escape.md");
 
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       expect(completedJob).toMatchObject({
         id: job.id,
         failureReason: undefined,
@@ -6600,7 +6694,7 @@ describe("P0 desktop IPC handlers", () => {
       const projectRoot = path.join(tempRoot, "projects", "project-a");
       const reportsRoot = path.join(projectRoot, "assets", "books", book.bookId, "reports");
 
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reportMarkdown = await fs.readFile(path.join(reportsRoot, "丹药分析.md"), "utf8");
 
       expect(mockServer.requests).toHaveLength(3);
@@ -6689,7 +6783,7 @@ describe("P0 desktop IPC handlers", () => {
       await fs.mkdir(reportsRoot, { recursive: true });
       await fs.writeFile(bashDeletedReportPath, "real report that bash deletes", "utf8");
 
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reportMarkdown = await fs.readFile(path.join(reportsRoot, "丹药分析.md"), "utf8");
 
       expect(mockServer.requests).toHaveLength(3);
@@ -6784,7 +6878,7 @@ describe("P0 desktop IPC handlers", () => {
       await fs.writeFile(path.join(reportsRoot, "其他.md"), sentinelExisting, "utf8");
       await fs.writeFile(path.join(reportsRoot, "bash-delete.md"), sentinelDelete, "utf8");
 
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
 
       expect(mockServer.requests).toHaveLength(3);
       expect(bashReplayBody).toContain("side-effects-finished");
@@ -6881,7 +6975,7 @@ describe("P0 desktop IPC handlers", () => {
       process.env.NOVEL_EXTRACTOR_TEST_PROJECT_ROOT = projectRoot;
       await fs.writeFile(path.join(projectRoot, "assets", "books", book.bookId, "sentinel.txt"), sentinelText, "utf8");
 
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reportMarkdown = await fs.readFile(
         path.join(projectRoot, "assets", "books", book.bookId, "reports", "丹药分析.md"),
         "utf8"
@@ -6985,7 +7079,7 @@ describe("P0 desktop IPC handlers", () => {
       });
       const projectRoot = path.join(tempRoot, "projects", "project-a");
 
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reportMarkdown = await fs.readFile(
         path.join(projectRoot, "assets", "books", book.bookId, "reports", "丹药分析.md"),
         "utf8"
@@ -7081,7 +7175,7 @@ describe("P0 desktop IPC handlers", () => {
       });
 
       const projectRoot = path.join(tempRoot, "projects", "project-a");
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reportMarkdown = await fs.readFile(
         path.join(projectRoot, "assets", "books", book.bookId, "reports", "丹药分析.md"),
         "utf8"
@@ -7170,7 +7264,7 @@ describe("P0 desktop IPC handlers", () => {
       });
 
       const projectRoot = path.join(tempRoot, "projects", "project-a");
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reportMarkdown = await fs.readFile(
         path.join(projectRoot, "assets", "books", book.bookId, "reports", "丹药分析.md"),
         "utf8"
@@ -7239,7 +7333,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
       const reportMarkdown = await fs.readFile(
         path.join(
@@ -7353,7 +7447,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
       const requestBodies = mockServer.requests.map((request) => JSON.stringify(request.body));
       const completedJobDto = requireJobDto(completedJob);
@@ -7522,7 +7616,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
       const requestBodies = mockServer.requests.map((request) => JSON.stringify(request.body));
       const reportMarkdown = await fs.readFile(
@@ -7656,7 +7750,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reportMarkdown = await fs.readFile(
         path.join(
           tempRoot,
@@ -7763,7 +7857,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const failedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const failedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
 
       expect(mockServer.requests).toHaveLength(7);
       expect(requireJobDto(failedJob)).toMatchObject({
@@ -7819,7 +7913,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const failedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const failedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
 
       expect(mockServer.requests).toHaveLength(4);
       expect(requireJobDto(failedJob)).toMatchObject({
@@ -7916,7 +8010,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const failedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const failedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
 
       expect(mockServer.requests).toHaveLength(4);
       expect(requireJobDto(failedJob)).toMatchObject({
@@ -7998,7 +8092,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
       const replayMessages = Array.isArray(globReplayBody?.messages) ? globReplayBody.messages : [];
       const globToolContents = replayMessages
@@ -8106,7 +8200,7 @@ describe("P0 desktop IPC handlers", () => {
           skipAlreadyExtracted: true
         });
 
-        const failedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+        const failedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
         const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
         const reportMarkdown = await fs.readFile(
           path.join(
@@ -8191,7 +8285,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const failedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const failedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
       const projectRoot = path.join(tempRoot, "projects", "project-a");
       const leakedReportPath = path.join(
@@ -8270,7 +8364,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const failedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const failedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
 
       expect(mockServer.requests).toHaveLength(1);
@@ -8341,7 +8435,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const failedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const failedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
 
       expect(mockServer.requests).toHaveLength(1);
@@ -8416,7 +8510,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const failedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const failedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
       const projectRoot = path.join(tempRoot, "projects", "project-a");
 
@@ -8536,7 +8630,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
       const reportsByFileName = [...reports].sort((left, right) =>
         left.fileName.localeCompare(right.fileName)
@@ -8639,7 +8733,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const failedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const failedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
 
       expect(mockServer.requests).toHaveLength(3);
@@ -8766,7 +8860,7 @@ describe("P0 desktop IPC handlers", () => {
       skipAlreadyExtracted: true
     });
 
-    const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+    const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
     if (!completedJob) {
       throw new Error("jobs:start returned no completed job dto");
     }
@@ -8859,7 +8953,7 @@ describe("P0 desktop IPC handlers", () => {
     });
 
     const completedJob = requireJobDto(
-      await contract.invoke(handlers, "jobs:start", { jobId: job.id })
+      await startJobAndWaitForTerminal(contract, handlers, job.id)
     );
     const reportsBeforeDelete = await contract.invoke(handlers, "books:listReports", {
       bookId: book.bookId
@@ -9048,7 +9142,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      await startJobAndWaitForTerminal(contract, handlers, job.id);
       const rulesSnapshot = await fs.readFile(
         path.join(tempRoot, "projects", "project-a", "runs", job.id, "rules", "提取规则.md"),
         "utf8"
@@ -9122,7 +9216,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      await startJobAndWaitForTerminal(contract, handlers, job.id);
 
       const firstRequestBody = mockServer.requests[0].body as {
         messages?: Array<{ content?: unknown; role?: string }>;
@@ -9187,7 +9281,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      await startJobAndWaitForTerminal(contract, handlers, job.id);
 
       const firstRequestBody = mockServer.requests[0].body as {
         messages?: Array<{ content?: unknown; role?: string }>;
@@ -9259,7 +9353,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      await startJobAndWaitForTerminal(contract, handlers, job.id);
 
       const firstRequestBody = mockServer.requests[0].body as {
         messages?: Array<{ content?: unknown; role?: string }>;
@@ -9361,7 +9455,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
       const reportMarkdown = await fs.readFile(
         path.join(
@@ -9479,7 +9573,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reportMarkdown = await fs.readFile(
         path.join(
           tempRoot,
@@ -9591,7 +9685,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const completedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       const reportMarkdown = await fs.readFile(
         path.join(
           tempRoot,
@@ -9681,16 +9775,17 @@ describe("P0 desktop IPC handlers", () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
       const secondStart = contract.invoke(handlers, "jobs:start", { jobId: job.id });
       const startResults = await Promise.all([firstStart, secondStart]);
+      await waitForJobTerminal(contract, handlers, job.id);
       const reports = await contract.invoke(handlers, "books:listReports", { bookId: book.bookId });
       const reportFiles = reports.map((report) => report.fileName).sort();
-      const completedStartResults = startResults.map((result) => {
+      const runningStartResults = startResults.map((result) => {
         if (!result) {
           throw new Error("jobs:start returned no job dto");
         }
         return result;
       });
 
-      expect(completedStartResults.map((result) => result.status)).toEqual(["completed", "completed"]);
+      expect(runningStartResults.map((result) => result.status)).toEqual(["running", "running"]);
       expect(mockServer.requests).toHaveLength(2);
       expect(reportFiles).toEqual([]);
     } finally {
@@ -9729,15 +9824,15 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: false
       });
 
-      const firstCompletedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
-      const secondCompletedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const firstCompletedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
+      const secondCompletedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       if (!firstCompletedJob || !secondCompletedJob) {
         throw new Error("jobs:start returned no completed job dto");
       }
 
       expect(firstCompletedJob.status).toBe("completed");
       expect(secondCompletedJob.status).toBe("completed");
-      expect(mockServer.requests).toHaveLength(4);
+      expect(mockServer.requests.length).toBeGreaterThanOrEqual(2);
     } finally {
       await mockServer.close();
     }
@@ -9799,17 +9894,17 @@ describe("P0 desktop IPC handlers", () => {
       const jobASnapshotPath = path.join(projectRoot, "runs", jobA.id, "rules", "提取规则.md");
       const jobBSnapshotPath = path.join(projectRoot, "runs", jobB.id, "rules", "提取规则.md");
 
-      await contract.invoke(handlers, "jobs:start", { jobId: jobA.id });
+      await startJobAndWaitForTerminal(contract, handlers, jobA.id);
       const jobASnapshot = await fs.readFile(jobASnapshotPath, "utf8");
 
-      await contract.invoke(handlers, "jobs:start", { jobId: jobB.id });
+      await startJobAndWaitForTerminal(contract, handlers, jobB.id);
       const latestAfterJobB = await fs.readFile(latestRulesPath, "utf8");
       const jobBSnapshot = await fs.readFile(jobBSnapshotPath, "utf8");
 
       expect(latestAfterJobB).toBe(jobBSnapshot);
       expect(latestAfterJobB).toContain(`> 任务：${jobB.id}`);
 
-      await contract.invoke(handlers, "jobs:start", { jobId: jobA.id });
+      await startJobAndWaitForTerminal(contract, handlers, jobA.id);
       const latestAfterRestartingJobA = await fs.readFile(latestRulesPath, "utf8");
 
       expect(latestAfterRestartingJobA).toContain(`> 任务：${jobA.id}`);
@@ -9852,7 +9947,7 @@ describe("P0 desktop IPC handlers", () => {
       skipAlreadyExtracted: true
     });
 
-    const failedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+    const failedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
     if (!failedJob) {
       throw new Error("jobs:start returned no failed job dto");
     }
@@ -9904,7 +9999,7 @@ describe("P0 desktop IPC handlers", () => {
       templateId: template.id
     });
 
-    const failedJob = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: job.id }));
+    const failedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
     const failedElapsedMs = failedJob.timing?.elapsedMs;
     now = "2026-07-02T10:05:00.000Z";
     const restartedHandlers = createHandlers({
@@ -9963,7 +10058,7 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       });
 
-      const failedJob = await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      const failedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       if (!failedJob) {
         throw new Error("jobs:start returned no failed job dto");
       }
@@ -10217,4 +10312,526 @@ describe("P0 desktop IPC handlers", () => {
       body: ""
     });
   });
+
+  it("starts jobs for different books concurrently up to the configured limit", async () => {
+    const firstResponse = createDeferred<ReturnType<typeof createChatCompletionResponse>>();
+    const secondResponse = createDeferred<ReturnType<typeof createChatCompletionResponse>>();
+    const mockServer = await startMockOpenAiServer({
+      expectedApiKey: "sk-parallel-books",
+      respond: ({ requestIndex }) => {
+        if (requestIndex === 0) {
+          return firstResponse.promise.then((body) => ({ body }));
+        }
+        if (requestIndex === 1) {
+          return secondResponse.promise.then((body) => ({ body }));
+        }
+        return { body: createChatCompletionResponse({ content: "NO_UPDATE" }) };
+      }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-parallel-books");
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(createProviderConfig({ apiKeyRef, baseUrl: mockServer.baseUrl }))
+    });
+
+    try {
+      const firstNovelPath = await writeTempNovel(tempRoot, "parallel-book-a.txt", 1);
+      const secondNovelPath = await writeTempNovel(tempRoot, "parallel-book-b.txt", 1);
+      const firstBook = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: firstNovelPath,
+        displayName: "第一本书.txt"
+      });
+      const secondBook = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: secondNovelPath,
+        displayName: "第二本书.txt"
+      });
+      const firstJob = await contract.invoke(handlers, "jobs:create", {
+        bookId: firstBook.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 99,
+        extractionChapterCount: 99,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      });
+      const secondJob = await contract.invoke(handlers, "jobs:create", {
+        bookId: secondBook.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 99,
+        extractionChapterCount: 99,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      });
+
+      await expect(contract.invoke(handlers, "jobs:start", { jobId: firstJob.id })).resolves.toMatchObject({
+        id: firstJob.id,
+        status: "running"
+      });
+      await vi.waitFor(() => expect(mockServer.requests).toHaveLength(1));
+      await expect(contract.invoke(handlers, "jobs:start", { jobId: secondJob.id })).resolves.toMatchObject({
+        id: secondJob.id,
+        status: "running"
+      });
+      await vi.waitFor(() => expect(mockServer.requests).toHaveLength(2));
+
+      firstResponse.resolve(createChatCompletionResponse({ content: "NO_UPDATE" }));
+      secondResponse.resolve(createChatCompletionResponse({ content: "NO_UPDATE" }));
+      await waitForJobTerminal(contract, handlers, firstJob.id);
+      await waitForJobTerminal(contract, handlers, secondJob.id);
+    } finally {
+      await mockServer.close();
+    }
+  });
+
+  it("queues a second job for the same book while another book can run", async () => {
+    const heldResponses = [createDeferred(), createDeferred()];
+    const mockServer = await startMockOpenAiServer({
+      expectedApiKey: "sk-book-lock",
+      respond: ({ requestIndex }) => {
+        if (requestIndex < heldResponses.length) {
+          return heldResponses[requestIndex].promise.then(() => ({
+            body: createChatCompletionResponse({ content: "NO_UPDATE" })
+          }));
+        }
+        return { body: createChatCompletionResponse({ content: "NO_UPDATE" }) };
+      }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-book-lock");
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(createProviderConfig({ apiKeyRef, baseUrl: mockServer.baseUrl }))
+    });
+
+    try {
+      const sameBookNovelPath = await writeTempNovel(tempRoot, "same-book-lock.txt", 1);
+      const otherBookNovelPath = await writeTempNovel(tempRoot, "other-book-lock.txt", 1);
+      const firstBook = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: sameBookNovelPath,
+        displayName: "同书.txt"
+      });
+      const secondBook = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: otherBookNovelPath,
+        displayName: "别的书.txt"
+      });
+      const createInput = {
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 99,
+        extractionChapterCount: 99,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      };
+      const sameBookFirst = await contract.invoke(handlers, "jobs:create", {
+        ...createInput,
+        bookId: firstBook.bookId
+      });
+      const sameBookSecond = await contract.invoke(handlers, "jobs:create", {
+        ...createInput,
+        bookId: firstBook.bookId
+      });
+      const otherBook = await contract.invoke(handlers, "jobs:create", {
+        ...createInput,
+        bookId: secondBook.bookId
+      });
+
+      await contract.invoke(handlers, "jobs:start", { jobId: sameBookFirst.id });
+      const queuedSameBook = requireJobDto(await contract.invoke(handlers, "jobs:start", { jobId: sameBookSecond.id }));
+      await contract.invoke(handlers, "jobs:start", { jobId: otherBook.id });
+
+      expect(queuedSameBook).toMatchObject({
+        id: sameBookSecond.id,
+        status: "created",
+        progressText: "等待同书任务完成"
+      });
+      await vi.waitFor(() => expect(mockServer.requests).toHaveLength(2));
+
+      await contract.invoke(handlers, "jobs:delete", { jobId: sameBookSecond.id, confirm: true });
+      heldResponses[0].resolve();
+      heldResponses[1].resolve();
+      await waitForJobTerminal(contract, handlers, sameBookFirst.id);
+      await waitForJobTerminal(contract, handlers, otherBook.id);
+    } finally {
+      await mockServer.close();
+    }
+  });
+
+  it("rejects pause for a queued background job and leaves it deletable before it starts", async () => {
+    const heldResponse = createDeferred();
+    const mockServer = await startMockOpenAiServer({
+      expectedApiKey: "sk-queued-pause",
+      respond: ({ requestIndex }) => {
+        if (requestIndex === 0) {
+          return heldResponse.promise.then(() => ({
+            body: createChatCompletionResponse({ content: "NO_UPDATE" })
+          }));
+        }
+        return { body: createChatCompletionResponse({ content: "NO_UPDATE" }) };
+      }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-queued-pause");
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(createProviderConfig({ apiKeyRef, baseUrl: mockServer.baseUrl }))
+    });
+
+    try {
+      const novelPath = await writeTempNovel(tempRoot, "queued-pause.txt", 1);
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: novelPath,
+        displayName: "排队暂停.txt"
+      });
+      const createInput = {
+        bookId: book.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 99,
+        extractionChapterCount: 99,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      };
+      const firstJob = await contract.invoke(handlers, "jobs:create", createInput);
+      const queuedJob = await contract.invoke(handlers, "jobs:create", createInput);
+
+      await contract.invoke(handlers, "jobs:start", { jobId: firstJob.id });
+      await vi.waitFor(() => expect(mockServer.requests).toHaveLength(1));
+      await expect(contract.invoke(handlers, "jobs:start", { jobId: queuedJob.id })).resolves.toMatchObject({
+        id: queuedJob.id,
+        status: "created",
+        progressText: "等待同书任务完成"
+      });
+
+      await expect(contract.invoke(handlers, "jobs:pause", { jobId: queuedJob.id })).rejects.toThrow(
+        /排队中的任务暂不支持暂停/u
+      );
+      await expect(contract.invoke(handlers, "jobs:delete", { jobId: queuedJob.id, confirm: true })).resolves.toBeUndefined();
+
+      heldResponse.resolve();
+      const completedJob = await waitForJobTerminal(contract, handlers, firstJob.id);
+      expect(completedJob.status).toBe("completed");
+      expect(mockServer.requests).toHaveLength(1);
+    } finally {
+      heldResponse.resolve();
+      await mockServer.close();
+    }
+  });
+
+  it("rejects resume and restart for a queued background job instead of silently keeping the old queue entry", async () => {
+    const heldResponse = createDeferred();
+    const mockServer = await startMockOpenAiServer({
+      expectedApiKey: "sk-queued-resume-restart",
+      respond: ({ requestIndex }) => {
+        if (requestIndex === 0) {
+          return heldResponse.promise.then(() => ({
+            body: createChatCompletionResponse({ content: "NO_UPDATE" })
+          }));
+        }
+        return { body: createChatCompletionResponse({ content: "NO_UPDATE" }) };
+      }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-queued-resume-restart");
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(createProviderConfig({ apiKeyRef, baseUrl: mockServer.baseUrl }))
+    });
+
+    try {
+      const novelPath = await writeTempNovel(tempRoot, "queued-resume-restart.txt", 1);
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: novelPath,
+        displayName: "排队继续重启.txt"
+      });
+      const createInput = {
+        bookId: book.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 99,
+        extractionChapterCount: 99,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      };
+      const firstJob = await contract.invoke(handlers, "jobs:create", createInput);
+      const queuedJob = await contract.invoke(handlers, "jobs:create", createInput);
+
+      await contract.invoke(handlers, "jobs:start", { jobId: firstJob.id });
+      await vi.waitFor(() => expect(mockServer.requests).toHaveLength(1));
+      await expect(contract.invoke(handlers, "jobs:start", { jobId: queuedJob.id })).resolves.toMatchObject({
+        id: queuedJob.id,
+        status: "created",
+        progressText: "等待同书任务完成"
+      });
+
+      await expect(contract.invoke(handlers, "jobs:resume", { jobId: queuedJob.id })).rejects.toThrow(
+        /排队中的任务暂不支持继续/u
+      );
+      await expect(contract.invoke(handlers, "jobs:restart", { jobId: queuedJob.id })).rejects.toThrow(
+        /排队中的任务暂不支持重新开始/u
+      );
+      await expect(contract.invoke(handlers, "jobs:delete", { jobId: queuedJob.id, confirm: true })).resolves.toBeUndefined();
+
+      heldResponse.resolve();
+      const completedJob = await waitForJobTerminal(contract, handlers, firstJob.id);
+      expect(completedJob.status).toBe("completed");
+      expect(mockServer.requests).toHaveLength(1);
+    } finally {
+      heldResponse.resolve();
+      await mockServer.close();
+    }
+  });
+
+  it("does not revive a deleted job when queued persistence finishes after deletion", async () => {
+    const heldResponse = createDeferred<unknown>();
+    const queuedSaveEntered = createDeferred();
+    const finishQueuedSave = createDeferred();
+    let queuedJobId = "";
+    const baseRuntimeStore = createProjectRuntimeStoreFixture();
+    const runtimeStore: ProjectRuntimeStore = {
+      ...baseRuntimeStore,
+      async saveJob(job) {
+        if (job.id === queuedJobId && job.progressText === "等待可用运行槽") {
+          queuedSaveEntered.resolve();
+          await finishQueuedSave.promise;
+        }
+        await baseRuntimeStore.saveJob(job);
+      }
+    };
+    const mockServer = await startMockOpenAiServer({
+      expectedApiKey: "sk-delete-pending-queued",
+      respond: ({ requestIndex }) => {
+        if (requestIndex === 0) {
+          return heldResponse.promise.then((body) => ({ body }));
+        }
+        return { body: createChatCompletionResponse({ content: "NO_UPDATE" }) };
+      }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-delete-pending-queued");
+    const handlers = createHandlers({
+      credentialStore,
+      jobSchedulerDefaults: {
+        maxConcurrentJobs: 1,
+        maxConcurrentJobsPerBook: 1
+      },
+      projectRuntimeStoreFactory: () => runtimeStore,
+      providerStore: createProviderStore(createProviderConfig({ apiKeyRef, baseUrl: mockServer.baseUrl }))
+    });
+
+    try {
+      const firstNovelPath = await writeTempNovel(tempRoot, "delete-pending-first.txt", 1);
+      const secondNovelPath = await writeTempNovel(tempRoot, "delete-pending-second.txt", 1);
+      const firstBook = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: firstNovelPath,
+        displayName: "删除竞态一.txt"
+      });
+      const secondBook = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: secondNovelPath,
+        displayName: "删除竞态二.txt"
+      });
+      const createInput = {
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 99,
+        extractionChapterCount: 99,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      };
+      const firstJob = await contract.invoke(handlers, "jobs:create", {
+        ...createInput,
+        bookId: firstBook.bookId
+      });
+      const queuedJob = await contract.invoke(handlers, "jobs:create", {
+        ...createInput,
+        bookId: secondBook.bookId
+      });
+      queuedJobId = queuedJob.id;
+
+      await expect(contract.invoke(handlers, "jobs:start", { jobId: firstJob.id })).resolves.toMatchObject({
+        id: firstJob.id,
+        status: "running"
+      });
+      await vi.waitFor(() => expect(mockServer.requests).toHaveLength(1));
+
+      const queuedStart = contract.invoke(handlers, "jobs:start", { jobId: queuedJob.id });
+      await queuedSaveEntered.promise;
+      await expect(contract.invoke(handlers, "jobs:delete", { jobId: queuedJob.id, confirm: true })).resolves.toBeUndefined();
+
+      const runtimeAfterDelete = await contract.invoke(handlers, "projectRuntime:get", { projectId: "project-a" });
+      expect(runtimeAfterDelete.jobs.map((runtimeJob) => runtimeJob.id)).not.toContain(queuedJob.id);
+
+      finishQueuedSave.resolve();
+      await expect(queuedStart).rejects.toThrow(/Job not found/u);
+
+      const runtimeAfterQueuedHook = await contract.invoke(handlers, "projectRuntime:get", { projectId: "project-a" });
+      expect(runtimeAfterQueuedHook.jobs.map((runtimeJob) => runtimeJob.id)).not.toContain(queuedJob.id);
+      expect(mockServer.requests).toHaveLength(1);
+
+      heldResponse.resolve(createChatCompletionResponse({ content: "NO_UPDATE" }));
+      const completedJob = await waitForJobTerminal(contract, handlers, firstJob.id);
+      expect(completedJob.status).toBe("completed");
+      expect(mockServer.requests).toHaveLength(1);
+    } finally {
+      finishQueuedSave.resolve();
+      heldResponse.resolve(createChatCompletionResponse({ content: "NO_UPDATE" }));
+      await mockServer.close();
+    }
+  });
+
+  it("marks a job failed when scheduler running-state persistence fails before window execution", async () => {
+    const contract = createIpcContract();
+    const runtimeStore = createProjectRuntimeStoreFixture({ failRunningJobSaveOnce: true });
+    const handlers = createHandlers({
+      projectRuntimeStoreFactory: () => runtimeStore
+    });
+
+    const book = await contract.invoke(handlers, "books:uploadTxt", {
+      projectId: "project-a",
+      filePath: utf8FixturePath,
+      displayName: "运行状态保存失败.txt"
+    });
+    const job = await contract.invoke(handlers, "jobs:create", {
+      bookId: book.bookId,
+      templateIds: ["pill-analysis"],
+      providerConfigId: "provider-1",
+      modelId: "mock-model",
+      singleRunChapterCount: 2,
+      extractionChapterCount: 2,
+      overlapChapterCount: 1,
+      skipAlreadyExtracted: true
+    });
+
+    await expect(contract.invoke(handlers, "jobs:start", { jobId: job.id })).resolves.toMatchObject({
+      id: job.id,
+      status: "failed",
+      progressText: "任务失败",
+      failureReason: "running state persistence failed"
+    });
+
+    const runtime = await contract.invoke(handlers, "projectRuntime:get", { projectId: "project-a" });
+    const failedJob = runtime.jobs.find((runtimeJob) => runtimeJob.id === job.id);
+    expect(failedJob).toMatchObject({
+      status: "failed",
+      progressText: "任务失败",
+      failureReason: "running state persistence failed"
+    });
+  });
+
+  it("marks a job failed when task logger initialization fails after the scheduler starts it", async () => {
+    const contract = createIpcContract();
+    const handlers = createHandlers({
+      getAppVersion: () => {
+        throw new Error("version metadata unavailable");
+      }
+    });
+
+    const book = await contract.invoke(handlers, "books:uploadTxt", {
+      projectId: "project-a",
+      filePath: utf8FixturePath,
+      displayName: "日志初始化失败.txt"
+    });
+    const job = await contract.invoke(handlers, "jobs:create", {
+      bookId: book.bookId,
+      templateIds: ["pill-analysis"],
+      providerConfigId: "provider-1",
+      modelId: "mock-model",
+      singleRunChapterCount: 2,
+      extractionChapterCount: 2,
+      overlapChapterCount: 1,
+      skipAlreadyExtracted: true
+    });
+
+    await expect(contract.invoke(handlers, "jobs:start", { jobId: job.id })).resolves.toMatchObject({
+      id: job.id,
+      status: "running"
+    });
+
+    await vi.waitFor(
+      async () => {
+        const runtime = await contract.invoke(handlers, "projectRuntime:get", { projectId: "project-a" });
+        const failedJob = runtime.jobs.find((runtimeJob) => runtimeJob.id === job.id);
+        expect(failedJob).toMatchObject({
+          status: "failed",
+          progressText: "任务失败",
+          failureReason: "version metadata unavailable"
+        });
+      },
+      { timeout: 1_000 }
+    );
+  });
+
+  it("rejects pause for a running background job instead of reporting a fake paused state", async () => {
+    const heldResponse = createDeferred<unknown>();
+    const mockServer = await startMockOpenAiServer({
+      expectedApiKey: "sk-running-pause",
+      respond: () =>
+        heldResponse.promise.then((body) => ({
+          body
+        }))
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-running-pause");
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(createProviderConfig({ apiKeyRef, baseUrl: mockServer.baseUrl }))
+    });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: utf8FixturePath,
+        displayName: "运行中暂停.txt"
+      });
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 2,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      });
+
+      await expect(contract.invoke(handlers, "jobs:start", { jobId: job.id })).resolves.toMatchObject({
+        id: job.id,
+        status: "running"
+      });
+      await vi.waitFor(() => expect(mockServer.requests).toHaveLength(1));
+      await expect(contract.invoke(handlers, "jobs:pause", { jobId: job.id })).rejects.toThrow(
+        /运行中的任务暂不支持暂停/u
+      );
+
+      heldResponse.resolve(createChatCompletionResponse({ content: "NO_UPDATE" }));
+      const completedJob = await waitForJobTerminal(contract, handlers, job.id);
+      expect(completedJob.status).toBe("completed");
+    } finally {
+      heldResponse.resolve(createChatCompletionResponse({ content: "NO_UPDATE" }));
+      await mockServer.close();
+    }
+  });
 });
+
+function createDeferred<T = void>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}

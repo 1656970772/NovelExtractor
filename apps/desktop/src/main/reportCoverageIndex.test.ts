@@ -63,6 +63,48 @@ describe("report coverage index", () => {
     ).toBe(false);
   });
 
+  it("merges records saved by concurrent stores for the same index path", async () => {
+    const firstStore = await loadReportCoverageIndex({
+      projectRoot: tempRoot,
+      relativePath: "metadata/coverage/coverage-index.json",
+      corruptionStrategy: "fail"
+    });
+    const secondStore = await loadReportCoverageIndex({
+      projectRoot: tempRoot,
+      relativePath: "metadata/coverage/coverage-index.json",
+      corruptionStrategy: "fail"
+    });
+    const secondTarget = {
+      ...coverageTarget,
+      bookId: "book-2",
+      windowHash: "window-hash-2"
+    };
+
+    firstStore.recordCovered({
+      ...coverageTarget,
+      status: "written",
+      updatedAt: "2026-06-30T00:00:00.000Z"
+    });
+    secondStore.recordCovered({
+      ...secondTarget,
+      status: "no_update",
+      updatedAt: "2026-06-30T00:01:00.000Z"
+    });
+
+    await firstStore.save();
+    await secondStore.save();
+
+    const reloaded = await loadReportCoverageIndex({
+      projectRoot: tempRoot,
+      relativePath: "metadata/coverage/coverage-index.json",
+      corruptionStrategy: "fail"
+    });
+
+    expect(reloaded.isCovered(coverageTarget)).toBe(true);
+    expect(reloaded.isCovered(secondTarget)).toBe(true);
+    expect(reloaded.records()).toHaveLength(2);
+  });
+
   it("fails closed when the index is damaged and the corruption strategy is fail", async () => {
     const coveragePath = path.join(tempRoot, "metadata", "coverage", "coverage-index.json");
     await fs.mkdir(path.dirname(coveragePath), { recursive: true });
@@ -75,5 +117,32 @@ describe("report coverage index", () => {
         corruptionStrategy: "fail"
       })
     ).rejects.toThrow(/coverage index is damaged/i);
+  });
+
+  it("rebuilds a damaged index on save when conservative rerun is configured", async () => {
+    const coveragePath = path.join(tempRoot, "metadata", "coverage", "coverage-index.json");
+    await fs.mkdir(path.dirname(coveragePath), { recursive: true });
+    await fs.writeFile(coveragePath, "{ damaged", "utf8");
+
+    const index = await loadReportCoverageIndex({
+      projectRoot: tempRoot,
+      relativePath: "metadata/coverage/coverage-index.json",
+      corruptionStrategy: "conservative-rerun"
+    });
+
+    index.recordCovered({
+      ...coverageTarget,
+      status: "written",
+      updatedAt: "2026-06-30T00:00:00.000Z"
+    });
+    await expect(index.save()).resolves.toBeUndefined();
+
+    const reloaded = await loadReportCoverageIndex({
+      projectRoot: tempRoot,
+      relativePath: "metadata/coverage/coverage-index.json",
+      corruptionStrategy: "fail"
+    });
+    expect(reloaded.isCovered(coverageTarget)).toBe(true);
+    expect(reloaded.records()).toHaveLength(1);
   });
 });

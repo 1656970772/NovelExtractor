@@ -454,6 +454,26 @@ function assertMenuItemsHaveLabels(items: MenuItemConfig[], label: string): void
   }
 }
 
+function assertJobSchedulerDefaults(config: NovelExtractorConfig): void {
+  const defaults = config.jobSchedulerDefaults;
+  assertConfigObject(defaults, "job scheduler defaults");
+  assertPositiveInteger(defaults.maxConcurrentJobs, "job scheduler max concurrent jobs");
+  assertPositiveInteger(defaults.maxAllowedConcurrentJobs, "job scheduler max allowed concurrent jobs");
+  assertPositiveInteger(defaults.maxConcurrentJobsPerBook, "job scheduler per book concurrent jobs");
+  assertNonEmpty(defaults.queuedByGlobalLimitText, "global limit queue text");
+  assertNonEmpty(defaults.queuedByBookLimitText, "book limit queue text");
+
+  if (defaults.maxConcurrentJobs > defaults.maxAllowedConcurrentJobs) {
+    throw new ConfigInvariantError(
+      "job scheduler max concurrent jobs must not exceed max allowed concurrent jobs."
+    );
+  }
+
+  if (defaults.maxConcurrentJobsPerBook !== 1) {
+    throw new ConfigInvariantError("job scheduler per book concurrent jobs must be 1.");
+  }
+}
+
 export function assertValidConfigInvariants(config: NovelExtractorConfig): void {
   assertProviderPresets(config);
 
@@ -563,6 +583,7 @@ export function assertValidConfigInvariants(config: NovelExtractorConfig): void 
   assertReportPathPolicyDefaults(config);
   assertRuleLayerDefaults(config);
   assertQuantityPolicyDefaults(config);
+  assertJobSchedulerDefaults(config);
 
   assertUnique(
     [...config.menu.mainNavigation, ...config.menu.userMenu].map((item) => item.id),

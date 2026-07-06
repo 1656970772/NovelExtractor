@@ -427,4 +427,34 @@ describe("config invariants", () => {
     emptyHint.toolLoopDefaults.recoverableToolErrorHints.tool_invalid_arguments = " ";
     expectInvariantViolation(emptyHint, /tool_invalid_arguments/i);
   });
+
+  it("requires valid job scheduler concurrency limits", () => {
+    expectInvariantViolation(withJobSchedulerDefaults({ maxConcurrentJobs: 0 }), /job scheduler max concurrent jobs/i);
+    expectInvariantViolation(withJobSchedulerDefaults({ maxAllowedConcurrentJobs: 0 }), /job scheduler max allowed concurrent jobs/i);
+    expectInvariantViolation(
+      withJobSchedulerDefaults({ maxConcurrentJobs: 4, maxAllowedConcurrentJobs: 3 }),
+      /job scheduler max concurrent jobs/i
+    );
+    expectInvariantViolation(withJobSchedulerDefaults({ maxConcurrentJobsPerBook: 2 }), /job scheduler per book/i);
+  });
+
+  it("requires job scheduler queue labels to be configured", () => {
+    expectInvariantViolation(withJobSchedulerDefaults({ queuedByGlobalLimitText: " " }), /global limit queue text/i);
+    expectInvariantViolation(withJobSchedulerDefaults({ queuedByBookLimitText: "" }), /book limit queue text/i);
+  });
 });
+
+function withJobSchedulerDefaults(
+  overrides: Partial<NovelExtractorConfig["jobSchedulerDefaults"]>
+): NovelExtractorConfig {
+  const config = getDefaultConfig();
+  config.jobSchedulerDefaults = {
+    maxConcurrentJobs: 2,
+    maxAllowedConcurrentJobs: 3,
+    maxConcurrentJobsPerBook: 1,
+    queuedByGlobalLimitText: "等待可用运行槽",
+    queuedByBookLimitText: "等待同书任务完成",
+    ...overrides
+  };
+  return config;
+}

@@ -192,6 +192,14 @@ export interface QuantityPolicyDefaults {
   evidenceScope: "current-window";
 }
 
+export interface JobSchedulerDefaults {
+  maxConcurrentJobs: number;
+  maxAllowedConcurrentJobs: number;
+  maxConcurrentJobsPerBook: number;
+  queuedByGlobalLimitText: string;
+  queuedByBookLimitText: string;
+}
+
 export interface ReportFileNameInput {
   name: string;
   outputFileName?: string;
@@ -304,6 +312,7 @@ export interface NovelExtractorConfig {
   reportPathPolicyDefaults: ReportPathPolicyDefaults;
   ruleLayerDefaults: RuleLayerDefaults;
   quantityPolicyDefaults: QuantityPolicyDefaults;
+  jobSchedulerDefaults: JobSchedulerDefaults;
   taskActions: TaskActionConfig;
   taskStatus: TaskStatusConfig;
   assetTypes: AssetTypeConfig[];

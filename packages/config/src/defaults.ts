@@ -231,6 +231,13 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
     defaultMinItemsWhenEvidenceExists: 1,
     evidenceScope: "current-window"
   },
+  jobSchedulerDefaults: {
+    maxConcurrentJobs: 2,
+    maxAllowedConcurrentJobs: 3,
+    maxConcurrentJobsPerBook: 1,
+    queuedByGlobalLimitText: "等待可用运行槽",
+    queuedByBookLimitText: "等待同书任务完成"
+  },
   taskActions: {
     start: {
       label: "开始"
@@ -255,7 +262,7 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
     },
     running: {
       label: "运行中",
-      allowedActions: ["pause"]
+      allowedActions: []
     },
     paused: {
       label: "已暂停",

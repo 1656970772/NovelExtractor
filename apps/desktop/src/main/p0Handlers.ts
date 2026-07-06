@@ -6,7 +6,8 @@ import {
   getDefaultConfig,
   getTaskStatusConfig,
   type TaskAction,
-  type TemplateGroupFallbackStrategy
+  type TemplateGroupFallbackStrategy,
+  type NovelExtractorConfig
 } from "@novel-extractor/config";
 import type { Book, Chapter, Clock, IdGenerator, Project, ReportAsset } from "@novel-extractor/domain";
 import { toTaskStatus, type JobStatus } from "@novel-extractor/domain/job";
@@ -25,6 +26,7 @@ import type { FetchLike } from "@novel-extractor/llm";
 import { renderSafeMarkdown } from "@novel-extractor/markdown/preview";
 import { createMemoryCredentialStore, type MemoryCredentialStore } from "./credentials";
 import type { DesktopIpcHandlers } from "./ipc";
+import { createJobScheduler, type JobScheduler, type QueueBlockReason } from "./jobScheduler";
 import {
   createFileProjectRuntimeStore,
   type ProjectRuntimeJobProgressRecord,
@@ -103,6 +105,7 @@ export interface P0IpcHandlersOptions {
   estimateRandom?: () => number;
   onJobUpdated?: (job: JobDto) => void;
   enabledToolNames?: readonly string[];
+  jobSchedulerDefaults?: Partial<NovelExtractorConfig["jobSchedulerDefaults"]>;
   shell?: {
     openPath(path: string): Promise<string>;
   };
@@ -526,10 +529,14 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     process.env.NOVEL_EXTRACTOR_E2E_DATA_DIR ??
     path.join(process.cwd(), ".novel-extractor-data");
 
+  const schedulerDefaults = {
+    ...getDefaultConfig().jobSchedulerDefaults,
+    ...options.jobSchedulerDefaults
+  };
+
   const booksById = new Map<string, Book>();
   const chaptersByBookId = new Map<string, Chapter[]>();
   const jobsById = new Map<string, P0JobRecord>();
-  const activeJobRuns = new Map<string, Promise<JobDto>>();
   const reportsById = new Map<string, ReportAsset>();
   const reportPathById = new Map<string, string>();
   const projectRuntimeStoresByRoot = new Map<string, ProjectRuntimeStore>();
@@ -1373,14 +1380,15 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     };
   }
 
-  async function runModelBackedJob(
+  function toInitialRunningPatch(
     job: P0JobRecord,
-    runOptions?: RunModelBackedJobOptions
-  ): Promise<JobDto> {
-    const taskLogger = await createTaskLoggerForJob(job);
-    const initialRunJob = withRunOptions(job, runOptions);
-    const initialTotalWindowCount = estimateRuntimeWindowCount(requireBook(job.bookId), initialRunJob.input);
-    const shouldRestartFromScratch = runOptions?.skipAlreadyExtracted === false;
+    input: {
+      initialTotalWindowCount: number;
+      logFilePath?: string;
+      runOptions?: RunModelBackedJobOptions;
+    }
+  ): Partial<P0JobRecord> {
+    const shouldRestartFromScratch = input.runOptions?.skipAlreadyExtracted === false;
     const shouldStartNewVisibleTimer =
       shouldRestartFromScratch || job.status === "paused" || job.status === "failed";
     const runningStartedAt =
@@ -1391,15 +1399,16 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       shouldRestartFromScratch
         ? createInitialWindowEstimateMs()
         : (job.timing?.initialWindowEstimateMs ?? createInitialWindowEstimateMs());
-    let runningJob = await updateJob(job, {
+
+    return {
       status: "running",
       progressText: "正在准备运行窗口",
       tokenText: formatTokenText(null),
       failureReason: undefined,
-      logFilePath: taskLogger.relativePath,
+      logFilePath: input.logFilePath ?? job.logFilePath,
       progress: {
         completedWindowCount: 0,
-        totalWindowCount: initialTotalWindowCount,
+        totalWindowCount: input.initialTotalWindowCount,
         skippedWindowCount: 0,
         executedWindowCount: 0
       },
@@ -1408,15 +1417,45 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
         startedAt: runningStartedAt,
         completedAt: undefined,
         initialWindowEstimateMs,
-        effectiveTotalWindowCount: initialTotalWindowCount,
+        effectiveTotalWindowCount: input.initialTotalWindowCount,
         executedWindowElapsedMs: 0,
-        estimatedTotalMs: initialWindowEstimateMs * initialTotalWindowCount,
+        estimatedTotalMs: initialWindowEstimateMs * input.initialTotalWindowCount,
         estimatedRemainingMs: undefined,
         estimateFrozenAt: undefined
       }
-    });
+    };
+  }
+
+  async function markJobRunning(
+    job: P0JobRecord,
+    input: {
+      logFilePath?: string;
+      runOptions?: RunModelBackedJobOptions;
+    } = {}
+  ): Promise<P0JobRecord> {
+    return updateJob(
+      job,
+      toInitialRunningPatch(job, {
+        ...input,
+        initialTotalWindowCount: estimateRuntimeWindowCount(requireBook(job.bookId), job.input)
+      })
+    );
+  }
+
+  async function runModelBackedJob(
+    job: P0JobRecord,
+    runOptions?: RunModelBackedJobOptions
+  ): Promise<JobDto> {
+    const initialRunJob = withRunOptions(job, runOptions);
+    let runningJob = initialRunJob;
+    let taskLogger: TaskTextLogger | undefined;
 
     try {
+      taskLogger = await createTaskLoggerForJob(initialRunJob);
+      runningJob = await markJobRunning(initialRunJob, {
+        logFilePath: taskLogger.relativePath,
+        runOptions
+      });
       const artifacts = await preparePreRunArtifacts(withRunOptions(runningJob, runOptions));
       await taskLogger.append(["上下文", "任务"], {
         任务ID: runningJob.id,
@@ -1478,30 +1517,79 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
 
       return await buildJobDto(requireJob(runningJob.id));
     } catch (error) {
-      await taskLogger.append(["错误", "任务"], getFailureReason(error));
+      if (taskLogger) {
+        try {
+          await taskLogger.append(["错误", "任务"], getFailureReason(error));
+        } catch {
+          // The job status is the source of truth; logging must not keep it running forever.
+        }
+      }
+      const latestJob = jobsById.get(runningJob.id) ?? runningJob;
       return await buildJobDto(
-        await updateJob(runningJob, {
-          ...toTerminalFailurePatch(runningJob, getFailureReason(error)),
+        await updateJob(latestJob, {
+          ...toTerminalFailurePatch(latestJob, getFailureReason(error)),
           progressText: "任务失败"
         })
       );
     }
   }
 
-  function runOrReuseModelBackedJob(
+  const jobScheduler = createJobScheduler<P0JobRecord>({
+    maxConcurrentJobs: schedulerDefaults.maxConcurrentJobs,
+    maxConcurrentJobsPerBook: schedulerDefaults.maxConcurrentJobsPerBook,
+    async onStarted(job) {
+      const latestJob = requireJob(job.id);
+      const runOptions = job.input.skipAlreadyExtracted === latestJob.input.skipAlreadyExtracted
+        ? undefined
+        : { skipAlreadyExtracted: job.input.skipAlreadyExtracted };
+
+      await markJobRunning(withRunOptions(latestJob, runOptions), { runOptions });
+    },
+    async run(job) {
+      const latestJob = requireJob(job.id);
+      const runOptions = job.input.skipAlreadyExtracted === latestJob.input.skipAlreadyExtracted
+        ? undefined
+        : { skipAlreadyExtracted: job.input.skipAlreadyExtracted };
+
+      await runModelBackedJob(latestJob, runOptions);
+    },
+    async onQueued(job, reason) {
+      const latestJob = requireJob(job.id);
+      await updateJob(latestJob, {
+        progressText:
+          reason === "book_limit"
+            ? schedulerDefaults.queuedByBookLimitText
+            : schedulerDefaults.queuedByGlobalLimitText
+      });
+    }
+  });
+
+  async function enqueueModelBackedJob(
     job: P0JobRecord,
     runOptions?: RunModelBackedJobOptions
   ): Promise<JobDto> {
-    const activeRun = activeJobRuns.get(job.id);
-    if (activeRun) {
-      return activeRun;
+    const scheduledJob = withRunOptions(job, runOptions);
+    try {
+      await jobScheduler.enqueue(scheduledJob);
+      return await buildJobDto(requireJob(job.id));
+    } catch (error) {
+      const existingJob = jobsById.get(job.id);
+      if (!existingJob) {
+        throw error;
+      }
+      const latestJob = withRunOptions(existingJob, runOptions);
+      const failedJob = await updateJob(latestJob, {
+        ...toTerminalFailurePatch(latestJob, getFailureReason(error)),
+        progressText: "任务失败"
+      });
+      return await buildJobDto(failedJob);
     }
+  }
 
-    const runPromise = runModelBackedJob(job, runOptions).finally(() => {
-      activeJobRuns.delete(job.id);
-    });
-    activeJobRuns.set(job.id, runPromise);
-    return runPromise;
+  function assertJobNotQueuedForAction(jobId: string, actionLabel: string): void {
+    if (jobScheduler.isQueued(jobId)) {
+      throw new Error(`排队中的任务暂不支持${actionLabel}；可删除排队任务或等待运行。`);
+    }
   }
 
   async function updateJob(
@@ -1513,8 +1601,24 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       ...patch,
       updatedAt: clock.now()
     };
+    const previousJob = jobsById.get(nextJob.id);
     jobsById.set(nextJob.id, nextJob);
-    await persistJob(nextJob);
+    try {
+      await persistJob(nextJob);
+    } catch (error) {
+      if (jobsById.get(nextJob.id) === nextJob) {
+        if (previousJob) {
+          jobsById.set(previousJob.id, previousJob);
+        } else {
+          jobsById.delete(nextJob.id);
+        }
+      }
+      throw error;
+    }
+    if (!jobsById.has(nextJob.id)) {
+      await deletePersistedJob(nextJob);
+      throw new Error(`Job not found: ${nextJob.id}`);
+    }
     await notifyJobUpdated(nextJob);
     return nextJob;
   }
@@ -1653,26 +1757,42 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     },
     "jobs:start": async (input) => {
       const job = requireJob(input.jobId);
-      return runOrReuseModelBackedJob(job);
+      return enqueueModelBackedJob(job);
     },
     "jobs:pause": async (input) => {
       const job = requireJob(input.jobId);
-      return await buildJobDto(await updateJob(job, { status: "paused", progressText: "已暂停" }));
+      if (jobScheduler.isRunning(job.id)) {
+        throw new Error("运行中的任务暂不支持暂停；请等待当前任务完成后再继续操作。");
+      }
+      if (jobScheduler.isQueued(job.id)) {
+        throw new Error("排队中的任务暂不支持暂停；可删除排队任务或等待运行。");
+      }
+      if (job.status === "paused") {
+        return await buildJobDto(job);
+      }
+      throw new Error("当前任务状态不支持暂停。");
     },
     "jobs:resume": async (input) => {
       const job = requireJob(input.jobId);
-      return runOrReuseModelBackedJob(job);
+      assertJobNotQueuedForAction(job.id, "继续");
+      return enqueueModelBackedJob(job);
     },
     "jobs:restart": async (input) => {
       const job = requireJob(input.jobId);
-      return runOrReuseModelBackedJob(job, { skipAlreadyExtracted: false });
+      assertJobNotQueuedForAction(job.id, "重新开始");
+      return enqueueModelBackedJob(job, { skipAlreadyExtracted: false });
     },
     "jobs:delete": async (input) => {
       if (!input.confirm) {
         throw new Error("Delete confirmation is required");
       }
-      const job = jobsById.get(input.jobId);
-      jobsById.delete(input.jobId);
+      const jobId = input.jobId;
+      jobScheduler.remove(jobId);
+      if (jobScheduler.isRunning(jobId)) {
+        throw new Error("运行中的任务不能删除，请先等待任务完成或暂停。");
+      }
+      const job = jobsById.get(jobId);
+      jobsById.delete(jobId);
       if (job) {
         await deletePersistedJob(job);
       }

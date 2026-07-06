@@ -485,7 +485,7 @@ describe("desktop workbench shell", () => {
       progressText: "进度：1/3",
       tokenText: "Token 100 / 缓存命中率 75.00%",
       logFilePath: "runs/job-1/logs/live.txt",
-      allowedActions: ["pause"],
+      allowedActions: [],
       createdAt: "2026-06-27T00:00:00.000Z",
       updatedAt: "2026-06-27T00:02:00.000Z"
     });
@@ -496,7 +496,7 @@ describe("desktop workbench shell", () => {
       progressText: "正在准备运行窗口",
       tokenText: "Token 0 / 缓存命中率 0.00%",
       logFilePath: "runs/job-1/logs/restart.txt",
-      allowedActions: ["pause"],
+      allowedActions: [],
       createdAt: "2026-06-27T00:00:00.000Z",
       updatedAt: "2026-06-27T00:03:00.000Z"
     });
@@ -625,7 +625,7 @@ describe("desktop workbench shell", () => {
         progressText: "进度：1/3",
         tokenText: "Token 99 / 缓存命中率 50.00%",
         logFilePath: "runs/job-1/logs/live.txt",
-        allowedActions: ["pause"],
+        allowedActions: [],
         createdAt: "2026-06-27T00:00:00.000Z",
         updatedAt: "2026-06-27T00:01:00.000Z"
       });
@@ -650,7 +650,7 @@ describe("desktop workbench shell", () => {
           status: "running",
           progressText: "1/4",
           logFilePath: "runs/job-1/logs/20260702-043645.txt",
-          allowedActions: ["pause"],
+          allowedActions: [],
           createdAt: "2026-07-02T04:36:45.000Z",
           updatedAt: "2026-07-02T04:36:45.000Z"
         }

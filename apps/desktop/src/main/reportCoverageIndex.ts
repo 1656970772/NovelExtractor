@@ -32,6 +32,8 @@ interface CoverageIndexFile {
   records: ReportCoverageRecord[];
 }
 
+const saveLocksByPath = new Map<string, Promise<void>>();
+
 export interface LoadReportCoverageIndexInput {
   projectRoot: string;
   relativePath: string;
@@ -61,7 +63,52 @@ function assertCoverageFile(value: unknown): asserts value is CoverageIndexFile 
   }
 }
 
-function createStore(indexPath: string, records: ReportCoverageRecord[]): ReportCoverageIndexStore {
+async function readCoverageRecords(indexPath: string): Promise<ReportCoverageRecord[]> {
+  try {
+    const rawIndex = await fs.readFile(indexPath, "utf8");
+    const parsedIndex: unknown = JSON.parse(rawIndex);
+    assertCoverageFile(parsedIndex);
+    return parsedIndex.records;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function runWithSaveLock(indexPath: string, action: () => Promise<void>): Promise<void> {
+  const previousSave = saveLocksByPath.get(indexPath) ?? Promise.resolve();
+  const currentSave = previousSave.catch(() => undefined).then(action);
+  saveLocksByPath.set(indexPath, currentSave);
+  try {
+    await currentSave;
+  } finally {
+    if (saveLocksByPath.get(indexPath) === currentSave) {
+      saveLocksByPath.delete(indexPath);
+    }
+  }
+}
+
+async function readCoverageRecordsForSave(
+  indexPath: string,
+  corruptionStrategy: CoverageIndexCorruptionStrategy
+): Promise<ReportCoverageRecord[]> {
+  try {
+    return await readCoverageRecords(indexPath);
+  } catch (error) {
+    if (corruptionStrategy === "conservative-rerun") {
+      return [];
+    }
+    throw error;
+  }
+}
+
+function createStore(
+  indexPath: string,
+  records: ReportCoverageRecord[],
+  corruptionStrategy: CoverageIndexCorruptionStrategy
+): ReportCoverageIndexStore {
   const recordsByKey = new Map(records.map((record) => [toCoverageKey(record), record]));
 
   return {
@@ -77,15 +124,33 @@ function createStore(indexPath: string, records: ReportCoverageRecord[]): Report
       );
     },
     async save() {
-      const nextIndex: CoverageIndexFile = {
-        version: 1,
-        records: this.records()
-      };
-      const tempPath = `${indexPath}.${process.pid}.${Date.now()}.tmp`;
+      await runWithSaveLock(indexPath, async () => {
+        const mergedRecordsByKey = new Map(
+          (await readCoverageRecordsForSave(indexPath, corruptionStrategy)).map((record) => [
+            toCoverageKey(record),
+            record
+          ])
+        );
+        for (const record of recordsByKey.values()) {
+          mergedRecordsByKey.set(toCoverageKey(record), record);
+        }
+        recordsByKey.clear();
+        for (const [key, record] of mergedRecordsByKey) {
+          recordsByKey.set(key, record);
+        }
 
-      await fs.mkdir(path.dirname(indexPath), { recursive: true });
-      await fs.writeFile(tempPath, `${JSON.stringify(nextIndex, null, 2)}\n`, "utf8");
-      await fs.rename(tempPath, indexPath);
+        const nextIndex: CoverageIndexFile = {
+          version: 1,
+          records: this.records()
+        };
+        const tempPath = `${indexPath}.${process.pid}.${Date.now()}.${Math.random()
+          .toString(36)
+          .slice(2)}.tmp`;
+
+        await fs.mkdir(path.dirname(indexPath), { recursive: true });
+        await fs.writeFile(tempPath, `${JSON.stringify(nextIndex, null, 2)}\n`, "utf8");
+        await fs.rename(tempPath, indexPath);
+      });
     }
   };
 }
@@ -96,17 +161,14 @@ export async function loadReportCoverageIndex(
   const indexPath = path.join(input.projectRoot, input.relativePath);
 
   try {
-    const rawIndex = await fs.readFile(indexPath, "utf8");
-    const parsedIndex: unknown = JSON.parse(rawIndex);
-    assertCoverageFile(parsedIndex);
-    return createStore(indexPath, parsedIndex.records);
+    return createStore(indexPath, await readCoverageRecords(indexPath), input.corruptionStrategy);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return createStore(indexPath, []);
+      return createStore(indexPath, [], input.corruptionStrategy);
     }
 
     if (input.corruptionStrategy === "conservative-rerun") {
-      return createStore(indexPath, []);
+      return createStore(indexPath, [], input.corruptionStrategy);
     }
 
     throw new Error("coverage index is damaged", { cause: error });
