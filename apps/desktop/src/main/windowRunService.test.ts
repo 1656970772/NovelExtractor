@@ -510,6 +510,25 @@ describe("window run report inventory", () => {
 });
 
 describe("window run Reasonix tool loop integration", () => {
+  it("returns a recoverable tool error when array arguments do not match the tool schema", async () => {
+    const result = await runWindowWithMockToolCall({
+      existingReports: {
+        "[报告]NPC性格与代表事件.md": "# NPC性格与代表事件\n\n### 韩立\n\n- 核心性格：旧内容。\n"
+      },
+      toolCall: createToolCall("call-bad-updates", "upsert_report_section", {
+        outputFileName: "[报告]NPC性格与代表事件.md",
+        updates: "韩立,核心性格"
+      })
+    });
+
+    expect(result.logText).toContain("tool_schema_invalid_arguments");
+    expect(result.logText).toContain("$.updates 必须是数组");
+    expect(result.logText).not.toContain("updates must be a non-empty array");
+    expect(result.reportContents["[报告]NPC性格与代表事件.md"]).toBe(
+      "# NPC性格与代表事件\n\n### 韩立\n\n- 核心性格：旧内容。\n"
+    );
+  });
+
   it("redacts full current-window read_file results from detailed logs only", async () => {
     const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-read-log-redaction-"));
     scratchDirs.push(projectRoot);
@@ -2510,6 +2529,91 @@ function createWindowRunJob(input: { skipAlreadyExtracted?: boolean; templateIds
       skipAlreadyExtracted: input.skipAlreadyExtracted ?? false,
       templateIds: input.templateIds
     }
+  };
+}
+
+async function runWindowWithMockToolCall(input: {
+  existingReports?: Record<string, string>;
+  toolCall: Record<string, unknown>;
+}): Promise<{
+  logText: string;
+  reportContents: Record<string, string>;
+  requestBodies: Record<string, unknown>[];
+}> {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-schema-validation-"));
+  scratchDirs.push(projectRoot);
+  const reportsRoot = path.join(projectRoot, "assets", "books", "book-1", "reports");
+  const windowTextPath = path.join(projectRoot, "runs", "job-1", "windows", "window-0001.txt");
+  const append = vi.fn(async () => {});
+  const requestBodies: Record<string, unknown>[] = [];
+  const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+  const apiKeyRef = credentialStore.saveApiKey({
+    providerConfigId: "provider-1",
+    apiKey: "sk-window-loop"
+  });
+  const templates = [createTemplate({ id: "npc", name: "NPC", fileName: "[报告]NPC性格与代表事件.md" })];
+  const artifacts = createWindowArtifacts({ projectRoot, templates, windowCount: 1 });
+
+  await fs.mkdir(path.dirname(windowTextPath), { recursive: true });
+  await fs.mkdir(reportsRoot, { recursive: true });
+  await fs.writeFile(windowTextPath, "第一章 韩立谨慎行事。", "utf8");
+  await Promise.all(
+    Object.entries(input.existingReports ?? {}).map(async ([fileName, content]) => {
+      await fs.writeFile(path.join(reportsRoot, fileName), content, "utf8");
+    })
+  );
+
+  const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    requestBodies.push(body);
+
+    if (requestBodies.length === 1) {
+      return new Response(JSON.stringify(createChatCompletionResponse({ toolCalls: [input.toolCall] })), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      });
+    }
+
+    const toolResult = requireToolResult(body, "upsert_report_section", "call-bad-updates");
+    expect(toolResult).toContain("tool_schema_invalid_arguments");
+    expect(toolResult).toContain("$.updates 必须是数组");
+    expect(toolResult).not.toContain("updates must be a non-empty array");
+    return new Response(JSON.stringify(createChatCompletionResponse({ content: "NO_UPDATE" })), {
+      headers: { "Content-Type": "application/json" },
+      status: 200
+    });
+  });
+
+  const service = createWindowRunService({
+    clock: { now: () => "2026-07-01T00:00:00.000Z" },
+    credentialStore,
+    fetch,
+    findExistingReport: () => undefined,
+    idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+    onRuntimeState: async () => {},
+    providerStore: createProviderStore(createProviderConfig(apiKeyRef)),
+    registerReport: async () => {},
+    taskLogger: { append, setSecrets: vi.fn(), absolutePath: "", relativePath: "", simpleAbsolutePath: "", simpleRelativePath: "" } as any
+  });
+
+  await service.runJobWindows({
+    artifacts,
+    job: createWindowRunJob({ templateIds: ["npc"] })
+  });
+
+  const reportContents = Object.fromEntries(
+    await Promise.all(
+      Object.keys(input.existingReports ?? {}).map(async (fileName) => [
+        fileName,
+        await fs.readFile(path.join(reportsRoot, fileName), "utf8")
+      ])
+    )
+  );
+
+  return {
+    logText: JSON.stringify(append.mock.calls),
+    reportContents,
+    requestBodies
   };
 }
 

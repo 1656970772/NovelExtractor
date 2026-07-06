@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getEnabledToolDefinitions, getEnabledTools } from "./toolRegistry";
+import { getEnabledToolDefinitions, getEnabledTools, validateToolArguments } from "./toolRegistry";
 
 describe("P0 tool registry", () => {
   it("exposes the configured Reasonix tools in deterministic order", () => {
@@ -165,6 +165,70 @@ describe("P0 tool registry", () => {
     expect(JSON.stringify(tool)).not.toContain("\"function\"");
     expect(JSON.stringify(tool)).not.toContain("\"parameters\"");
     expect(getEnabledTools(["upsert_report_section"])[0].parameters).toEqual(tool.inputSchema);
+  });
+
+  it("reports nested array schema violations with stable paths", () => {
+    const errors = validateToolArguments(
+      {
+        type: "object",
+        properties: {
+          updates: {
+            type: "array",
+            minItems: 1,
+            items: {
+              type: "object",
+              properties: {
+                cardName: { type: "string" },
+                fieldName: { type: "string" },
+                content: { type: "string" }
+              },
+              required: ["cardName", "fieldName", "content"],
+              additionalProperties: false
+            }
+          }
+        },
+        required: ["updates"],
+        additionalProperties: false
+      },
+      { updates: "韩立,核心性格" }
+    );
+
+    expect(errors).toEqual([{ path: "$.updates", message: "必须是数组" }]);
+  });
+
+  it("reports missing required fields and extra object fields", () => {
+    const errors = validateToolArguments(
+      {
+        type: "object",
+        properties: { path: { type: "string" } },
+        required: ["path"],
+        additionalProperties: false
+      },
+      { extra: true }
+    );
+
+    expect(errors).toEqual([
+      { path: "$.path", message: "缺少必填字段" },
+      { path: "$.extra", message: "不允许额外字段" }
+    ]);
+  });
+
+  it("reports numeric minimum and maximum violations used by current tool schemas", () => {
+    const errors = validateToolArguments(
+      {
+        type: "object",
+        properties: {
+          offset: { type: "integer", minimum: 0 },
+          maxChars: { type: "integer", minimum: 500, maximum: 20000 }
+        }
+      },
+      { offset: -1, maxChars: 30000 }
+    );
+
+    expect(errors).toEqual([
+      { path: "$.offset", message: "不能小于 0" },
+      { path: "$.maxChars", message: "不能大于 20000" }
+    ]);
   });
 
   it("describes upsert_report_section as field-block writing without old_string", () => {

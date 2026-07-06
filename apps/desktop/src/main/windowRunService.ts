@@ -38,6 +38,7 @@ import {
   executeBuiltinFileTool,
   getEnabledToolDefinitions,
   ToolExecutionError,
+  validateToolArguments,
   type BashTeardownResult
 } from "@novel-extractor/tools";
 import type { TemplateDto } from "../shared/ipcTypes";
@@ -246,6 +247,10 @@ function toLlmToolDefinition(tool: ReturnType<typeof getEnabledToolDefinitions>[
     description: tool.description,
     parameters: tool.inputSchema
   });
+}
+
+function formatToolValidationErrors(errors: readonly { path: string; message: string }[]): string {
+  return errors.map((error) => `${error.path} ${error.message}`).join("; ");
 }
 
 function toPromptDate(timestamp: string): string {
@@ -2282,6 +2287,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
   const enabledToolNames = options.enabledToolNames ?? DEFAULT_ENABLED_TOOL_NAMES;
   const enabledToolNameSet = new Set<string>(enabledToolNames);
   const toolDefinitions = getEnabledToolDefinitions([...enabledToolNames]).map(toLlmToolDefinition);
+  const toolInputSchemasByName = new Map(toolDefinitions.map((tool) => [tool.name, tool.inputSchema]));
 
   const llmCredentialStore: LlmCredentialStore = {
     async resolveApiKey(ref) {
@@ -2732,6 +2738,14 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
                 executionArguments: toolCall.executionArguments,
                 toolName: toolCall.name
               });
+              const inputSchema = toolInputSchemasByName.get(toolCall.name);
+              const validationErrors = validateToolArguments(inputSchema, toolCall.executionArguments);
+              if (validationErrors.length > 0) {
+                throw new ToolExecutionError(
+                  `invalid args: ${formatToolValidationErrors(validationErrors)}`,
+                  "INVALID_ARGUMENTS"
+                );
+              }
               toolResult = await executeBuiltinFileTool(toolCall.name, toolCall.executionArguments, {
                 projectRoot: isBashToolFamily(toolCall.name) ? bashSandbox.reportsRoot : input.artifacts.project.rootPath,
                 reportsRoot: isBashToolFamily(toolCall.name) ? bashSandbox.reportsRoot : reportsRoot,
