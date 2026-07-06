@@ -1,9 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { toToolDefinition, stableJsonValue } from "./toolDefinition";
+import {
+  isJsonObject,
+  normalizeInputSchema,
+  stableJsonValue,
+  toToolDefinition,
+} from "./toolDefinition";
+import type {
+  JsonObject,
+  JsonSchemaValue,
+  ProviderToolSource,
+  ToolDefinition,
+} from "./toolDefinition";
 
 describe("ToolDefinition", () => {
   it("keeps name, description, and nested array input schema", () => {
-    const tool = toToolDefinition({
+    const source: ProviderToolSource = {
       name: "upsert_report_section",
       description: "按 cardName + fieldName 替换已有 Markdown 报告字段块。",
       parameters: {
@@ -27,7 +38,9 @@ describe("ToolDefinition", () => {
         required: ["updates"],
         additionalProperties: false,
       },
-    });
+    };
+
+    const tool: ToolDefinition = toToolDefinition(source);
 
     expect(tool).toEqual({
       name: "upsert_report_section",
@@ -56,10 +69,39 @@ describe("ToolDefinition", () => {
     });
   });
 
+  it("falls back to the minimal object input schema for invalid parameters", () => {
+    expect(normalizeInputSchema(["not", "a", "schema"])).toEqual({
+      type: "object",
+    });
+  });
+
+  it("exports the JSON schema object guard", () => {
+    const value: JsonSchemaValue = { z: true, a: null };
+
+    expect(isJsonObject(value)).toBe(true);
+    expect(isJsonObject(["array"])).toBe(false);
+  });
+
   it("sorts object keys but keeps array order for stable JSON encoding", () => {
-    expect(stableJsonValue({ b: 2, a: [{ d: 4, c: 3 }] })).toEqual({
-      a: [{ c: 3, d: 4 }],
+    const result: unknown = stableJsonValue({
+      b: 2,
+      a: [
+        { d: 4, c: 3 },
+        { b: 2, a: 1 },
+      ],
+    });
+
+    expect(result).toEqual({
+      a: [
+        { c: 3, d: 4 },
+        { a: 1, b: 2 },
+      ],
       b: 2,
     });
+
+    expect((result as JsonObject).a).toEqual([
+      { c: 3, d: 4 },
+      { a: 1, b: 2 },
+    ]);
   });
 });

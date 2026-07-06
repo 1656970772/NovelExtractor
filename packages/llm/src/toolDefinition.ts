@@ -1,12 +1,12 @@
-export type JsonValue =
+export type JsonSchemaValue =
   | string
   | number
   | boolean
   | null
-  | JsonValue[]
-  | { [key: string]: JsonValue };
+  | JsonSchemaValue[]
+  | { [key: string]: JsonSchemaValue };
 
-export type JsonObject = { [key: string]: JsonValue };
+export type JsonObject = { [key: string]: JsonSchemaValue };
 
 export interface ToolDefinition {
   name: string;
@@ -15,18 +15,15 @@ export interface ToolDefinition {
   outputSchema?: JsonObject;
 }
 
-export interface ToolDefinitionInput {
+export interface ProviderToolSource {
   name: string;
-  description?: string;
+  description: string;
   parameters?: unknown;
-  inputSchema?: unknown;
   outputSchema?: unknown;
 }
 
 const EMPTY_OBJECT_SCHEMA: JsonObject = {
   type: "object",
-  properties: {},
-  additionalProperties: false,
 };
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -37,17 +34,16 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return undefined;
 }
 
-function isJsonObject(value: unknown): value is JsonObject {
+export function isJsonObject(value: unknown): value is JsonObject {
   return asRecord(value) !== undefined;
 }
 
-function inputSchemaOrFallback(value: unknown): JsonObject {
-  const record = asRecord(value);
-  if (record?.type !== "object") {
+export function normalizeInputSchema(value: unknown): JsonObject {
+  if (!isJsonObject(value)) {
     return { ...EMPTY_OBJECT_SCHEMA };
   }
 
-  return stableJsonValue(record) as JsonObject;
+  return stableJsonValue(value) as JsonObject;
 }
 
 export function stableJsonValue(value: unknown): unknown {
@@ -76,13 +72,13 @@ export function encodeToolArguments(value: unknown): string {
   return JSON.stringify(stableJsonValue(value)) ?? "";
 }
 
-export function toToolDefinition(input: ToolDefinitionInput): ToolDefinition {
-  const outputSchema = stableJsonValue(input.outputSchema);
+export function toToolDefinition(tool: ProviderToolSource): ToolDefinition {
+  const outputSchema = stableJsonValue(tool.outputSchema);
 
   return {
-    name: input.name,
-    description: input.description ?? "",
-    inputSchema: inputSchemaOrFallback(input.inputSchema ?? input.parameters),
+    name: tool.name,
+    description: tool.description,
+    inputSchema: normalizeInputSchema(tool.parameters),
     ...(isJsonObject(outputSchema) ? { outputSchema } : {}),
   };
 }
