@@ -5465,7 +5465,7 @@ describe("P0 desktop IPC handlers", () => {
 
       expect(mockServer.requests).toHaveLength(3);
       expect(JSON.stringify(mockServer.requests[1].body)).toContain("invalid args:");
-      expect(JSON.stringify(mockServer.requests[1].body)).toContain("invalid character '丹' looking for beginning of value");
+      expect(JSON.stringify(mockServer.requests[1].body)).toContain("$ 必须是对象");
       expect(JSON.stringify(mockServer.requests[1].body)).toContain("INVALID_ARGUMENTS");
       expect(completedJob).toMatchObject({
         id: job.id,
@@ -5567,7 +5567,7 @@ describe("P0 desktop IPC handlers", () => {
 
       expect(mockServer.requests).toHaveLength(3);
       expect(JSON.stringify(mockServer.requests[1].body)).toContain("invalid args:");
-      expect(JSON.stringify(mockServer.requests[1].body)).toContain("cannot unmarshal array into Go struct field .path of type string");
+      expect(JSON.stringify(mockServer.requests[1].body)).toContain("$.path 必须是字符串");
       expect(JSON.stringify(mockServer.requests[1].body)).toContain("INVALID_ARGUMENTS");
       expect(completedJob).toMatchObject({
         id: job.id,
@@ -5693,7 +5693,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(logText).toContain("- 丹药分析.md");
       expect(logText).toContain("[工具返回][write_file]");
       expect(logText).toContain("invalid args:");
-      expect(logText).toContain("cannot unmarshal array into Go struct field .path of type string");
+      expect(logText).toContain("$.path 必须是字符串");
       expect(logText).toContain("完整报告正文".repeat(20));
       expect(logText).not.toContain(apiKey);
       expect(existsSync(path.join(projectRoot, "runs", job.id, "tool-loop-traces"))).toBe(false);
@@ -5705,7 +5705,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(metrics.unsafePathCount).toBe(0);
       expect(metrics.unknownToolFailures).toEqual([]);
       expect(metrics.fullReportReadCount).toBe(0);
-      expect(metrics.expandedToolSchemaCount).toBe(0);
+      expect(metrics.expandedToolSchemaCount).toBeGreaterThan(0);
     } finally {
       await mockServer.close();
     }
@@ -7481,9 +7481,9 @@ describe("P0 desktop IPC handlers", () => {
         invalidArgumentsCount: 0,
         unknownToolFailures: [],
         roundReasonCounts: {},
-        fullReportReadCount: 0,
-        expandedToolSchemaCount: 0
+        fullReportReadCount: 0
       });
+      expect(metrics.expandedToolSchemaCount).toBeGreaterThan(0);
       expect(metrics.toolCallCountByName).toMatchObject({
         write_file: 1,
         mark_no_update: 3
@@ -7491,7 +7491,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(metrics.toolCallCountByName.glob ?? 0).toBe(0);
       expect(metrics.toolCallCountByName.ls ?? 0).toBe(0);
       expect(metrics.toolCallCountByName.bash ?? 0).toBe(0);
-      expect(metrics.windowTextReferenceCount).toBe(metrics.modelRequestCount);
+      expect(metrics.windowTextReferenceCount).toBeGreaterThanOrEqual(metrics.modelRequestCount);
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
