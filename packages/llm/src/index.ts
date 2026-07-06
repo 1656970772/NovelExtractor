@@ -5,5 +5,4 @@ export * from "./redaction";
 export * from "./toolDefinition";
 export * from "./protocols/types";
 export * from "./protocols/toolSchemaProjection";
-export * from "./protocols/openaiChat";
-export * from "./protocols/openaiResponses";
+export * from "./protocols";

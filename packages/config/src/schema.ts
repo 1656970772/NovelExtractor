@@ -2,7 +2,18 @@ import { assertValidConfigInvariants } from "./configInvariants";
 
 export type ProviderKind = "openai-compatible";
 
-export type ProviderApiFormat = "openai_chat" | "openai_responses";
+export type ProviderApiFormat =
+  | "openai_chat"
+  | "openai_responses"
+  | "anthropic_messages"
+  | "gemini_generate_content"
+  | "bedrock_converse";
+
+export type ProviderAuthScheme =
+  | "bearer"
+  | "anthropic-api-key"
+  | "google-api-key"
+  | "aws-sigv4";
 
 export interface ProviderReasoningCapability {
   supportsThinking: boolean;
@@ -51,7 +62,7 @@ export interface ProviderPreset {
   reasoning?: ProviderReasoningCapability;
   icon?: string;
   iconColor?: string;
-  authScheme: "bearer";
+  authScheme: ProviderAuthScheme;
   models: ModelOption[];
   defaultModelPolicy: "first-enabled" | "user-required";
   allowsUserModels: boolean;

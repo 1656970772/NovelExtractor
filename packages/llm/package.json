@@ -15,7 +15,11 @@
     "./protocols/types": "./src/protocols/types.ts",
     "./protocols/toolSchemaProjection": "./src/protocols/toolSchemaProjection.ts",
     "./protocols/openaiChat": "./src/protocols/openaiChat.ts",
-    "./protocols/openaiResponses": "./src/protocols/openaiResponses.ts"
+    "./protocols/openaiResponses": "./src/protocols/openaiResponses.ts",
+    "./protocols/anthropicMessages": "./src/protocols/anthropicMessages.ts",
+    "./protocols/geminiGenerateContent": "./src/protocols/geminiGenerateContent.ts",
+    "./protocols/bedrockConverse": "./src/protocols/bedrockConverse.ts",
+    "./protocols": "./src/protocols/index.ts"
   },
   "scripts": {
     "test": "vitest run",

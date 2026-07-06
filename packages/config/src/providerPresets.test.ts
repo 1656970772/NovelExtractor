@@ -144,4 +144,18 @@ describe("provider presets", () => {
     expect(secondDeepseek.endpointCandidates).toEqual(["https://api.deepseek.com"]);
     expect(secondXiaomi.models[0].inputModalities).toEqual(["text"]);
   });
+
+  it("keeps provider auth schemes compatible with their api formats", () => {
+    const expectedAuthByFormat = {
+      openai_chat: "bearer",
+      openai_responses: "bearer",
+      anthropic_messages: "anthropic-api-key",
+      gemini_generate_content: "google-api-key",
+      bedrock_converse: "aws-sigv4"
+    } as const;
+
+    for (const preset of createCcSwitchProviderPresets()) {
+      expect(preset.authScheme).toBe(expectedAuthByFormat[preset.apiFormat]);
+    }
+  });
 });

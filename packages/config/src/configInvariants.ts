@@ -4,6 +4,7 @@ import type {
   MenuItemConfig,
   NovelExtractorConfig,
   ProviderApiFormat,
+  ProviderAuthScheme,
   ProviderReasoningCapability,
   QuantityPolicyDefaults,
   ReportPathPolicyMode,
@@ -28,8 +29,24 @@ const ALLOWED_TASK_ACTIONS = new Set<TaskAction>([
 ]);
 const ALLOWED_PROVIDER_API_FORMATS = new Set<ProviderApiFormat>([
   "openai_chat",
-  "openai_responses"
+  "openai_responses",
+  "anthropic_messages",
+  "gemini_generate_content",
+  "bedrock_converse"
 ]);
+const ALLOWED_PROVIDER_AUTH_SCHEMES = new Set<ProviderAuthScheme>([
+  "bearer",
+  "anthropic-api-key",
+  "google-api-key",
+  "aws-sigv4"
+]);
+const PROVIDER_AUTH_SCHEMES_BY_API_FORMAT: Record<ProviderApiFormat, Set<ProviderAuthScheme>> = {
+  openai_chat: new Set(["bearer"]),
+  openai_responses: new Set(["bearer"]),
+  anthropic_messages: new Set(["anthropic-api-key"]),
+  gemini_generate_content: new Set(["google-api-key"]),
+  bedrock_converse: new Set(["aws-sigv4"])
+};
 const ALLOWED_REASONING_EFFORT_PARAMS = new Set<
   ProviderReasoningCapability["effortParam"]
 >(["reasoning_effort", "none"]);
@@ -194,6 +211,16 @@ function assertProviderPresets(config: NovelExtractorConfig): void {
       String(provider.apiFormat),
       ALLOWED_PROVIDER_API_FORMATS as Set<string>,
       `provider api format for ${provider.id}`
+    );
+    assertAllowedValue(
+      String(provider.authScheme),
+      ALLOWED_PROVIDER_AUTH_SCHEMES as Set<string>,
+      `provider auth scheme for ${provider.id}`
+    );
+    assertAllowedValue(
+      String(provider.authScheme),
+      PROVIDER_AUTH_SCHEMES_BY_API_FORMAT[provider.apiFormat] as Set<string>,
+      `provider auth scheme for ${provider.id} api format ${provider.apiFormat}`
     );
 
     if (provider.reasoning !== undefined) {

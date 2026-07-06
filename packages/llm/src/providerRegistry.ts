@@ -1,5 +1,6 @@
 import type {
   ProviderApiFormat,
+  ProviderKind,
   ProviderPreset,
   ProviderReasoningCapability
 } from "@novel-extractor/config";
@@ -28,9 +29,9 @@ export interface OpenAiCompatibleProviderDefinition {
   id: string;
   presetId?: string;
   displayName: string;
-  kind: "openai-compatible";
+  kind: ProviderKind;
   baseUrl: string;
-  authScheme: "bearer";
+  authScheme: ProviderPreset["authScheme"];
   apiFormat: ProviderApiFormat;
   reasoning?: ProviderReasoningCapability;
   apiKeyRef?: ApiKeyRef;

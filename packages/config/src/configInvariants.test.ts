@@ -114,6 +114,50 @@ describe("config invariants", () => {
     expectInvariantViolation(invalidReasoning, /provider reasoning/i);
   });
 
+  it.each([
+    {
+      label: "Anthropic Native",
+      apiFormat: "anthropic_messages" as const,
+      authScheme: "anthropic-api-key" as const,
+      baseUrl: "https://api.anthropic.com/v1"
+    },
+    {
+      label: "Gemini Native",
+      apiFormat: "gemini_generate_content" as const,
+      authScheme: "google-api-key" as const,
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta"
+    },
+    {
+      label: "Bedrock Converse",
+      apiFormat: "bedrock_converse" as const,
+      authScheme: "aws-sigv4" as const,
+      baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com"
+    }
+  ])("accepts native LLM protocol api format $apiFormat", ({ label, apiFormat, authScheme, baseUrl }) => {
+    const config = getDefaultConfig();
+    config.providerPresets[0] = {
+      ...config.providerPresets[0],
+      displayName: label,
+      apiFormat,
+      authScheme,
+      baseUrl,
+      endpointCandidates: [baseUrl]
+    };
+
+    expect(() => assertValidConfigInvariants(config)).not.toThrow();
+  });
+
+  it("rejects provider auth schemes that do not match the api format", () => {
+    const config = getDefaultConfig();
+    config.providerPresets[0] = {
+      ...config.providerPresets[0],
+      apiFormat: "anthropic_messages",
+      authScheme: "bearer"
+    };
+
+    expectInvariantViolation(config, /provider auth scheme.*anthropic_messages/i);
+  });
+
   it("requires template names and default output file names to be non-empty", () => {
     const missingName = getDefaultConfig();
     missingName.builtInTemplates[0].name = "";
