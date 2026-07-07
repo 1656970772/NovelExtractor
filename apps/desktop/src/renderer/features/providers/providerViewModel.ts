@@ -98,7 +98,7 @@ function resolveModelName(models: readonly ProviderModelDto[], modelName: string
 
 function getPreferredModelName(models: readonly ProviderModelDto[]): string {
   return (
-    models.find((model) => model.enabled && model.isDefault)?.id ??
+    models.find((model) => model.isDefault)?.id ??
     models.find((model) => model.enabled)?.id ??
     models[0]?.id ??
     ""
@@ -156,6 +156,7 @@ function normalizeProviderModels(
     modelName: defaultModelName,
     models: normalizedModels.map((model) => ({
       ...model,
+      enabled: model.id === defaultModelName ? true : model.enabled,
       isDefault: model.id === defaultModelName
     }))
   };
@@ -169,6 +170,7 @@ export function syncDefaultModelFlags(
 
   return models.map((model) => ({
     ...model,
+    enabled: model.id === defaultModelName ? true : model.enabled,
     isDefault: model.id === defaultModelName
   }));
 }

@@ -6,6 +6,7 @@ import {
   buildSaveProviderDto,
   clearProviderSecretAfterSave,
   createProviderFormState,
+  createProviderFormStateFromSavedProvider,
   getExtractionProviderOptionsFromProviders,
   mergeFetchedModelsIntoForm,
   selectProviderPreset,
@@ -98,13 +99,7 @@ describe("providerViewModel", () => {
     expect(JSON.stringify(clearedState)).not.toContain("sk-must-not-survive");
   });
 
-  it("creates form state from saved provider without leaking api key and picks enabled default model", async () => {
-    const providerViewModel = await import("./providerViewModel");
-    const createFromSaved = (
-      providerViewModel as typeof providerViewModel & {
-        createProviderFormStateFromSavedProvider: (provider: ProviderViewDto) => ReturnType<typeof createProviderFormState>;
-      }
-    ).createProviderFormStateFromSavedProvider;
+  it("creates form state from saved provider without leaking api key and preserves a disabled saved default model", () => {
     const savedProvider: ProviderViewDto = {
       id: "provider-1",
       presetId: "deepseek",
@@ -129,7 +124,7 @@ describe("providerViewModel", () => {
       ]
     };
 
-    const state = createFromSaved(savedProvider);
+    const state = createProviderFormStateFromSavedProvider(savedProvider);
 
     expect(state).toMatchObject({
       providerId: "provider-1",
@@ -138,13 +133,55 @@ describe("providerViewModel", () => {
       kind: "openai-compatible",
       baseUrl: "https://api.deepseek.com",
       apiKey: "",
-      modelName: "deepseek-enabled",
+      modelName: "deepseek-disabled-default",
       enabled: true
     });
+    expect(state.models).toEqual([
+      {
+        id: "deepseek-disabled-default",
+        displayName: "Disabled Default",
+        enabled: true,
+        isDefault: true
+      },
+      {
+        id: "deepseek-enabled",
+        displayName: "Enabled",
+        enabled: true,
+        isDefault: false
+      }
+    ]);
     expect(JSON.stringify(state)).not.toContain("sk-");
   });
 
-  it("cleans empty and duplicate models while preserving model enabled flags in save dto", () => {
+  it("builds save dto with the default model enabled even when form state has it disabled", () => {
+    const dto = buildSaveProviderDto({
+      ...createProviderFormState("deepseek"),
+      apiKey: "sk-deepseek-test",
+      modelName: "deepseek-disabled-default",
+      models: [
+        {
+          id: "deepseek-disabled-default",
+          displayName: "Disabled Default",
+          enabled: false,
+          isDefault: true
+        }
+      ]
+    });
+
+    expect(dto).toMatchObject({
+      modelName: "deepseek-disabled-default",
+      models: [
+        {
+          id: "deepseek-disabled-default",
+          displayName: "Disabled Default",
+          enabled: true,
+          isDefault: true
+        }
+      ]
+    });
+  });
+
+  it("cleans empty and duplicate models while enabling the default model in save dto", () => {
     const dto = buildSaveProviderDto({
       ...createProviderFormState("custom-openai-compatible"),
       providerId: "provider-1",
@@ -166,7 +203,7 @@ describe("providerViewModel", () => {
       modelName: "beta",
       models: [
         { id: "alpha", displayName: "Alpha", enabled: true, isDefault: false },
-        { id: "beta", displayName: "Beta", enabled: false, isDefault: true }
+        { id: "beta", displayName: "Beta", enabled: true, isDefault: true }
       ]
     });
   });
@@ -185,7 +222,7 @@ describe("providerViewModel", () => {
     });
   });
 
-  it("merges fetched models without losing existing form model metadata", () => {
+  it("merges fetched models while enabling the current default model", () => {
     const state = {
       ...createProviderFormState("deepseek"),
       modelFetchState: "error" as const,
@@ -209,7 +246,7 @@ describe("providerViewModel", () => {
       {
         id: "deepseek-v4-flash",
         displayName: "Flash 自定义名",
-        enabled: false,
+        enabled: true,
         isDefault: true
       },
       {
