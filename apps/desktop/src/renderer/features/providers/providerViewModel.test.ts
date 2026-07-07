@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { getProviderPresets } from "@novel-extractor/config";
+import type { ProviderViewDto } from "../../../shared/ipcTypes";
 import {
   AUTO_PROVIDER_OPTION_ID,
   buildSaveProviderDto,
@@ -95,6 +96,79 @@ describe("providerViewModel", () => {
 
     expect(clearedState.apiKey).toBe("");
     expect(JSON.stringify(clearedState)).not.toContain("sk-must-not-survive");
+  });
+
+  it("creates form state from saved provider without leaking api key and picks enabled default model", async () => {
+    const providerViewModel = await import("./providerViewModel");
+    const createFromSaved = (
+      providerViewModel as typeof providerViewModel & {
+        createProviderFormStateFromSavedProvider: (provider: ProviderViewDto) => ReturnType<typeof createProviderFormState>;
+      }
+    ).createProviderFormStateFromSavedProvider;
+    const savedProvider: ProviderViewDto = {
+      id: "provider-1",
+      presetId: "deepseek",
+      displayName: "DeepSeek 已保存",
+      kind: "openai-compatible",
+      baseUrl: "https://api.deepseek.com",
+      hasApiKey: true,
+      enabled: true,
+      models: [
+        {
+          id: "deepseek-disabled-default",
+          displayName: "Disabled Default",
+          enabled: false,
+          isDefault: true
+        },
+        {
+          id: "deepseek-enabled",
+          displayName: "Enabled",
+          enabled: true,
+          isDefault: false
+        }
+      ]
+    };
+
+    const state = createFromSaved(savedProvider);
+
+    expect(state).toMatchObject({
+      providerId: "provider-1",
+      presetId: "deepseek",
+      displayName: "DeepSeek 已保存",
+      kind: "openai-compatible",
+      baseUrl: "https://api.deepseek.com",
+      apiKey: "",
+      modelName: "deepseek-enabled",
+      enabled: true
+    });
+    expect(JSON.stringify(state)).not.toContain("sk-");
+  });
+
+  it("cleans empty and duplicate models while keeping one default model in save dto", () => {
+    const dto = buildSaveProviderDto({
+      ...createProviderFormState("custom-openai-compatible"),
+      providerId: "provider-1",
+      displayName: " Custom Provider ",
+      baseUrl: " https://llm.example.test/v1 ",
+      apiKey: "",
+      modelName: " beta ",
+      models: [
+        { id: " alpha ", displayName: " Alpha ", enabled: true, isDefault: true },
+        { id: "alpha", displayName: "Alpha Duplicate", enabled: true, isDefault: false },
+        { id: "   ", displayName: "Empty", enabled: true, isDefault: false },
+        { id: " beta ", displayName: " Beta ", enabled: false, isDefault: false }
+      ]
+    });
+
+    expect(dto).toMatchObject({
+      providerId: "provider-1",
+      apiKey: undefined,
+      modelName: "beta",
+      models: [
+        { id: "alpha", displayName: "Alpha", enabled: true, isDefault: false },
+        { id: "beta", displayName: "Beta", enabled: true, isDefault: true }
+      ]
+    });
   });
 
   it("clears provider id when switching to a different preset", () => {

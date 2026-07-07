@@ -96,6 +96,72 @@ function resolveModelName(models: readonly ProviderModelDto[], modelName: string
   return models[0]?.id ?? trimmedModelName;
 }
 
+function getPreferredModelName(models: readonly ProviderModelDto[]): string {
+  return (
+    models.find((model) => model.enabled && model.isDefault)?.id ??
+    models.find((model) => model.enabled)?.id ??
+    models[0]?.id ??
+    ""
+  );
+}
+
+function normalizeProviderModels(
+  models: readonly ProviderModelDto[],
+  modelName: string
+): { models: ProviderModelDto[]; modelName: string } {
+  const normalizedModels: ProviderModelDto[] = [];
+  const seenModelIds = new Set<string>();
+
+  for (const model of models) {
+    const id = model.id.trim();
+    if (!id || seenModelIds.has(id)) {
+      continue;
+    }
+
+    seenModelIds.add(id);
+    normalizedModels.push({
+      id,
+      displayName: model.displayName.trim() || id,
+      enabled: model.enabled,
+      isDefault: model.isDefault
+    });
+  }
+
+  if (normalizedModels.length === 0) {
+    const fallbackModelName = modelName.trim();
+    return {
+      modelName: fallbackModelName,
+      models: fallbackModelName
+        ? [
+            {
+              id: fallbackModelName,
+              displayName: fallbackModelName,
+              enabled: true,
+              isDefault: true
+            }
+          ]
+        : []
+    };
+  }
+
+  const requestedModelName = modelName.trim();
+  const defaultModel =
+    normalizedModels.find((model) => model.id === requestedModelName) ??
+    normalizedModels.find((model) => model.enabled && model.isDefault) ??
+    normalizedModels.find((model) => model.enabled) ??
+    normalizedModels[0];
+  const defaultModelName = defaultModel?.id ?? "";
+
+  return {
+    modelName: defaultModelName,
+    models: normalizedModels.map((model) => ({
+      ...model,
+      enabled: model.id === defaultModelName ? true : model.enabled,
+      isDefault: model.id === defaultModelName
+    }))
+  };
+}
+
 export function syncDefaultModelFlags(
   models: readonly ProviderModelDto[],
   modelName: string
@@ -143,6 +209,26 @@ export function selectProviderPreset(
   };
 }
 
+export function createProviderFormStateFromSavedProvider(
+  provider: ProviderViewDto
+): ProviderFormState {
+  const modelName = getPreferredModelName(provider.models);
+
+  return {
+    providerId: provider.id,
+    presetId: provider.presetId,
+    displayName: provider.displayName,
+    kind: provider.kind,
+    baseUrl: provider.baseUrl ?? "",
+    apiKey: "",
+    models: syncDefaultModelFlags(provider.models, modelName),
+    modelName,
+    modelFetchState: "idle",
+    defaultModel: true,
+    enabled: provider.enabled
+  };
+}
+
 export function validateProviderForm(state: ProviderFormState): ProviderFormValidation {
   const errors: ProviderFormValidation["errors"] = {};
 
@@ -154,11 +240,11 @@ export function validateProviderForm(state: ProviderFormState): ProviderFormVali
     errors.baseUrl = "请输入 Base URL";
   }
 
-  if (!state.apiKey.trim()) {
+  if (!state.providerId && !state.apiKey.trim()) {
     errors.apiKey = "请输入 API key";
   }
 
-  if (!state.modelName.trim()) {
+  if (!state.modelName.trim() && !state.models.some((model) => model.id.trim())) {
     errors.modelName = "请输入模型名";
   }
 
@@ -169,23 +255,7 @@ export function validateProviderForm(state: ProviderFormState): ProviderFormVali
 }
 
 export function buildSaveProviderDto(state: ProviderFormState): SaveProviderDto {
-  const modelName =
-    state.models.length > 0
-      ? resolveModelName(state.models, state.modelName)
-      : state.modelName.trim();
-  const models =
-    state.models.length > 0
-      ? syncDefaultModelFlags(state.models, modelName)
-      : modelName
-        ? [
-            {
-              id: modelName,
-              displayName: modelName,
-              enabled: true,
-              isDefault: true
-            }
-          ]
-        : [];
+  const { modelName, models } = normalizeProviderModels(state.models, state.modelName);
 
   return {
     providerId: state.providerId,
