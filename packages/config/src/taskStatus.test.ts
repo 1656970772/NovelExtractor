@@ -5,7 +5,7 @@ import type { TaskAction } from "./schema";
 
 describe("task status config", () => {
   it("loads task statuses and actions from config", () => {
-    expect(getTaskStatusConfig().running.allowedActions).toEqual([]);
+    expect(getTaskStatusConfig().running.allowedActions).toEqual(["pause"]);
     expect(getTaskStatusConfig().paused.allowedActions).toEqual(["resume", "restart", "delete"]);
     expect(getTaskStatusConfig().failed.allowedActions).toEqual(["resume", "restart", "delete"]);
   });

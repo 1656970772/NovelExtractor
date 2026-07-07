@@ -343,7 +343,9 @@ function reportInventoryGuidance(workspace: Workspace, mode: "discovery" | "read
   }
 
   const base = " 报告是否存在已由宿主清单提供；不要用 glob/ls/bash 查找报告。";
-  return mode === "read_existing" ? `${base}需要读已有报告时后续任务会走卡片字段块读取。` : base;
+  return mode === "read_existing"
+    ? `${base}读取已有报告时，优先根据 grep 命中行用 offset/limit 读取必要上下文。`
+    : base;
 }
 
 function bashDescription(shell: ReasonixResolvedShell): string {

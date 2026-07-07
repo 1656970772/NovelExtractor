@@ -1248,6 +1248,192 @@ describe("P0 desktop IPC handlers", () => {
     }
   });
 
+  it("resumes interrupted persisted jobs with coverage skip even when the original job disabled skipping", async () => {
+    const mockServer = await startMockOpenAiServer({
+      expectedApiKey: "sk-resume-coverage",
+      respond: () => ({
+        body: createChatCompletionResponse({
+          content: "NO_UPDATE"
+        })
+      })
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-resume-coverage");
+    const novelPath = await writeTempNovel(tempRoot, "恢复跳过覆盖索引小说.txt", 9);
+    const providerStore = createProviderStore(
+      createProviderConfig({
+        apiKeyRef,
+        baseUrl: mockServer.baseUrl
+      })
+    );
+    const handlers = createHandlers({ credentialStore, providerStore });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: novelPath,
+        displayName: "恢复跳过覆盖索引小说.txt"
+      });
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 3,
+        extractionChapterCount: 9,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: false
+      });
+
+      await startJobAndWaitForTerminal(contract, handlers, job.id);
+      expect(mockServer.requests).toHaveLength(4);
+
+      const runtimePath = path.join(tempRoot, "projects", "project-a", "state", "project-runtime.json");
+      const rawRuntime = JSON.parse(await fs.readFile(runtimePath, "utf8")) as {
+        jobs: ProjectRuntimeJobRecord[];
+      };
+      rawRuntime.jobs = rawRuntime.jobs.map((storedJob) =>
+        storedJob.id === job.id ? { ...storedJob, status: "running" } : storedJob
+      );
+      await fs.writeFile(runtimePath, `${JSON.stringify(rawRuntime, null, 2)}\n`, "utf8");
+
+      const restartedHandlers = createHandlers({ credentialStore, providerStore });
+      const runtime = await contract.invoke(restartedHandlers, "projectRuntime:get", {
+        projectId: "project-a"
+      });
+      expect(runtime.jobs).toEqual([
+        expect.objectContaining({
+          id: job.id,
+          status: "paused"
+        })
+      ]);
+
+      await contract.invoke(restartedHandlers, "jobs:resume", { jobId: job.id });
+      const resumedJob = await waitForJobTerminal(contract, restartedHandlers, job.id);
+
+      expect(resumedJob).toMatchObject({
+        id: job.id,
+        status: "completed",
+        progressText: "进度：4/4"
+      });
+      expect(mockServer.requests).toHaveLength(4);
+    } finally {
+      await mockServer.close();
+    }
+  });
+
+  it("pauses running jobs at a window boundary and resumes the active runtime", async () => {
+    const firstWindowResponse = createDeferred<{
+      body?: unknown;
+      responseContent?: string;
+      status?: number;
+      totalTokens?: number;
+      usage?: unknown;
+    }>();
+    const mockServer = await startMockOpenAiServer({
+      expectedApiKey: "sk-live-pause",
+      respond: ({ requestIndex }) => {
+        if (requestIndex === 0) {
+          return firstWindowResponse.promise;
+        }
+
+        return {
+          body: createChatCompletionResponse({
+            content: "NO_UPDATE"
+          })
+        };
+      }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-live-pause");
+    const novelPath = await writeTempNovel(tempRoot, "运行中暂停小说.txt", 4);
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: mockServer.baseUrl
+        })
+      )
+    });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: novelPath,
+        displayName: "运行中暂停小说.txt"
+      });
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 4,
+        overlapChapterCount: 0,
+        skipAlreadyExtracted: true
+      });
+
+      await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      await vi.waitFor(() => expect(mockServer.requests).toHaveLength(1));
+
+      const pauseRequestedJob = requireJobDto(
+        await contract.invoke(handlers, "jobs:pause", { jobId: job.id })
+      );
+      expect(pauseRequestedJob).toMatchObject({
+        id: job.id,
+        status: "pause_requested",
+        allowedActions: ["pause"]
+      });
+
+      firstWindowResponse.resolve({
+        body: createChatCompletionResponse({
+          content: "NO_UPDATE"
+        })
+      });
+
+      let pausedJob: JobDto | undefined;
+      await vi.waitFor(
+        async () => {
+          const runtime = await contract.invoke(handlers, "projectRuntime:get", { projectId: "project-a" });
+          pausedJob = runtime.jobs.find((runtimeJob) => runtimeJob.id === job.id);
+          expect(pausedJob?.status).toBe("paused");
+        },
+        { timeout: 15_000 }
+      );
+      expect(pausedJob).toMatchObject({
+        id: job.id,
+        progressText: "进度：1/2",
+        allowedActions: ["resume", "restart", "delete"]
+      });
+      expect(mockServer.requests).toHaveLength(1);
+
+      const resumedJob = requireJobDto(
+        await contract.invoke(handlers, "jobs:resume", { jobId: job.id })
+      );
+      expect(resumedJob).toMatchObject({
+        id: job.id,
+        status: "running",
+        allowedActions: ["pause"]
+      });
+
+      const completedJob = await waitForJobTerminal(contract, handlers, job.id);
+      expect(completedJob).toMatchObject({
+        id: job.id,
+        status: "completed",
+        progressText: "进度：2/2"
+      });
+      expect(mockServer.requests).toHaveLength(2);
+    } finally {
+      firstWindowResponse.resolve({
+        body: createChatCompletionResponse({
+          content: "NO_UPDATE"
+        })
+      });
+      await mockServer.close();
+    }
+  });
+
   it("loads persisted project runtime after handlers are recreated", async () => {
     const contract = createIpcContract();
     const handlers = createHandlers();
@@ -2040,11 +2226,11 @@ describe("P0 desktop IPC handlers", () => {
         function?: { name?: string; parameters?: { properties?: Record<string, unknown> } };
       }>;
       const firstRequestToolNames = firstRequestTools.map((tool) => tool.function?.name);
-      const readReportExcerptSchema = firstRequestTools.find(
-        (tool) => tool.function?.name === "read_report_excerpt"
+      const editFileSchema = firstRequestTools.find(
+        (tool) => tool.function?.name === "edit_file"
       )?.function?.parameters;
-      const upsertReportSectionSchema = firstRequestTools.find(
-        (tool) => tool.function?.name === "upsert_report_section"
+      const multiEditSchema = firstRequestTools.find(
+        (tool) => tool.function?.name === "multi_edit"
       )?.function?.parameters;
 
       expect(firstSystemPrompt).toContain("你是小说资料抽取助手");
@@ -2053,34 +2239,33 @@ describe("P0 desktop IPC handlers", () => {
       expect(firstSystemPrompt).toContain("正式报告正文必须按模板案例的卡片样式组织");
       expect(firstSystemPrompt).toContain("### 卡片名");
       expect(firstSystemPrompt).toContain("- 字段名：内容说明");
+      expect(firstSystemPrompt).toContain(
+        "grep 定位关键词/字段 -> read_file offset/limit 读取命中附近上下文 -> edit_file / multi_edit 精确替换"
+      );
       expect(firstUserPrompt).toContain("## 选中模板 Prompt Profile");
       expect(firstUserPrompt).toContain("## 当前窗口文本");
       expect(firstUserPrompt).not.toContain("本阶段不做模板路由");
       expect(firstUserPrompt).toContain(
-        "已有报告可按需读取相关字段；新增卡片/字段用 upsert_report_section 的 add_card/add_field，修改既有字段用 read_report_excerpt 后再 replace_field。"
+        "已有报告先用 grep 在已知报告内定位关键词或字段，再用 read_file 的 offset/limit 读取命中附近上下文，最后用 edit_file 或 multi_edit 做精确替换。"
       );
       expect(firstUserPrompt).toContain(
-        "待创建报告有可写入卡片或字段时，直接用 upsert_report_section 的 add_card 或 add_field 创建报告内容"
+        "待创建报告有可写入内容时，直接用 write_file 创建完整且合规的报告正文。"
       );
-      expect(firstUserPrompt).toContain("不要先调用 read_file、read_report_excerpt 或 write_file 铺底。");
-      expect(firstUserPrompt).not.toContain("有可写入信息时直接用 write_file 创建并写入完整报告正文");
-      expect(firstUserPrompt).not.toContain("待创建报告不要先调用 read_file 或 read_report_excerpt");
+      expect(firstUserPrompt).toContain("不要调用 read_report_excerpt 或 upsert_report_section。");
+      expect(firstUserPrompt).not.toContain("add_card");
+      expect(firstUserPrompt).not.toContain("replace_field");
       expect(firstRequestToolNames).toEqual(getDefaultConfig().toolLoopDefaults.enabledToolNames);
-      expect(firstRequestToolNames).not.toContain("edit_file");
-      expect(firstRequestToolNames).not.toContain("multi_edit");
-      expect(firstRequestToolNames).not.toContain("grep");
+      expect(firstRequestToolNames).toContain("grep");
+      expect(firstRequestToolNames).toContain("edit_file");
+      expect(firstRequestToolNames).toContain("multi_edit");
       expect(firstRequestToolNames).not.toContain("ls");
       expect(firstRequestToolNames).not.toContain("bash");
       expect(firstRequestToolNames).not.toContain("glob");
-      expect(firstRequestToolNames).toContain("read_report_excerpt");
-      expect(firstRequestToolNames).toContain("upsert_report_section");
-      expect(readReportExcerptSchema?.properties).toHaveProperty("outputFileName");
-      expect(readReportExcerptSchema?.properties).toHaveProperty("queries");
-      expect(upsertReportSectionSchema?.properties).toHaveProperty("outputFileName");
-      expect(upsertReportSectionSchema?.properties).toHaveProperty("updates");
-      expect(JSON.stringify(upsertReportSectionSchema)).toContain("add_card");
-      expect(JSON.stringify(upsertReportSectionSchema)).toContain("add_field");
-      expect(JSON.stringify(upsertReportSectionSchema)).toContain("replace_field");
+      expect(firstRequestToolNames).not.toContain("read_report_excerpt");
+      expect(firstRequestToolNames).not.toContain("upsert_report_section");
+      expect(editFileSchema?.properties).toHaveProperty("old_string");
+      expect(editFileSchema?.properties).toHaveProperty("new_string");
+      expect(multiEditSchema?.properties).toHaveProperty("edits");
       expect(firstRequestJson).not.toContain(`窗口文件：${firstWindowTextPath}`);
       expect(firstRequestJson).not.toContain("read_file/grep 如需读取当前窗口文件");
       expect(firstRequestJson).not.toContain("不要使用裸文件名 window-0001.txt");
@@ -2282,7 +2467,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(firstProviderBodyLogBlock).toContain("type: function");
       expect(firstProviderBodyLogBlock).toContain("function:");
       expect(firstProviderBodyLogBlock).toContain("name: read_file");
-      expect(firstProviderBodyLogBlock).not.toContain("name: grep");
+      expect(firstProviderBodyLogBlock).toContain("name: grep");
       expect(firstProviderBodyLogBlock).toContain("parameters:");
       expect(firstProviderBodyLogBlock).toContain("报告是否存在已由宿主清单提供");
       expect(logText).toContain("窗口序号：1/1");
@@ -2993,8 +3178,8 @@ describe("P0 desktop IPC handlers", () => {
       );
 
       expect(mockServer.requests).toHaveLength(6);
-      expect(overwriteReplayBody).toContain("已有报告不能用 write_file 覆盖");
-      expect(overwriteReplayBody).toContain("read_report_excerpt");
+      expect(overwriteReplayBody).toContain("已有报告不能用 write_file 直接覆盖");
+      expect(overwriteReplayBody).toContain("read_file");
       expect(readReplayBody).toContain("## 一、七玄门");
       expect(completedJob).toMatchObject({
         id: job.id,
@@ -4839,9 +5024,11 @@ describe("P0 desktop IPC handlers", () => {
       expect(Buffer.byteLength(oversizedReport, "utf8")).toBeGreaterThan(defaultMaxReadBytes);
       expect(mockServer.requests).toHaveLength(4);
       expect(JSON.stringify(mockServer.requests[2].body)).toContain("不能直接整读");
-      expect(JSON.stringify(mockServer.requests[2].body)).toContain("read_report_excerpt");
+      expect(JSON.stringify(mockServer.requests[2].body)).toContain("grep");
+      expect(JSON.stringify(mockServer.requests[2].body)).toContain("offset/limit");
       expect(JSON.stringify(mockServer.requests[2].body)).toContain("INVALID_ARGUMENTS");
-      expect(JSON.stringify(mockServer.requests[3].body)).toContain("已有报告不能用 write_file 覆盖");
+      expect(JSON.stringify(mockServer.requests[3].body)).toContain("已有报告不能用 write_file 直接覆盖");
+      expect(JSON.stringify(mockServer.requests[3].body)).toContain("grep");
       expect(reports).toEqual([]);
       expect(reportMarkdown).toBe(oversizedReport);
     } finally {
@@ -4880,7 +5067,7 @@ describe("P0 desktop IPC handlers", () => {
         if (requestIndex === 1) {
           const replayBody = JSON.stringify(body);
           expect(replayBody).toContain("不能直接整读");
-          expect(replayBody).toContain("read_report_excerpt");
+          expect(replayBody).toContain("offset/limit");
           return {
             body: createChatCompletionResponse({
               toolCalls: [
@@ -4924,7 +5111,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -5056,7 +5243,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-upsert-report-section");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -5167,7 +5354,7 @@ describe("P0 desktop IPC handlers", () => {
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-consecutive-upsert-report-section");
-    const handlers = createHandlers({
+    const handlers = createHandlersWithLegacyTools({
       credentialStore,
       providerStore: createProviderStore(
         createProviderConfig({
@@ -5482,6 +5669,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(JSON.stringify(mockServer.requests[1].body)).toContain("invalid args:");
       expect(JSON.stringify(mockServer.requests[1].body)).toContain("$ 必须是对象");
       expect(JSON.stringify(mockServer.requests[1].body)).toContain("INVALID_ARGUMENTS");
+      expect(JSON.stringify(mockServer.requests[1].body)).toContain("正确格式示例");
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
@@ -5584,6 +5772,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(JSON.stringify(mockServer.requests[1].body)).toContain("invalid args:");
       expect(JSON.stringify(mockServer.requests[1].body)).toContain("$.path 必须是字符串");
       expect(JSON.stringify(mockServer.requests[1].body)).toContain("INVALID_ARGUMENTS");
+      expect(JSON.stringify(mockServer.requests[1].body)).toContain("正确格式示例");
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
@@ -5709,6 +5898,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(logText).toContain("[工具返回][write_file]");
       expect(logText).toContain("invalid args:");
       expect(logText).toContain("$.path 必须是字符串");
+      expect(logText).toContain("正确格式示例");
       expect(logText).toContain("完整报告正文".repeat(20));
       expect(logText).not.toContain(apiKey);
       expect(existsSync(path.join(projectRoot, "runs", job.id, "tool-loop-traces"))).toBe(false);
@@ -5913,6 +6103,9 @@ describe("P0 desktop IPC handlers", () => {
       expect(mockServer.requests).toHaveLength(formerRoundLimit + 1);
       expect(requestBodies[1]).toContain("上一轮没有调用任何工具，也没有成功写入报告");
       expect(requestBodies[1]).toContain("必须精确返回 NO_UPDATE");
+      expect(requestBodies[1]).toContain("正确格式示例");
+      expect(requestBodies[1]).toContain("write_file 参数");
+      expect(requestBodies[1]).toContain("mark_no_update 参数");
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
@@ -6195,6 +6388,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(requestBodies[0]).toContain(firstTemplateName);
       expect(requestBodies[0]).toContain(secondTemplateName);
       expect(requestBodies[1]).toContain("尚未为本批次所有选中模板提供处理结果");
+      expect(requestBodies[1]).toContain("正确格式示例");
       expect(requestBodies[1]).toContain(secondReportName);
       expect(requestBodies[2]).toContain("mark_no_update");
       expect(completedJob).toMatchObject({
@@ -8245,7 +8439,8 @@ describe("P0 desktop IPC handlers", () => {
           progressText: "进度：1/2",
           allowedActions: ["resume", "restart", "delete"]
         });
-        expect(failedJob?.failureReason).toContain("read_report_excerpt");
+        expect(failedJob?.failureReason).toContain("read_file");
+        expect(failedJob?.failureReason).toContain("edit_file 或 multi_edit");
         expect(reports).toHaveLength(1);
         expect(reportMarkdown).toContain("旧内容。");
         expect(reportMarkdown).not.toContain("新内容。");
@@ -10798,7 +10993,7 @@ describe("P0 desktop IPC handlers", () => {
     );
   });
 
-  it("rejects pause for a running background job instead of reporting a fake paused state", async () => {
+  it("requests pause for a running background job and reports the boundary-paused state", async () => {
     const heldResponse = createDeferred<unknown>();
     const mockServer = await startMockOpenAiServer({
       expectedApiKey: "sk-running-pause",
@@ -10836,11 +11031,24 @@ describe("P0 desktop IPC handlers", () => {
         status: "running"
       });
       await vi.waitFor(() => expect(mockServer.requests).toHaveLength(1));
-      await expect(contract.invoke(handlers, "jobs:pause", { jobId: job.id })).rejects.toThrow(
-        /运行中的任务暂不支持暂停/u
-      );
+      await expect(contract.invoke(handlers, "jobs:pause", { jobId: job.id })).resolves.toMatchObject({
+        id: job.id,
+        status: "pause_requested",
+        allowedActions: ["pause"]
+      });
 
       heldResponse.resolve(createChatCompletionResponse({ content: "NO_UPDATE" }));
+      await vi.waitFor(
+        async () => {
+          const runtime = await contract.invoke(handlers, "projectRuntime:get", { projectId: "project-a" });
+          expect(runtime.jobs.find((runtimeJob) => runtimeJob.id === job.id)).toMatchObject({
+            status: "paused",
+            allowedActions: ["resume", "restart", "delete"]
+          });
+        },
+        { timeout: 15_000 }
+      );
+      await contract.invoke(handlers, "jobs:resume", { jobId: job.id });
       const completedJob = await waitForJobTerminal(contract, handlers, job.id);
       expect(completedJob.status).toBe("completed");
     } finally {

@@ -152,9 +152,10 @@ describe("default config", () => {
     expect(getDefaultConfig().toolLoopDefaults).toEqual({
       enabledToolNames: [
         "read_file",
-        "read_report_excerpt",
-        "upsert_report_section",
+        "grep",
         "write_file",
+        "edit_file",
+        "multi_edit",
         "mark_no_update"
       ],
       maxRepeatedRecoverableToolErrors: 3,
@@ -166,7 +167,7 @@ describe("default config", () => {
         bash_tool_scope_denied: expect.stringContaining("正确格式示例"),
         write_tool_scope_denied: expect.stringContaining("正确格式示例"),
         bash_runtime_failure: expect.stringContaining("正确格式示例"),
-        tool_schema_invalid_arguments: expect.stringContaining("updates 必须是真 JSON 数组"),
+        tool_schema_invalid_arguments: expect.stringContaining("edits 必须是真 JSON 数组"),
         read_tool_invalid_arguments: expect.stringContaining("正确格式示例"),
         edit_target_not_found: expect.stringContaining("正确格式示例"),
         tool_not_enabled: expect.stringContaining("正确格式示例"),
@@ -181,45 +182,51 @@ describe("default config", () => {
     const hints = getDefaultConfig().toolLoopDefaults.recoverableToolErrorHints;
     for (const hint of Object.values(hints)) {
       expect(hint).toContain("正确格式示例");
-      expect(hint).toContain("upsert_report_section");
-      expect(hint).toContain("read_report_excerpt");
       expect(hint).toContain("mark_no_update");
+      expect(hint).not.toContain("upsert_report_section");
+      expect(hint).not.toContain("read_report_excerpt");
     }
-    expect(hints.tool_schema_invalid_arguments).toContain('"updates":[{"operation":"add_card"');
-    expect(hints.tool_schema_invalid_arguments).toContain("不要把 updates 写成字符串");
+    expect(hints.tool_schema_invalid_arguments).toContain('"path":"[报告]NPC性格与代表事件.md"');
+    expect(hints.tool_schema_invalid_arguments).toContain("edits 必须是真 JSON 数组");
     expect(getDefaultConfig().toolLoopDefaults.windowInstructionLines.join("\n")).toContain(
       "mark_no_update"
     );
     const windowInstructions = getDefaultConfig().toolLoopDefaults.windowInstructionLines.join("\n");
-    expect(windowInstructions).toContain("read_report_excerpt");
-    expect(windowInstructions).toContain("upsert_report_section");
-    expect(windowInstructions).toContain("add_card");
-    expect(windowInstructions).toContain("add_field");
-    expect(windowInstructions).toContain("replace_field");
+    expect(windowInstructions).toContain("不要调用 read_report_excerpt 或 upsert_report_section");
+    expect(windowInstructions).not.toContain("优先用 read_report_excerpt");
+    expect(windowInstructions).not.toContain("直接用 upsert_report_section");
+    expect(windowInstructions).not.toContain("add_card");
+    expect(windowInstructions).not.toContain("add_field");
+    expect(windowInstructions).not.toContain("replace_field");
     expect(windowInstructions).toContain("卡片名");
     expect(windowInstructions).toContain("字段名");
-    expect(windowInstructions).toContain("韩立-角色定位/核心性格/代表行为");
-    expect(windowInstructions).toContain("updates");
-    expect(windowInstructions).not.toContain("edits");
+    expect(windowInstructions).toContain(
+      "grep 定位关键词/字段 -> read_file offset/limit 读取命中附近上下文 -> edit_file / multi_edit 精确替换"
+    );
+    expect(windowInstructions).toContain("grep");
+    expect(windowInstructions).toContain("offset/limit");
+    expect(windowInstructions).toContain("read_file");
+    expect(windowInstructions).toContain("edit_file");
+    expect(windowInstructions).toContain("multi_edit");
+    expect(windowInstructions).toContain("write_file");
+    expect(windowInstructions).toContain("edits");
+    expect(windowInstructions).not.toContain("updates");
     expect(windowInstructions).toContain("真 JSON 数组");
     expect(windowInstructions).toContain("不要把数组写成字符串");
-    expect(windowInstructions).not.toContain("edit_file");
-    expect(windowInstructions).not.toContain("multi_edit");
-    expect(windowInstructions).not.toContain("grep");
     expect(windowInstructions).not.toContain("ls");
     expect(windowInstructions).not.toContain("glob");
     expect(windowInstructions).not.toContain("bash");
-    expect(windowInstructions).not.toContain("待创建报告");
+    expect(windowInstructions).toContain("待创建报告");
   });
 
-  it("guides missing report recovery through upsert report operations", () => {
+  it("guides missing report recovery through whole-file creation", () => {
     const hint = getDefaultConfig().toolLoopDefaults.recoverableToolErrorHints.edit_target_not_found;
 
-    expect(hint).toContain("upsert_report_section");
-    expect(hint).toContain("operation=add_card");
-    expect(hint).toContain("operation=add_field");
-    expect(hint).not.toContain("write_file 写入完整");
-    expect(hint).not.toContain("写入完整且合规的报告正文");
+    expect(hint).toContain("write_file");
+    expect(hint).toContain("完整且合规的报告正文");
+    expect(hint).not.toContain("upsert_report_section");
+    expect(hint).not.toContain("operation=add_card");
+    expect(hint).not.toContain("operation=add_field");
   });
 
   it("provides configurable extraction batching defaults", () => {
@@ -305,9 +312,10 @@ describe("default config", () => {
     ).not.toContain("solo");
     expect(getDefaultConfig().toolLoopDefaults.enabledToolNames).toEqual([
       "read_file",
-      "read_report_excerpt",
-      "upsert_report_section",
+      "grep",
       "write_file",
+      "edit_file",
+      "multi_edit",
       "mark_no_update"
     ]);
     expect(getDefaultConfig().templatePromptProfileDefaults.exampleSectionPatterns).not.toContain(

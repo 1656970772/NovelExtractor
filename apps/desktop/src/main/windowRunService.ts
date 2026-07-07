@@ -14,6 +14,7 @@ import {
   type FeeAmount,
   type JobLlmClient,
   type JobRunInput,
+  type JobRuntime,
   type JobRuntimeResult,
   type JobRuntimeState,
   type JobWindowInput,
@@ -38,6 +39,7 @@ import {
   executeBuiltinFileTool,
   getEnabledToolDefinitions,
   normalizeToolArgumentsForSchema,
+  parseConcatenatedJsonObjectString,
   ToolExecutionError,
   validateToolArguments,
   type BashTeardownResult
@@ -94,6 +96,8 @@ export interface WindowRunServiceOptions {
   fetch?: FetchLike;
   findExistingReport(input: { bookId: string; fileName: string }): ReportAsset | undefined;
   idGenerator: IdGenerator;
+  onRuntimeCreated?(input: { jobId: string; runtime: JobRuntime }): Promise<void> | void;
+  onRuntimeSettled?(input: { jobId: string; runtime: JobRuntime }): Promise<void> | void;
   onRuntimeState(state: JobRuntimeState): Promise<void> | void;
   providerStore: MainProviderStore;
   registerReport(input: { path: string; report: ReportAsset }): Promise<void> | void;
@@ -131,18 +135,21 @@ const DEFAULT_MAX_READ_BYTES = 1024 * 1024;
 const FORMAL_REPORT_FILE_NAME_PREFIX = "[报告]";
 const NO_TOOL_PROTOCOL_ERROR_MESSAGE =
   "tool loop 协议错误：无工具调用时必须返回 NO_UPDATE，或先通过写工具成功写入报告。";
+const TOOL_CORRECTION_FORMAT_EXAMPLES =
+  TOOL_LOOP_DEFAULTS.recoverableToolErrorHints.tool_schema_invalid_arguments;
 const NO_TOOL_PROTOCOL_CORRECTION_MESSAGE =
   "上一轮没有调用任何工具，也没有成功写入报告，最终文本不是精确的 NO_UPDATE。\n" +
-  "如果本窗口没有可写入的新信息，必须精确返回 NO_UPDATE；如果有可写入内容，必须先调用写工具写入正式报告。";
+  "如果本窗口没有可写入的新信息，必须精确返回 NO_UPDATE；如果有可写入内容，必须先调用写工具写入正式报告。\n" +
+  TOOL_CORRECTION_FORMAT_EXAMPLES;
 const BATCH_OUTCOME_CORRECTION_PREFIX = "上一轮尚未为本批次所有选中模板提供处理结果";
 const WRITE_FILE_EXISTING_REPORT_MESSAGE =
-  "已有报告不能用 write_file 覆盖；请先用 read_report_excerpt 按卡片名和字段名读取目标字段块，再用 upsert_report_section 替换同一字段。";
+  "已有报告不能用 write_file 直接覆盖；请先用 grep 定位关键词或字段，再用 read_file 的 offset/limit 读取命中附近上下文，最后用 edit_file 或 multi_edit 精确修改。";
 const UPSERT_EXISTING_REPORT_MESSAGE =
   "已有报告不能直接更新字段；请先用 read_report_excerpt 按卡片名和字段名读取目标字段块，再用 upsert_report_section 替换同一字段。";
 const OVERSIZED_REPORT_READ_MESSAGE =
-  "已选旧报告过大，不能直接整读。请用 read_report_excerpt 按卡片名和字段名读取目标字段块。";
+  "已选旧报告过大，不能直接整读。请先用 grep 定位关键词或字段，再用 read_file 的 offset/limit 分页读取需要修改的上下文。";
 const OVERSIZED_REPORT_READ_HINT =
-  "不要整读旧报告；按 cardName + fields 拆成更小的 queries 读取需要的字段块，内容太多时分多次读取。";
+  "不要整读旧报告；先用 grep 定位关键词或字段，再按 offset + limit 分页读取需要修改的片段，确认 old_string 唯一后用 edit_file 或 multi_edit 修改。";
 const WRITE_FILE_LOSSY_REWRITE_MESSAGE =
   "不能覆盖丢失既有内容，需要使用 edit_file/multi_edit 或包含完整旧内容。";
 const REPORT_CONTENT_INTERNAL_METADATA_MESSAGE = "报告正文不得包含内部运行路径或流程性元数据。";
@@ -428,10 +435,10 @@ function renderReportInventoryPromptSection(reportInventory: readonly ReportInve
     "宿主已基于本批次选中模板和 reports 目录提供报告清单，清单只包含本批次允许触达的报告文件。",
     `已有报告：${existingReportFileNames.length > 0 ? existingReportFileNames.join("、") : "无"}`,
     `待创建报告：${missingReportFileNames.length > 0 ? missingReportFileNames.join("、") : "无"}`,
-    "不要再调用搜索、目录或 shell 类工具查找这些报告是否存在；需要读已有报告时，优先用 read_report_excerpt 读取目标字段块，必要时再用 read_file 读取允许范围内的短上下文。",
-    "已有报告可按需读取相关字段；新增卡片/字段用 upsert_report_section 的 add_card/add_field，修改既有字段用 read_report_excerpt 后再 replace_field。",
-    "待创建报告有可写入卡片或字段时，直接用 upsert_report_section 的 add_card 或 add_field 创建报告内容。",
-    "不要先调用 read_file、read_report_excerpt 或 write_file 铺底。"
+    "不要再调用搜索、目录或 shell 类工具查找这些报告是否存在；报告清单已经给出。需要修改已有报告时，用 grep 在已知报告内定位关键词或字段。",
+    "已有报告先用 grep 在已知报告内定位关键词或字段，再用 read_file 的 offset/limit 读取命中附近上下文，最后用 edit_file 或 multi_edit 做精确替换。",
+    "待创建报告有可写入内容时，直接用 write_file 创建完整且合规的报告正文。",
+    "不要调用 read_report_excerpt 或 upsert_report_section。"
   ].join("\n");
 }
 
@@ -952,17 +959,7 @@ function toToolCallArguments(value: unknown): ToolCallArguments {
 }
 
 function parseJsonObjectString(value: string): Record<string, unknown> | undefined {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
-    return undefined;
-  }
-
-  try {
-    const parsed = JSON.parse(trimmed) as unknown;
-    return isPlainRecord(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
+  return parseConcatenatedJsonObjectString(value);
 }
 
 function normalizeToolCalls(toolCalls: ToolCall[], roundIndex: number): ChatCompletionRequestToolCall[] {
@@ -1724,7 +1721,7 @@ async function validateToolCallBeforeExecution(input: {
     !input.writtenReportFileNames.has(pathArgument)
   ) {
     throw new Error(
-      `写工具 ${toolCall.name} 不能直接修改既有报告；请先用 read_report_excerpt 按卡片名和字段名读取目标字段块，再用 upsert_report_section 替换同一字段：${redactSecrets(pathArgument, input.secrets)}`
+      `写工具 ${toolCall.name} 不能在未定位和读取上下文时直接修改既有报告；请先用 grep 定位关键词或字段，再用 read_file 的 offset/limit 读取命中附近上下文，最后用 edit_file 或 multi_edit 精确修改：${redactSecrets(pathArgument, input.secrets)}`
     );
   }
 }
@@ -2348,9 +2345,10 @@ function createBatchOutcomeCorrectionMessage(tracker: BatchOutcomeTracker): stri
   return [
     `上一轮尚未为本批次所有选中模板提供处理结果，缺少 outputFileName：${missingOutputs}。`,
     "下一轮只处理上述缺失 outputFileName；已完成处理结果的输出文件不要继续读取、编辑或重写。",
-    "请对每个缺失 outputFileName 优先调用 upsert_report_section：新增整张卡片用 operation=add_card，新增字段块用 operation=add_field，修改既有字段块先 read_report_excerpt 再 operation=replace_field；没有当前窗口明确证据时调用 mark_no_update。",
+    "请对每个缺失 outputFileName 处理：待创建报告用 write_file 写入完整正文；已有报告先 grep 定位关键词或字段，再用 read_file 的 offset/limit 读取命中附近上下文，最后用 edit_file 或 multi_edit 精确修改；没有当前窗口明确证据时调用 mark_no_update。",
     "如果缺失模板没有当前窗口明确证据，立即调用 mark_no_update；不要为了无新增模板继续查询或修改其他报告。",
-    "如果本批所有模板都没有可写入的新信息，最终文本必须严格返回 NO_UPDATE。"
+    "如果本批所有模板都没有可写入的新信息，最终文本必须严格返回 NO_UPDATE。",
+    TOOL_CORRECTION_FORMAT_EXAMPLES
   ].join("\n");
 }
 
@@ -3315,7 +3313,12 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         }
       });
 
-      return runtime.startJob(runtimeInput);
+      await options.onRuntimeCreated?.({ jobId: job.id, runtime });
+      try {
+        return await runtime.startJob(runtimeInput);
+      } finally {
+        await options.onRuntimeSettled?.({ jobId: job.id, runtime });
+      }
     }
   };
 }

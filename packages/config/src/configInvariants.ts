@@ -352,7 +352,13 @@ function assertRequiredRecoverableToolErrorHints(value: unknown): void {
 
   const hints = value as Record<string, unknown>;
   REQUIRED_RECOVERABLE_TOOL_ERROR_HINT_KEYS.forEach((key) => {
-    assertNonEmpty(hints[key], `tool loop recoverable tool error hint ${key}`);
+    const hint = hints[key];
+    assertNonEmpty(hint, `tool loop recoverable tool error hint ${key}`);
+    if (!hint.includes("正确格式示例")) {
+      throw new ConfigInvariantError(
+        `tool loop recoverable tool error hint ${key} must include 正确格式示例.`
+      );
+    }
   });
 }
 

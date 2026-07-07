@@ -263,7 +263,7 @@ describe("Reasonix workspace parity", () => {
     expect(tools.glob.description()).toContain("不要用 glob/ls/bash 查找报告");
     expect(tools.ls.description()).toContain("报告是否存在已由宿主清单提供");
     expect(tools.bash.description()).toContain("不要用 glob/ls/bash 查找报告");
-    expect(tools.read_file.description()).toContain("需要读已有报告时后续任务会走卡片字段块读取");
+    expect(tools.read_file.description()).toContain("读取已有报告时，优先根据 grep 命中行用 offset/limit 读取必要上下文");
     expect(tools.read_report_excerpt.description()).toContain("卡片字段块");
     expect(tools.read_report_excerpt.description()).toContain("cardName");
   });

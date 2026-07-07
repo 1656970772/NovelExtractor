@@ -21,7 +21,7 @@ import {
 import { generateRuntimeWindows, type GenerateRuntimeWindowsResult } from "@novel-extractor/extraction/runtimeWindows";
 import { uploadBook, type UploadedBookRepository } from "@novel-extractor/extraction/uploadBook";
 import { planChapterWindows } from "@novel-extractor/extraction/windowPlanner";
-import type { JobRuntimeError, JobRuntimeState, TokenUsage } from "@novel-extractor/jobs";
+import type { JobRuntime, JobRuntimeError, JobRuntimeState, TokenUsage } from "@novel-extractor/jobs";
 import type { FetchLike } from "@novel-extractor/llm";
 import { renderSafeMarkdown } from "@novel-extractor/markdown/preview";
 import { createMemoryCredentialStore, type MemoryCredentialStore } from "./credentials";
@@ -544,6 +544,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     openPath: async () => "完整日志打开入口尚未初始化。"
   };
   const credentialStore = options.credentialStore ?? createMemoryCredentialStore();
+  const activeWindowRuntimes = new Map<string, JobRuntime>();
   const projectStore =
     options.projectStore ??
     createFileProjectStore({
@@ -1482,6 +1483,14 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
           );
         },
         idGenerator,
+        onRuntimeCreated({ jobId, runtime }) {
+          activeWindowRuntimes.set(jobId, runtime);
+        },
+        onRuntimeSettled({ jobId, runtime }) {
+          if (activeWindowRuntimes.get(jobId) === runtime) {
+            activeWindowRuntimes.delete(jobId);
+          }
+        },
         async onRuntimeState(state) {
           const currentJob = requireJob(state.jobId);
           await updateJob(
@@ -1587,6 +1596,19 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     if (jobScheduler.isQueued(jobId)) {
       throw new Error(`排队中的任务暂不支持${actionLabel}；可删除排队任务或等待运行。`);
     }
+  }
+
+  function formatRuntimeControlFailure(actionLabel: string, error: JobRuntimeError): string {
+    if (error.code === "invalid_job_state") {
+      return `当前任务状态不支持${actionLabel}。`;
+    }
+    if (error.code === "job_not_found") {
+      return `运行中的任务暂时无法${actionLabel}；请稍后再试。`;
+    }
+    if (error.code === "job_failed") {
+      return error.message;
+    }
+    return `任务${actionLabel}失败。`;
   }
 
   async function updateJob(
@@ -1758,7 +1780,21 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     "jobs:pause": async (input) => {
       const job = requireJob(input.jobId);
       if (jobScheduler.isRunning(job.id)) {
-        throw new Error("运行中的任务暂不支持暂停；请等待当前任务完成后再继续操作。");
+        const runtime = activeWindowRuntimes.get(job.id);
+        if (!runtime) {
+          throw new Error("运行中的任务正在初始化暂停控制，请稍后再试。");
+        }
+        const result = await runtime.pauseJob(job.id);
+        if (!result.ok) {
+          if (
+            result.error.code === "invalid_job_state" &&
+            (result.error.currentStatus === "pause_requested" || result.error.currentStatus === "paused")
+          ) {
+            return await buildJobDto(requireJob(job.id));
+          }
+          throw new Error(formatRuntimeControlFailure("暂停", result.error));
+        }
+        return await buildJobDto(requireJob(job.id));
       }
       if (jobScheduler.isQueued(job.id)) {
         throw new Error("排队中的任务暂不支持暂停；可删除排队任务或等待运行。");
@@ -1770,8 +1806,16 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     },
     "jobs:resume": async (input) => {
       const job = requireJob(input.jobId);
+      const runtime = activeWindowRuntimes.get(job.id);
+      if (runtime) {
+        const result = await runtime.resumeJob(job.id);
+        if (!result.ok) {
+          throw new Error(formatRuntimeControlFailure("继续", result.error));
+        }
+        return await buildJobDto(requireJob(job.id));
+      }
       assertJobNotQueuedForAction(job.id, "继续");
-      return enqueueModelBackedJob(job);
+      return enqueueModelBackedJob(job, { skipAlreadyExtracted: true });
     },
     "jobs:restart": async (input) => {
       const job = requireJob(input.jobId);

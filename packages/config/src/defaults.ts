@@ -68,10 +68,11 @@ const PUBLIC_REPORT_METADATA_RULE =
 const TEMPLATE_EXAMPLE_EVIDENCE_RULE =
   "模板示例、字段说明、示例事件链和通用术语只作为格式参考；只有当前窗口原文或已读取既有报告明确证实时才可写入正式报告，未证实的分析结论必须写原文未说明或不写。";
 const TOOL_ERROR_FORMAT_EXAMPLES =
-  "正确格式示例：upsert_report_section 新增卡片参数 {\"outputFileName\":\"[报告]NPC性格与代表事件.md\",\"updates\":[{\"operation\":\"add_card\",\"cardName\":\"韩立\",\"content\":\"### 韩立\\n\\n- 核心性格：谨慎行事。\"}]}；" +
-  "upsert_report_section 替换字段参数 {\"outputFileName\":\"[报告]NPC性格与代表事件.md\",\"updates\":[{\"operation\":\"replace_field\",\"cardName\":\"韩立\",\"fieldName\":\"核心性格\",\"content\":\"- 核心性格：谨慎行事。\"}]}；" +
-  "read_report_excerpt 参数 {\"outputFileName\":\"[报告]NPC性格与代表事件.md\",\"queries\":[{\"cardName\":\"韩立\",\"fields\":[\"核心性格\"]}]}；" +
-  "mark_no_update 参数 {\"path\":\"[报告]NPC性格与代表事件.md\",\"reason\":\"当前窗口无新增信息\"}。updates 必须是真 JSON 数组，queries 也必须是真 JSON 数组；不要把 updates 写成字符串、Markdown 代码块或多层转义文本。";
+  "正确格式示例：read_file 参数 {\"path\":\"[报告]NPC性格与代表事件.md\"}；" +
+  "write_file 参数 {\"path\":\"[报告]NPC性格与代表事件.md\",\"content\":\"# NPC性格与代表事件\\n\\n### 韩立\\n\\n- 核心性格：谨慎行事。\"}；" +
+  "edit_file 参数 {\"path\":\"[报告]NPC性格与代表事件.md\",\"old_string\":\"- 核心性格：旧内容\",\"new_string\":\"- 核心性格：谨慎行事。\"}；" +
+  "multi_edit 参数 {\"path\":\"[报告]NPC性格与代表事件.md\",\"edits\":[{\"old_string\":\"- 核心性格：旧内容\",\"new_string\":\"- 核心性格：谨慎行事。\"}]}；" +
+  "mark_no_update 参数 {\"path\":\"[报告]NPC性格与代表事件.md\",\"reason\":\"当前窗口无新增信息\"}。edits 必须是真 JSON 数组；不要把数组写成字符串、Markdown 代码块或多层转义文本。";
 
 const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
   providerPresets: createCcSwitchProviderPresets(),
@@ -126,24 +127,25 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
     fileNamePrefix: "raw-window",
     displayNamePrefix: "原始窗口"
   },
-  toolLoopDefaults: {
+      toolLoopDefaults: {
     enabledToolNames: [
       "read_file",
-      "read_report_excerpt",
-      "upsert_report_section",
+      "grep",
       "write_file",
+      "edit_file",
+      "multi_edit",
       "mark_no_update"
     ],
     maxRepeatedRecoverableToolErrors: 3,
     recoverableToolErrorHints: {
       replacement_text_not_found:
-        `old_string 必须精确匹配文件中的原文；更新既有报告优先改用 read_report_excerpt 按卡片字段读取，再用 upsert_report_section 替换同一字段。${TOOL_ERROR_FORMAT_EXAMPLES}`,
+        `old_string 必须精确匹配文件中的原文；更新既有报告先用 grep 定位关键词或字段，再用 read_file 的 offset/limit 读取命中附近上下文，最后用 edit_file 或 multi_edit 精确替换。${TOOL_ERROR_FORMAT_EXAMPLES}`,
       replacement_text_not_unique:
-        `old_string 在文件中匹配到多处；更新既有报告优先改用 read_report_excerpt 按卡片字段读取，再用 upsert_report_section 替换同一字段。${TOOL_ERROR_FORMAT_EXAMPLES}`,
+        `old_string 在文件中匹配到多处；请用 grep 定位更具体的关键词或字段，再用 read_file 的 offset/limit 读取更多上下文，把 old_string 扩大到唯一片段后再用 edit_file 或 multi_edit。${TOOL_ERROR_FORMAT_EXAMPLES}`,
       read_tool_target_not_found:
-        `读取目标不存在；请改用当前窗口文本、reports 目录、本批选中报告文件名，或用 read_report_excerpt 读取报告字段块。${TOOL_ERROR_FORMAT_EXAMPLES}`,
+        `读取目标不存在；请改用当前窗口文本、reports 目录或本批选中报告文件名。${TOOL_ERROR_FORMAT_EXAMPLES}`,
       read_tool_scope_denied:
-        `只能读取当前窗口文本、当前书籍 reports 目录或本批选中输出报告；请改用窗口文件路径、reports、选中报告文件名或 read_report_excerpt。${TOOL_ERROR_FORMAT_EXAMPLES}`,
+        `只能读取当前窗口文本、当前书籍 reports 目录或本批选中输出报告；请改用窗口文件路径、reports 或选中报告文件名。${TOOL_ERROR_FORMAT_EXAMPLES}`,
       bash_tool_scope_denied:
         `桌面端 bash 只能在当前书籍 reports 目录内执行；不要读取 source、runs、rules、项目根路径、绝对路径或通过 .. 跳出 reports。${TOOL_ERROR_FORMAT_EXAMPLES}`,
       write_tool_scope_denied:
@@ -151,11 +153,11 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
       bash_runtime_failure:
         `bash 命令执行失败；请根据 stderr/stdout 调整命令、参数或先用文件工具确认目标。${TOOL_ERROR_FORMAT_EXAMPLES}`,
       tool_schema_invalid_arguments:
-        `工具参数结构不符合 schema；请只传入该工具支持的字段，并确保 path/content/outputFileName/updates/queries/reason 等字段类型正确。${TOOL_ERROR_FORMAT_EXAMPLES}`,
+        `工具参数结构不符合 schema；请只传入该工具支持的字段，并确保 path/content/old_string/new_string/edits/reason 等字段类型正确。${TOOL_ERROR_FORMAT_EXAMPLES}`,
       read_tool_invalid_arguments:
-        `读取工具参数无效；请检查 path 或 queries 是否符合工具 schema，并缩小读取范围。${TOOL_ERROR_FORMAT_EXAMPLES}`,
+        `读取工具参数无效；请检查 path、offset 或 limit 是否符合工具 schema，并缩小读取范围。${TOOL_ERROR_FORMAT_EXAMPLES}`,
       edit_target_not_found:
-        `目标报告不存在；如果需要创建报告内容，请改用 upsert_report_section：operation=add_card 新增整张卡片，operation=add_field 新增字段块。${TOOL_ERROR_FORMAT_EXAMPLES}`,
+        `目标报告不存在；如果需要创建报告内容，请改用 write_file 写入完整且合规的报告正文。${TOOL_ERROR_FORMAT_EXAMPLES}`,
       tool_not_enabled:
         `只能调用当前请求 tools 清单中列出的工具；不要调用未列出的 shell、搜索、目录列出或编辑工具。${TOOL_ERROR_FORMAT_EXAMPLES}`,
       tool_invalid_arguments:
@@ -171,10 +173,10 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
       "正式报告正文必须按模板案例的卡片样式组织：每张卡片用 `### 卡片名` 开头，卡片内字段统一写成 `- 字段名：内容说明`；必要子项缩进写在对应字段下，不要写成无卡片或无字段名的连续正文。",
       NO_WHOLE_BOOK_PRIOR_KNOWLEDGE_RULE,
       TEMPLATE_EXAMPLE_EVIDENCE_RULE,
-      "新增卡片或新增字段块时，直接用 upsert_report_section：operation=add_card 新增整张卡片，operation=add_field 新增某个字段块；报告不存在时工具会自动创建报告，不要先用 write_file 铺底。",
-      "修改既有字段块前，先用 read_report_excerpt 按“卡片名-字段名/字段名”坐标读取目标字段块；确认后用 upsert_report_section operation=replace_field 替换同一字段块，不要整读旧报告，不要用 old_string。",
-      "工具参数必须严格按 schema 传入原生 JSON 值：updates、queries 等数组字段必须是真 JSON 数组（[...]），不要把数组写成字符串、Markdown 代码块或多层转义文本。",
-      "字段坐标示例：韩立-角色定位/核心性格/代表行为；工具调用时拆成 cardName=韩立，fields=[角色定位,核心性格,代表行为]。",
+      "待创建报告有可写入信息时，直接用 write_file 创建并写入完整报告正文；不要先创建空文件或模板占位正文。",
+      "修改已有报告必须遵循固定流程：grep 定位关键词/字段 -> read_file offset/limit 读取命中附近上下文 -> edit_file / multi_edit 精确替换；old_string 必须来自已读取原文且唯一匹配。",
+      "不要调用 read_report_excerpt 或 upsert_report_section；本轮默认使用通用文件读写工具。",
+      "工具参数必须严格按 schema 传入原生 JSON 值：edits 等数组字段必须是真 JSON 数组（[...]），不要把数组写成字符串、Markdown 代码块或多层转义文本。",
       "如果本批次只有部分模板无新增信息，必须对这些模板调用 mark_no_update，并继续为其他模板写入或更新报告。",
       "如果当前窗口没有可写入的新信息，且未执行写工具，最终文本必须严格返回 NO_UPDATE。"
     ]
@@ -264,7 +266,7 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
     },
     running: {
       label: "运行中",
-      allowedActions: []
+      allowedActions: ["pause"]
     },
     paused: {
       label: "已暂停",

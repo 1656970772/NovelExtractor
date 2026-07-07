@@ -737,7 +737,7 @@ describe("ExtractionPage", () => {
     expect(screen.getByText("读取任务失败")).toBeInTheDocument();
   });
 
-  it("does not show pause when a task is running", () => {
+  it("shows pause when a task is running", () => {
     render(
       <ExtractionPage
         models={[modelForTest]}
@@ -747,7 +747,7 @@ describe("ExtractionPage", () => {
       />
     );
 
-    expect(screen.queryByRole("button", { name: "暂停" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "暂停" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "继续" })).not.toBeInTheDocument();
   });
 
@@ -847,7 +847,7 @@ describe("ExtractionPage", () => {
     vi.doMock("@novel-extractor/config", () => ({
       getTaskStatusConfig: () => ({
         pending: { label: "待开始", allowedActions: ["start"] },
-        running: { label: "运行中", allowedActions: [] },
+        running: { label: "运行中", allowedActions: ["pause"] },
         paused: { label: "已暂停", allowedActions: ["resume"] },
         completed: { label: "已完成", allowedActions: ["delete"] },
         failed: { label: "失败", allowedActions: ["resume", "restart", "delete"] }
@@ -889,7 +889,7 @@ describe("ExtractionPage", () => {
       />
     );
 
-    expect(screen.queryByRole("button", { name: "配置暂停" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "配置暂停" })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "配置继续" })).toHaveLength(2);
     expect(screen.getByRole("button", { name: "配置重试" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "配置删除" })).toBeInTheDocument();
@@ -904,6 +904,7 @@ describe("ExtractionPage", () => {
         models={[modelForTest]}
         books={[uploadedBookForTest]}
         jobs={[
+          { id: "job-running", status: "running", progressText: "窗口 1/3" },
           { id: "job-paused", status: "paused", progressText: "窗口 1/3" }
         ]}
         state="ready"
@@ -911,10 +912,12 @@ describe("ExtractionPage", () => {
       />
     );
 
+    await user.click(screen.getByRole("button", { name: "暂停" }));
     await user.click(screen.getByRole("button", { name: "继续" }));
 
-    expect(onJobAction).toHaveBeenCalledTimes(1);
-    expect(onJobAction).toHaveBeenCalledWith("job-paused", "resume");
+    expect(onJobAction).toHaveBeenCalledTimes(2);
+    expect(onJobAction).toHaveBeenNthCalledWith(1, "job-running", "pause");
+    expect(onJobAction).toHaveBeenNthCalledWith(2, "job-paused", "resume");
   });
 
   it("routes failed task continue and restart actions", async () => {

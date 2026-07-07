@@ -258,6 +258,41 @@ describe("P0 tool registry", () => {
     });
   });
 
+  it("normalizes concatenated JSON object arguments by merging object chunks", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        old_string: { type: "string" },
+        new_string: { type: "string" }
+      },
+      required: ["path", "old_string", "new_string"],
+      additionalProperties: false
+    };
+
+    expect(
+      normalizeToolArgumentsForSchema(
+        schema,
+        '{}{"path":"[报告]NPC性格与代表事件.md","old_string":"- 核心性格：旧内容。","new_string":"- 核心性格：谨慎行事。"}'
+      )
+    ).toEqual({
+      path: "[报告]NPC性格与代表事件.md",
+      old_string: "- 核心性格：旧内容。",
+      new_string: "- 核心性格：谨慎行事。"
+    });
+
+    expect(
+      normalizeToolArgumentsForSchema(
+        schema,
+        '{"path":"[报告]NPC性格与代表事件.md"}{"old_string":"旧","new_string":"新"}'
+      )
+    ).toEqual({
+      path: "[报告]NPC性格与代表事件.md",
+      old_string: "旧",
+      new_string: "新"
+    });
+  });
+
   it("reports missing required fields and extra object fields", () => {
     const errors = validateToolArguments(
       {
@@ -323,7 +358,7 @@ describe("P0 tool registry", () => {
     expect(tools.find((tool) => tool.name === "ls")?.description).toContain("不要用 glob/ls/bash 查找报告");
     expect(tools.find((tool) => tool.name === "bash")?.description).toContain("不要用 glob/ls/bash 查找报告");
     expect(tools.find((tool) => tool.name === "read_file")?.description).toContain(
-      "需要读已有报告时后续任务会走卡片字段块读取"
+      "读取已有报告时，优先根据 grep 命中行用 offset/limit 读取必要上下文"
     );
   });
 

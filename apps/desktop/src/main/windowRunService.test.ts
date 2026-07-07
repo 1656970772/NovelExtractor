@@ -331,18 +331,18 @@ describe("window run report inventory", () => {
     expect(userPrompt).toContain("已有报告：NPC性格与代表事件.md、势力设定.md、材料分析.md");
     expect(userPrompt).toContain("待创建报告：事件因果链（长程因果图）.md");
     expect(userPrompt).toContain("不要再调用搜索、目录或 shell 类工具查找这些报告是否存在");
-    expect(userPrompt).toContain("优先用 read_report_excerpt 读取目标字段块");
+    expect(userPrompt).toContain("已有报告先用 grep 在已知报告内定位关键词");
     expect(userPrompt).toMatch(/outputFileName: NPC性格与代表事件\.md[\s\S]*reportStatus: 已存在/u);
     expect(userPrompt).toMatch(/outputFileName: 事件因果链（长程因果图）\.md[\s\S]*reportStatus: 待创建/u);
     expect(userPrompt).toContain(
-      "已有报告可按需读取相关字段；新增卡片/字段用 upsert_report_section 的 add_card/add_field，修改既有字段用 read_report_excerpt 后再 replace_field。"
+      "已有报告先用 grep 在已知报告内定位关键词或字段，再用 read_file 的 offset/limit 读取命中附近上下文，最后用 edit_file 或 multi_edit 做精确替换。"
     );
     expect(userPrompt).toContain(
-      "待创建报告有可写入卡片或字段时，直接用 upsert_report_section 的 add_card 或 add_field 创建报告内容"
+      "待创建报告有可写入内容时，直接用 write_file 创建完整且合规的报告正文。"
     );
-    expect(userPrompt).toContain("不要先调用 read_file、read_report_excerpt 或 write_file 铺底。");
-    expect(userPrompt).not.toContain("有可写入信息时直接用 write_file 创建并写入完整报告正文");
-    expect(userPrompt).not.toContain("待创建报告不要先调用 read_file 或 read_report_excerpt");
+    expect(userPrompt).toContain("不要调用 read_report_excerpt 或 upsert_report_section。");
+    expect(userPrompt).not.toContain("add_card");
+    expect(userPrompt).not.toContain("replace_field");
   }, 20000);
 
   it("uses formal report file names instead of template file names when creating reports", async () => {
@@ -536,20 +536,21 @@ describe("window run Reasonix tool loop integration", () => {
           expect(content).toContain("$.updates 必须是数组");
           expect(content).not.toContain("updates must be a non-empty array");
           expect(parsed.hint).toContain("正确格式示例");
-          expect(parsed.hint).toContain("updates 必须是真 JSON 数组");
-          expect(parsed.hint).toContain('"updates":[{"operation":"add_card"');
-          expect(parsed.hint).toContain("不要把 updates 写成字符串");
+          expect(parsed.hint).toContain("edits 必须是真 JSON 数组");
+          expect(parsed.hint).toContain('"path":"[报告]NPC性格与代表事件.md"');
+          expect(parsed.hint).toContain("不要把数组写成字符串");
         }
-      }
+      },
+      enabledToolNames: legacyDesktopToolNames
     });
 
     expect(result.logText).toContain("tool_schema_invalid_arguments");
     expect(result.logText).toContain("$.updates 必须是数组");
     expect(result.logText).not.toContain("updates must be a non-empty array");
     expect(result.logText).toContain("正确格式示例");
-    expect(result.logText).toContain("updates 必须是真 JSON 数组");
-    expect(result.logText).toContain("add_card");
-    expect(result.logText).toContain("不要把 updates 写成字符串");
+    expect(result.logText).toContain("edits 必须是真 JSON 数组");
+    expect(result.logText).toContain("edit_file");
+    expect(result.logText).toContain("不要把数组写成字符串");
     expect(result.reportContents["[报告]NPC性格与代表事件.md"]).toBe(
       "# NPC性格与代表事件\n\n### 韩立\n\n- 核心性格：旧内容。\n"
     );
@@ -575,13 +576,49 @@ describe("window run Reasonix tool loop integration", () => {
           expect(content).toContain("created_report_and_card");
           expect(content).not.toContain("tool_schema_invalid_arguments");
         }
-      }
+      },
+      enabledToolNames: legacyDesktopToolNames
     });
 
     expect(result.requestBodies).toHaveLength(2);
     expect(result.logText).not.toContain("$.updates 必须是数组");
     expect(result.reportContents["[报告]NPC性格与代表事件.md"]).toBe(
       "# [报告]NPC性格与代表事件\n\n### 韩立\n\n- 核心性格：谨慎行事。\n"
+    );
+  });
+
+  it("executes edit_file when object arguments are concatenated JSON chunks", async () => {
+    const result = await runWindowWithMockToolCall({
+      existingReports: {
+        "[报告]NPC性格与代表事件.md": "# NPC性格与代表事件\n\n### 韩立\n\n- 核心性格：旧内容。\n"
+      },
+      toolCalls: [
+        createToolCall("call-grep-core-personality", "grep", {
+          path: "[报告]NPC性格与代表事件.md",
+          pattern: "核心性格"
+        }),
+        createRawToolCall(
+          "call-edit-concatenated-json",
+          "edit_file",
+          '{}{"path":"[报告]NPC性格与代表事件.md","old_string":"- 核心性格：旧内容。","new_string":"- 核心性格：谨慎行事。"}'
+        )
+      ],
+      expectToolResult: {
+        toolName: "edit_file",
+        toolCallId: "call-edit-concatenated-json",
+        assertContent: (content) => {
+          expect(content).toContain("edited ");
+          expect(content).not.toContain("tool_schema_invalid_arguments");
+          expect(content).not.toContain("$ 必须是对象");
+        }
+      }
+    });
+
+    expect(result.requestBodies).toHaveLength(2);
+    expect(result.logText).not.toContain("tool_schema_invalid_arguments");
+    expect(result.logText).not.toContain("$ 必须是对象");
+    expect(result.reportContents["[报告]NPC性格与代表事件.md"]).toBe(
+      "# NPC性格与代表事件\n\n### 韩立\n\n- 核心性格：谨慎行事。\n"
     );
   });
 
@@ -1072,7 +1109,7 @@ describe("window run Reasonix tool loop integration", () => {
       ok: false,
       error: {
         code: "job_failed",
-        message: expect.stringContaining("请先用 read_report_excerpt")
+        message: expect.stringContaining("请先用 grep")
       }
     });
     await expect(fs.readFile(path.join(reportsRoot, outputFileName), "utf8")).resolves.toBe(initialReport);
@@ -1226,8 +1263,8 @@ describe("window run Reasonix tool loop integration", () => {
     expect(requestBodies).toHaveLength(3);
     expect(JSON.stringify(requestBodies[1])).toContain("报告正文不得包含内部运行路径");
     expect(JSON.stringify(requestBodies[1])).toContain("正确格式示例");
-    expect(JSON.stringify(requestBodies[1])).toContain("updates 必须是真 JSON 数组");
-    expect(JSON.stringify(requestBodies[1])).toContain("不要把 updates 写成字符串");
+    expect(JSON.stringify(requestBodies[1])).toContain("edits 必须是真 JSON 数组");
+    expect(JSON.stringify(requestBodies[1])).toContain("不要把数组写成字符串");
     expect(JSON.stringify(requestBodies)).not.toContain(secret);
     expect(JSON.stringify(append.mock.calls)).not.toContain(secret);
   }, 20000);
@@ -3061,7 +3098,8 @@ describe("window run Reasonix tool loop integration", () => {
     expect(failedBashToolResult).toContain("before");
     expect(failedBashToolResult).toContain("command exited");
     expect(failedBashToolResult).toContain("report_sync");
-    expect(failedBashToolResult).toContain("已有报告不能用 write_file 覆盖");
+    expect(failedBashToolResult).toContain("已有报告不能用 write_file 直接覆盖");
+    expect(failedBashToolResult).toContain("正确格式示例");
     await expect(fs.readFile(path.join(reportsRoot, "人物.md"), "utf8")).resolves.toContain(
       "bash sync 拒绝可见后追加。"
     );
@@ -3075,6 +3113,17 @@ function createToolCall(id: string, name: string, args: Record<string, unknown>)
     function: {
       name,
       arguments: JSON.stringify(args)
+    }
+  };
+}
+
+function createRawToolCall(id: string, name: string, rawArguments: string): Record<string, unknown> {
+  return {
+    id,
+    type: "function",
+    function: {
+      name,
+      arguments: rawArguments
     }
   };
 }
@@ -3230,13 +3279,15 @@ function createWindowRunJob(input: { skipAlreadyExtracted?: boolean; templateIds
 }
 
 async function runWindowWithMockToolCall(input: {
+  enabledToolNames?: readonly string[];
   existingReports?: Record<string, string>;
   expectToolResult?: {
     toolName: string;
     toolCallId: string;
     assertContent(content: string): void;
   };
-  toolCall: Record<string, unknown>;
+  toolCall?: Record<string, unknown>;
+  toolCalls?: Array<Record<string, unknown>>;
 }): Promise<{
   logText: string;
   reportContents: Record<string, string>;
@@ -3270,7 +3321,8 @@ async function runWindowWithMockToolCall(input: {
     requestBodies.push(body);
 
     if (requestBodies.length === 1) {
-      return new Response(JSON.stringify(createChatCompletionResponse({ toolCalls: [input.toolCall] })), {
+      const toolCalls = input.toolCalls ?? (input.toolCall !== undefined ? [input.toolCall] : []);
+      return new Response(JSON.stringify(createChatCompletionResponse({ toolCalls })), {
         headers: { "Content-Type": "application/json" },
         status: 200
       });
@@ -3297,6 +3349,7 @@ async function runWindowWithMockToolCall(input: {
   const service = createWindowRunService({
     clock: { now: () => "2026-07-01T00:00:00.000Z" },
     credentialStore,
+    enabledToolNames: input.enabledToolNames,
     fetch,
     findExistingReport: () => undefined,
     idGenerator: { createId: (prefix: string) => `${prefix}-1` },

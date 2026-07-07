@@ -26,6 +26,9 @@ interface ToolLoopDefaultsTestShape {
   windowInstructionLines: string[];
 }
 
+const TOOL_ERROR_FORMAT_EXAMPLE =
+  '正确格式示例：edit_file 参数 {"path":"[报告]NPC性格与代表事件.md","old_string":"旧","new_string":"新"}。';
+
 function expectInvariantViolation(config: NovelExtractorConfig, messagePattern: RegExp): void {
   expect(() => assertValidConfigInvariants(config)).toThrow(ConfigInvariantError);
   expect(() => assertValidConfigInvariants(config)).toThrow(messagePattern);
@@ -54,18 +57,18 @@ function withToolLoopDefaults(
     ],
     maxRepeatedRecoverableToolErrors: 3,
     recoverableToolErrorHints: {
-      replacement_text_not_found: "old_string 必须精确匹配文件中的原文。",
-      replacement_text_not_unique: "old_string 在文件中匹配到多处。",
-      read_tool_target_not_found: "读取目标不存在。",
-      read_tool_scope_denied: "读工具路径不在允许范围内。",
-      bash_tool_scope_denied: "bash 路径不在允许范围内。",
-      write_tool_scope_denied: "写工具路径不在允许范围内。",
-      bash_runtime_failure: "bash 命令执行失败。",
-      tool_schema_invalid_arguments: "工具参数结构不符合 schema。",
-      read_tool_invalid_arguments: "读取工具参数无效。",
-      edit_target_not_found: "目标报告不存在。",
-      tool_not_enabled: "只能调用工具清单中列出的工具。",
-      tool_invalid_arguments: "工具参数无效。"
+      replacement_text_not_found: `old_string 必须精确匹配文件中的原文。${TOOL_ERROR_FORMAT_EXAMPLE}`,
+      replacement_text_not_unique: `old_string 在文件中匹配到多处。${TOOL_ERROR_FORMAT_EXAMPLE}`,
+      read_tool_target_not_found: `读取目标不存在。${TOOL_ERROR_FORMAT_EXAMPLE}`,
+      read_tool_scope_denied: `读工具路径不在允许范围内。${TOOL_ERROR_FORMAT_EXAMPLE}`,
+      bash_tool_scope_denied: `bash 路径不在允许范围内。${TOOL_ERROR_FORMAT_EXAMPLE}`,
+      write_tool_scope_denied: `写工具路径不在允许范围内。${TOOL_ERROR_FORMAT_EXAMPLE}`,
+      bash_runtime_failure: `bash 命令执行失败。${TOOL_ERROR_FORMAT_EXAMPLE}`,
+      tool_schema_invalid_arguments: `工具参数结构不符合 schema。${TOOL_ERROR_FORMAT_EXAMPLE}`,
+      read_tool_invalid_arguments: `读取工具参数无效。${TOOL_ERROR_FORMAT_EXAMPLE}`,
+      edit_target_not_found: `目标报告不存在。${TOOL_ERROR_FORMAT_EXAMPLE}`,
+      tool_not_enabled: `只能调用工具清单中列出的工具。${TOOL_ERROR_FORMAT_EXAMPLE}`,
+      tool_invalid_arguments: `工具参数无效。${TOOL_ERROR_FORMAT_EXAMPLE}`
     },
     systemInstruction: "必须通过文件工具写入或返回 NO_UPDATE。",
     windowInstructionLines: ["写工具 path 必须使用模板 outputFileName。", "无更新时只返回 NO_UPDATE。"],
@@ -470,6 +473,11 @@ describe("config invariants", () => {
     const emptyHint = getDefaultConfig();
     emptyHint.toolLoopDefaults.recoverableToolErrorHints.tool_invalid_arguments = " ";
     expectInvariantViolation(emptyHint, /tool_invalid_arguments/i);
+
+    const missingFormatExample = getDefaultConfig();
+    missingFormatExample.toolLoopDefaults.recoverableToolErrorHints.tool_invalid_arguments =
+      "工具参数无效，请根据错误消息修正参数后重试。";
+    expectInvariantViolation(missingFormatExample, /正确格式示例/i);
   });
 
   it("requires valid job scheduler concurrency limits", () => {

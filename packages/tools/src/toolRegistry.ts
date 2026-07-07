@@ -87,6 +87,46 @@ export function normalizeToolArgumentsForSchema(schema: unknown, value: unknown)
   return normalizeJsonSchemaValue(schema, value);
 }
 
+export function parseConcatenatedJsonObjectString(value: string): Record<string, unknown> | undefined {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return undefined;
+  }
+
+  const chunks: Array<Record<string, unknown>> = [];
+  let index = 0;
+  while (index < trimmed.length) {
+    while (index < trimmed.length && /\s/u.test(trimmed[index] ?? "")) {
+      index += 1;
+    }
+    if (index >= trimmed.length) {
+      break;
+    }
+    if (trimmed[index] !== "{") {
+      return undefined;
+    }
+
+    const endIndex = findJsonValueEnd(trimmed, index);
+    if (endIndex === undefined) {
+      return undefined;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed.slice(index, endIndex)) as unknown;
+    } catch {
+      return undefined;
+    }
+    if (!isPlainJsonObject(parsed)) {
+      return undefined;
+    }
+    chunks.push(parsed);
+    index = endIndex;
+  }
+
+  return chunks.length === 0 ? undefined : Object.assign({}, ...chunks);
+}
+
 function normalizeJsonSchemaValue(schema: unknown, value: unknown): unknown {
   if (schema === null || typeof schema !== "object" || Array.isArray(schema)) {
     return value;
@@ -142,23 +182,65 @@ function parseJsonContainerString(value: unknown, expectedType: "array" | "objec
   }
 
   const trimmed = value.trim();
-  if (expectedType === "array" && (!trimmed.startsWith("[") || !trimmed.endsWith("]"))) {
-    return undefined;
-  }
-  if (expectedType === "object" && (!trimmed.startsWith("{") || !trimmed.endsWith("}"))) {
-    return undefined;
+  if (expectedType === "object") {
+    return parseConcatenatedJsonObjectString(trimmed);
   }
 
+  if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) {
+    return undefined;
+  }
   try {
     const parsed = JSON.parse(trimmed) as unknown;
-    if (expectedType === "array") {
-      return Array.isArray(parsed) ? parsed : undefined;
-    }
-
-    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : undefined;
+    return Array.isArray(parsed) ? parsed : undefined;
   } catch {
     return undefined;
   }
+}
+
+function findJsonValueEnd(value: string, startIndex: number): number | undefined {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = startIndex; index < value.length; index += 1) {
+    const char = value[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === "\"") {
+      inString = true;
+      continue;
+    }
+    if (char === "{" || char === "[") {
+      depth += 1;
+      continue;
+    }
+    if (char !== "}" && char !== "]") {
+      continue;
+    }
+
+    depth -= 1;
+    if (depth === 0) {
+      return index + 1;
+    }
+    if (depth < 0) {
+      return undefined;
+    }
+  }
+
+  return undefined;
+}
+
+function isPlainJsonObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function validateJsonSchemaValue(schema: unknown, value: unknown, path: string): ToolValidationError[] {
