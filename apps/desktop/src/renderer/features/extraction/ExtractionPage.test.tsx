@@ -4,6 +4,10 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TemplateDto } from "../../../shared/ipcTypes";
+import {
+  AUTO_PROVIDER_OPTION_ID,
+  type ExtractionProviderOption
+} from "../providers/providerViewModel";
 import { ExtractionPage } from "./ExtractionPage";
 
 afterEach(() => {
@@ -13,12 +17,50 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-const modelForTest = {
-  id: "provider-1:model-a",
-  providerConfigId: "provider-1",
-  modelId: "model-a",
-  displayName: "DeepSeek / 模型 A"
-};
+const providerOptionsForTest: ExtractionProviderOption[] = [
+  {
+    id: AUTO_PROVIDER_OPTION_ID,
+    kind: "auto",
+    displayName: "自动",
+    models: []
+  },
+  {
+    id: "provider-1",
+    kind: "provider",
+    displayName: "DeepSeek",
+    providerConfigId: "provider-1",
+    defaultModelId: "model-a",
+    models: [{ id: "model-a", displayName: "模型 A", isDefault: true }]
+  }
+];
+
+const multiProviderOptionsForTest: ExtractionProviderOption[] = [
+  {
+    id: AUTO_PROVIDER_OPTION_ID,
+    kind: "auto",
+    displayName: "自动",
+    models: []
+  },
+  {
+    id: "provider-1",
+    kind: "provider",
+    displayName: "DeepSeek",
+    providerConfigId: "provider-1",
+    defaultModelId: "model-b",
+    models: [
+      { id: "model-a", displayName: "模型 A", isDefault: false },
+      { id: "model-b", displayName: "模型 B", isDefault: true }
+    ]
+  },
+  {
+    id: "provider-2",
+    kind: "provider",
+    displayName: "Moonshot",
+    providerConfigId: "provider-2",
+    defaultModelId: "moonshot-a",
+    models: [{ id: "moonshot-a", displayName: "Moonshot A", isDefault: true }]
+  }
+];
 
 const uploadedBookForTest = {
   id: "book-1",
@@ -54,7 +96,7 @@ describe("ExtractionPage", () => {
   it("omits legacy daily summary cards from the extraction page", () => {
     const { container } = render(
       <ExtractionPage
-        models={[modelForTest]}
+        providerOptions={providerOptionsForTest}
         books={[]}
         jobs={[
           { id: "job-running", status: "running", progressText: "运行中" },
@@ -80,7 +122,7 @@ describe("ExtractionPage", () => {
     const { container } = render(
       <ExtractionPage
         projectId="project-a"
-        models={[modelForTest]}
+        providerOptions={providerOptionsForTest}
         books={[]}
         jobs={[]}
         state="ready"
@@ -102,7 +144,7 @@ describe("ExtractionPage", () => {
   it("groups extraction parameters without disabling key inputs", () => {
     render(
       <ExtractionPage
-        models={[modelForTest]}
+        providerOptions={providerOptionsForTest}
         books={[uploadedBookForTest]}
         jobs={[]}
         state="ready"
@@ -124,7 +166,7 @@ describe("ExtractionPage", () => {
     expect(within(chapterGroup).getByRole("spinbutton", { name: "提取章节窗口" })).toBeEnabled();
     expect(within(chapterGroup).getByRole("spinbutton", { name: "重叠章节数" })).toBeEnabled();
     expect(within(duplicateFilterGroup).getByRole("checkbox", { name: "跳过已提取章节" })).toBeEnabled();
-    expect(within(modelGroup).getByLabelText("模型")).toBeEnabled();
+    expect(within(modelGroup).getByLabelText("模型服务")).toBeEnabled();
   });
 
   it("accepts txt and markdown uploads and shows uploaded book metadata", async () => {
@@ -132,7 +174,7 @@ describe("ExtractionPage", () => {
     const onUploadTxt = vi.fn().mockResolvedValue(undefined);
     const { rerender } = render(
       <ExtractionPage
-        models={[modelForTest]}
+        providerOptions={providerOptionsForTest}
         books={[]}
         jobs={[]}
         state="ready"
@@ -161,7 +203,7 @@ describe("ExtractionPage", () => {
 
     rerender(
       <ExtractionPage
-        models={[modelForTest]}
+        providerOptions={providerOptionsForTest}
         books={[uploadedBookForTest]}
         jobs={[]}
         state="ready"
@@ -179,7 +221,7 @@ describe("ExtractionPage", () => {
     const onUploadTxt = vi.fn().mockResolvedValue(undefined);
     render(
       <ExtractionPage
-        models={[modelForTest]}
+        providerOptions={providerOptionsForTest}
         books={[]}
         jobs={[]}
         state="ready"
@@ -201,7 +243,7 @@ describe("ExtractionPage", () => {
     const onUploadTxt = vi.fn().mockResolvedValue(undefined);
     render(
       <ExtractionPage
-        models={[modelForTest]}
+        providerOptions={providerOptionsForTest}
         books={[]}
         jobs={[]}
         state="ready"
@@ -222,12 +264,12 @@ describe("ExtractionPage", () => {
     expect(onUploadTxt).not.toHaveBeenCalled();
   });
 
-  it("builds createJob dto from configured templates, editable windows, ledger strategy, and selected model", async () => {
+  it("builds explicit createJob dto from configured templates, editable windows, ledger strategy, and selected model", async () => {
     const user = userEvent.setup();
     const onCreateJob = vi.fn().mockResolvedValue(undefined);
     render(
       <ExtractionPage
-        models={[modelForTest]}
+        providerOptions={providerOptionsForTest}
         books={[uploadedBookForTest]}
         jobs={[]}
         state="ready"
@@ -245,7 +287,8 @@ describe("ExtractionPage", () => {
     await user.clear(screen.getByRole("spinbutton", { name: "重叠章节数" }));
     await user.type(screen.getByRole("spinbutton", { name: "重叠章节数" }), "0");
     await user.click(screen.getByRole("checkbox", { name: "跳过已提取章节" }));
-    await user.selectOptions(screen.getByLabelText("模型"), "provider-1:model-a");
+    await user.selectOptions(screen.getByLabelText("模型服务"), "provider-1");
+    await user.selectOptions(screen.getByLabelText("子模型"), "model-a");
     await user.click(screen.getByRole("button", { name: "创建任务" }));
 
     expect(onCreateJob).toHaveBeenCalledWith({
@@ -253,11 +296,63 @@ describe("ExtractionPage", () => {
       templateIds: ["pill-analysis"],
       providerConfigId: "provider-1",
       modelId: "model-a",
+      modelSelectionMode: "explicit",
       singleRunChapterCount: 4,
       extractionChapterCount: 12,
       overlapChapterCount: 0,
       skipAlreadyExtracted: false
     });
+  });
+
+  it("builds auto createJob dto with the first provider default model", async () => {
+    const user = userEvent.setup();
+    const onCreateJob = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ExtractionPage
+        providerOptions={multiProviderOptionsForTest}
+        books={[uploadedBookForTest]}
+        jobs={[]}
+        state="ready"
+        onCreateJob={onCreateJob}
+      />
+    );
+
+    expect(screen.getByLabelText("模型服务")).toHaveValue(AUTO_PROVIDER_OPTION_ID);
+    expect(screen.queryByLabelText("子模型")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "创建任务" }));
+
+    expect(onCreateJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerConfigId: "provider-1",
+        modelId: "model-b",
+        modelSelectionMode: "auto"
+      })
+    );
+  });
+
+  it("shows child model options only for the selected provider", async () => {
+    const user = userEvent.setup();
+    render(
+      <ExtractionPage
+        providerOptions={multiProviderOptionsForTest}
+        books={[uploadedBookForTest]}
+        jobs={[]}
+        state="ready"
+      />
+    );
+
+    await user.selectOptions(screen.getByLabelText("模型服务"), "provider-1");
+
+    expect(
+      within(screen.getByLabelText("子模型")).getAllByRole("option").map((option) => option.textContent)
+    ).toEqual(["模型 A", "模型 B"]);
+
+    await user.selectOptions(screen.getByLabelText("模型服务"), "provider-2");
+
+    expect(
+      within(screen.getByLabelText("子模型")).getAllByRole("option").map((option) => option.textContent)
+    ).toEqual(["Moonshot A"]);
   });
 
   it("opens template selection in a dedicated dialog entry", async () => {
@@ -266,7 +361,7 @@ describe("ExtractionPage", () => {
     const onOpenTemplateManager = vi.fn();
     render(
       <ExtractionPage
-        models={[modelForTest]}
+        providerOptions={providerOptionsForTest}
         books={[uploadedBookForTest]}
         jobs={[]}
         state="ready"
@@ -288,7 +383,7 @@ describe("ExtractionPage", () => {
     try {
       render(
         <ExtractionPage
-          models={[modelForTest]}
+          providerOptions={providerOptionsForTest}
           books={[uploadedBookForTest]}
           jobs={[]}
           state="ready"
@@ -330,7 +425,7 @@ describe("ExtractionPage", () => {
     render(
       <ExtractionPage
         projectId="project-a"
-        models={[modelForTest]}
+        providerOptions={providerOptionsForTest}
         books={[uploadedBookForTest]}
         jobs={[]}
         state="ready"
@@ -385,7 +480,7 @@ describe("ExtractionPage", () => {
     const onOpenProviderConfig = vi.fn();
     render(
       <ExtractionPage
-        models={[]}
+        providerOptions={[]}
         books={[]}
         jobs={[]}
         state="ready"
@@ -409,7 +504,7 @@ describe("ExtractionPage", () => {
     const onJobAction = vi.fn().mockResolvedValue(undefined);
     render(
       <ExtractionPage
-        models={[modelForTest]}
+        providerOptions={providerOptionsForTest}
         books={[]}
         jobs={[
           {
@@ -485,7 +580,7 @@ describe("ExtractionPage", () => {
     const onOpenOutputDirectory = vi.fn().mockResolvedValue(undefined);
     render(
       <ExtractionPage
-        models={[modelForTest]}
+        providerOptions={providerOptionsForTest}
         books={[]}
         jobs={[
           {
@@ -565,7 +660,7 @@ describe("ExtractionPage", () => {
 
     render(
       <ExtractionPage
-        models={[modelForTest]}
+        providerOptions={providerOptionsForTest}
         books={[]}
         jobs={[
           {
@@ -604,7 +699,7 @@ describe("ExtractionPage", () => {
   it("only renders output directory action for completed jobs", () => {
     render(
       <ExtractionPage
-        models={[modelForTest]}
+        providerOptions={providerOptionsForTest}
         books={[]}
         jobs={[
           {
@@ -626,7 +721,7 @@ describe("ExtractionPage", () => {
   it("renders paused remaining time and failed reason with failure timestamp", () => {
     render(
       <ExtractionPage
-        models={[modelForTest]}
+        providerOptions={providerOptionsForTest}
         books={[]}
         jobs={[
           {
@@ -679,7 +774,7 @@ describe("ExtractionPage", () => {
   it("marks job cards with status-specific classes for visual state colors", () => {
     render(
       <ExtractionPage
-        models={[modelForTest]}
+        providerOptions={providerOptionsForTest}
         books={[]}
         jobs={[
           {
@@ -718,7 +813,7 @@ describe("ExtractionPage", () => {
   });
 
   it("shows upload and task loading states", () => {
-    render(<ExtractionPage models={[]} books={[]} jobs={[]} state="loading" />);
+    render(<ExtractionPage providerOptions={[]} books={[]} jobs={[]} state="loading" />);
 
     expect(screen.getByLabelText("上传和任务加载中")).toBeInTheDocument();
   });
@@ -726,7 +821,7 @@ describe("ExtractionPage", () => {
   it("shows loading error", () => {
     render(
       <ExtractionPage
-        models={[]}
+        providerOptions={[]}
         books={[]}
         jobs={[]}
         state="error"
@@ -740,7 +835,7 @@ describe("ExtractionPage", () => {
   it("shows pause when a task is running", () => {
     render(
       <ExtractionPage
-        models={[modelForTest]}
+        providerOptions={providerOptionsForTest}
         books={[]}
         jobs={[{ id: "job-1", status: "running", progressText: "1/3", tokenText: "输入 10 / 输出 5" }]}
         state="ready"
@@ -754,7 +849,7 @@ describe("ExtractionPage", () => {
   it("shows continue and restart when a task is paused", () => {
     render(
       <ExtractionPage
-        models={[modelForTest]}
+        providerOptions={providerOptionsForTest}
         books={[]}
         jobs={[{ id: "job-2", status: "paused", progressText: "1/3", tokenText: "输入 10 / 输出 5" }]}
         state="ready"
@@ -769,7 +864,7 @@ describe("ExtractionPage", () => {
   it("shows failure reason and retry entries when a task failed", () => {
     render(
       <ExtractionPage
-        models={[modelForTest]}
+        providerOptions={providerOptionsForTest}
         books={[]}
         jobs={[{ id: "job-3", status: "failed", progressText: "2/3", failureReason: "模型返回格式无效" }]}
         state="ready"
@@ -785,7 +880,7 @@ describe("ExtractionPage", () => {
   it("orders task rows by creation time with the newest task first inside the active filter", () => {
     render(
       <ExtractionPage
-        models={[modelForTest]}
+        providerOptions={providerOptionsForTest}
         books={[]}
         jobs={[
           {
@@ -832,7 +927,7 @@ describe("ExtractionPage", () => {
   it("shows start when a task is pending", () => {
     render(
       <ExtractionPage
-        models={[modelForTest]}
+        providerOptions={providerOptionsForTest}
         books={[]}
         jobs={[{ id: "job-4", status: "pending", progressText: "等待排队" }]}
         state="ready"
@@ -877,7 +972,7 @@ describe("ExtractionPage", () => {
 
     render(
       <ConfiguredExtractionPage
-        models={[modelForTest]}
+        providerOptions={providerOptionsForTest}
         books={[]}
         jobs={[
           { id: "job-running", status: "running" },
@@ -901,7 +996,7 @@ describe("ExtractionPage", () => {
     const onJobAction = vi.fn().mockResolvedValue(undefined);
     render(
       <ExtractionPage
-        models={[modelForTest]}
+        providerOptions={providerOptionsForTest}
         books={[uploadedBookForTest]}
         jobs={[
           { id: "job-running", status: "running", progressText: "窗口 1/3" },
@@ -925,7 +1020,7 @@ describe("ExtractionPage", () => {
     const onJobAction = vi.fn().mockResolvedValue(undefined);
     render(
       <ExtractionPage
-        models={[modelForTest]}
+        providerOptions={providerOptionsForTest}
         books={[uploadedBookForTest]}
         jobs={[
           { id: "job-failed", status: "failed", progressText: "窗口 7/10", failureReason: "窗口执行失败" }
@@ -950,7 +1045,7 @@ describe("ExtractionPage", () => {
     const onDeleteJob = vi.fn().mockResolvedValue(undefined);
     render(
       <ExtractionPage
-        models={[modelForTest]}
+        providerOptions={providerOptionsForTest}
         books={[uploadedBookForTest]}
         jobs={[{ id: "job-failed", status: "failed", progressText: "2/3", failureReason: "模型返回格式无效" }]}
         state="ready"
@@ -978,7 +1073,7 @@ describe("ExtractionPage", () => {
     const onOpenJobLog = vi.fn().mockResolvedValue(undefined);
     render(
       <ExtractionPage
-        models={[modelForTest]}
+        providerOptions={providerOptionsForTest}
         books={[uploadedBookForTest]}
         jobs={[
           {
@@ -1031,7 +1126,7 @@ describe("ExtractionPage", () => {
     try {
       render(
         <ExtractionPage
-          models={[modelForTest]}
+          providerOptions={providerOptionsForTest}
           books={[uploadedBookForTest]}
           jobs={[
             {
@@ -1082,7 +1177,7 @@ describe("ExtractionPage", () => {
     try {
       const { container } = render(
         <ExtractionPage
-          models={[modelForTest]}
+          providerOptions={providerOptionsForTest}
           books={[]}
           jobs={[
             { id: "job-1", status: "completed", progressText: "完成 1" },

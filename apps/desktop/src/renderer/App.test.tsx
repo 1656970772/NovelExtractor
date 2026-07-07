@@ -338,7 +338,7 @@ describe("desktop workbench shell", () => {
 
     await user.click(screen.getByRole("button", { name: "提取" }));
 
-    expect(await screen.findByText("DeepSeek / 模型 A")).toBeInTheDocument();
+    expect(await screen.findByRole("combobox", { name: "模型服务" })).toHaveTextContent("DeepSeek");
 
     const file = new File(["第一章 初入仙途"], "凡人修仙传.txt", { type: "text/plain" });
     await user.upload(screen.getByLabelText("选择小说文件"), file);
@@ -367,6 +367,7 @@ describe("desktop workbench shell", () => {
         templateIds: ["pill-analysis"],
         providerConfigId: "provider-1",
         modelId: "model-a",
+        modelSelectionMode: "auto",
         singleRunChapterCount: 4,
         extractionChapterCount: 12,
         overlapChapterCount: 0,
@@ -423,7 +424,7 @@ describe("desktop workbench shell", () => {
     render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
 
     await user.click(screen.getByRole("button", { name: "提取" }));
-    expect(await screen.findByText("DeepSeek / 模型 A")).toBeInTheDocument();
+    expect(await screen.findByRole("combobox", { name: "模型服务" })).toHaveTextContent("DeepSeek");
 
     const file = new File(["第一章 初入仙途"], "凡人修仙传.txt", { type: "text/plain" });
     await user.upload(screen.getByLabelText("选择小说文件"), file);
@@ -604,7 +605,7 @@ describe("desktop workbench shell", () => {
     render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
 
     await user.click(screen.getByRole("button", { name: "提取" }));
-    expect(await screen.findByText("DeepSeek / 模型 A")).toBeInTheDocument();
+    expect(await screen.findByRole("combobox", { name: "模型服务" })).toHaveTextContent("DeepSeek");
 
     const file = new File(["第一章 初入仙途"], "凡人修仙传.txt", { type: "text/plain" });
     await user.upload(screen.getByLabelText("选择小说文件"), file);

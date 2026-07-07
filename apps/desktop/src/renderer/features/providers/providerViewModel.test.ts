@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { getProviderPresets } from "@novel-extractor/config";
 import {
+  AUTO_PROVIDER_OPTION_ID,
   buildSaveProviderDto,
   clearProviderSecretAfterSave,
   createProviderFormState,
+  getExtractionProviderOptionsFromProviders,
   mergeFetchedModelsIntoForm,
   selectProviderPreset,
   validateProviderForm
@@ -245,6 +247,104 @@ describe("providerViewModel", () => {
         id: "deepseek-v4-pro",
         isDefault: false
       })
+    ]);
+  });
+
+  it("builds provider-first extraction options with auto first and only usable providers", () => {
+    const options = getExtractionProviderOptionsFromProviders([
+      {
+        id: "provider-disabled",
+        presetId: "deepseek",
+        displayName: "Disabled",
+        kind: "openai-compatible",
+        baseUrl: "https://disabled.example.test",
+        hasApiKey: true,
+        enabled: false,
+        models: [
+          { id: "disabled-model", displayName: "Disabled Model", enabled: true, isDefault: true }
+        ]
+      },
+      {
+        id: "provider-main",
+        presetId: "deepseek",
+        displayName: "DeepSeek",
+        kind: "openai-compatible",
+        baseUrl: "https://api.deepseek.com",
+        hasApiKey: true,
+        enabled: true,
+        models: [
+          { id: "model-hidden", displayName: "Hidden", enabled: false, isDefault: true },
+          { id: "model-default", displayName: "默认模型", enabled: true, isDefault: true },
+          { id: "model-second", displayName: "备用模型", enabled: true, isDefault: false }
+        ]
+      },
+      {
+        id: "provider-no-key",
+        presetId: "minimax",
+        displayName: "No Key",
+        kind: "openai-compatible",
+        baseUrl: "https://no-key.example.test",
+        hasApiKey: false,
+        enabled: true,
+        models: [
+          { id: "no-key-model", displayName: "No Key Model", enabled: true, isDefault: true }
+        ]
+      },
+      {
+        id: "provider-fallback",
+        presetId: "custom-openai-compatible",
+        displayName: "Fallback",
+        kind: "openai-compatible",
+        baseUrl: "https://fallback.example.test",
+        hasApiKey: true,
+        enabled: true,
+        models: [
+          { id: "fallback-first", displayName: "Fallback First", enabled: true, isDefault: false },
+          { id: "fallback-disabled-default", displayName: "Disabled Default", enabled: false, isDefault: true }
+        ]
+      },
+      {
+        id: "provider-no-enabled-model",
+        presetId: "deepseek",
+        displayName: "No Enabled Model",
+        kind: "openai-compatible",
+        baseUrl: "https://no-enabled.example.test",
+        hasApiKey: true,
+        enabled: true,
+        models: [
+          { id: "off", displayName: "Off", enabled: false, isDefault: true }
+        ]
+      }
+    ]);
+
+    expect(options).toEqual([
+      {
+        id: AUTO_PROVIDER_OPTION_ID,
+        kind: "auto",
+        displayName: "自动",
+        models: []
+      },
+      {
+        id: "provider-main",
+        kind: "provider",
+        displayName: "DeepSeek",
+        providerConfigId: "provider-main",
+        defaultModelId: "model-default",
+        models: [
+          { id: "model-default", displayName: "默认模型", isDefault: true },
+          { id: "model-second", displayName: "备用模型", isDefault: false }
+        ]
+      },
+      {
+        id: "provider-fallback",
+        kind: "provider",
+        displayName: "Fallback",
+        providerConfigId: "provider-fallback",
+        defaultModelId: "fallback-first",
+        models: [
+          { id: "fallback-first", displayName: "Fallback First", isDefault: false }
+        ]
+      }
     ]);
   });
 });

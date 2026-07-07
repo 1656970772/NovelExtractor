@@ -8,14 +8,14 @@ import type { ResourceState } from "../assets/AssetsPage";
 import { ExtractionParameters, type CreateJobState } from "./ExtractionParameters";
 import { JobList } from "./JobList";
 import { UploadNovelPanel, type UploadState } from "./UploadNovelPanel";
+import type { ExtractionProviderOption } from "../providers/providerViewModel";
 import {
   buildCreateJobDto,
   createExtractionFormState,
   reconcileExtractionFormState,
   type ExtractionBook,
   type ExtractionFormState,
-  type ExtractionJob,
-  type ExtractionModel
+  type ExtractionJob
 } from "./extractionViewModel";
 import { getDefaultTemplateViews, type TemplateView } from "../templates/templateViewModel";
 import { TemplateUploadPanel } from "../templates/TemplateUploadPanel";
@@ -25,7 +25,7 @@ export type { ExtractionBook, ExtractionJob, ExtractionModel } from "./extractio
 
 export interface ExtractionPageProps {
   projectId?: string;
-  models: ExtractionModel[];
+  providerOptions: ExtractionProviderOption[];
   books: ExtractionBook[];
   jobs: ExtractionJob[];
   state: ResourceState;
@@ -56,7 +56,7 @@ function toErrorMessage(error: unknown, fallback: string): string {
 
 export function ExtractionPage({
   projectId,
-  models,
+  providerOptions,
   books,
   jobs,
   state,
@@ -82,8 +82,19 @@ export function ExtractionPage({
 }: ExtractionPageProps) {
   const templates = useMemo(() => templatesProp ?? getDefaultTemplateViews(), [templatesProp]);
   const defaults = useMemo(() => getExtractionParameterDefaults(), []);
+  const modelCount = useMemo(
+    () =>
+      providerOptions.reduce(
+        (totalCount, providerOption) =>
+          providerOption.kind === "provider"
+            ? totalCount + providerOption.models.length
+            : totalCount,
+        0
+      ),
+    [providerOptions]
+  );
   const [formState, setFormState] = useState<ExtractionFormState>(() =>
-    createExtractionFormState({ books, models, templates, defaults, selectedTemplateIds })
+    createExtractionFormState({ books, providerOptions, templates, defaults, selectedTemplateIds })
   );
   const [localCreateError, setLocalCreateError] = useState<string | undefined>();
   const layoutScrollbar = useTransientScrollbar();
@@ -92,13 +103,13 @@ export function ExtractionPage({
     setFormState((currentState) =>
       reconcileExtractionFormState(currentState, {
         books,
-        models,
+        providerOptions,
         templates,
         defaults,
         selectedTemplateIds
       })
     );
-  }, [books, defaults, models, selectedTemplateIds, templates]);
+  }, [books, defaults, providerOptions, selectedTemplateIds, templates]);
 
   function updateFormState(nextState: ExtractionFormState): void {
     const templateSelectionChanged =
@@ -121,7 +132,7 @@ export function ExtractionPage({
     }
 
     try {
-      await onCreateJob(buildCreateJobDto(formState, { models }));
+      await onCreateJob(buildCreateJobDto(formState, { providerOptions }));
     } catch (error) {
       setLocalCreateError(toErrorMessage(error, "创建任务失败"));
     }
@@ -135,7 +146,7 @@ export function ExtractionPage({
             <p className="section-kicker">Extraction</p>
             <h1 id="extraction-title">小说提取</h1>
           </div>
-          <span className="status-chip">{models.length > 0 ? `${models.length} 个模型` : "模型状态待确认"}</span>
+          <span className="status-chip">{modelCount > 0 ? `${modelCount} 个模型` : "模型状态待确认"}</span>
         </div>
 
         {state === "error" ? (
@@ -191,7 +202,7 @@ export function ExtractionPage({
           createError={createError ?? localCreateError}
           createState={createState}
           formState={formState}
-          models={models}
+          providerOptions={providerOptions}
           templates={templates}
           onCreateJob={() => {
             void handleCreateJob();

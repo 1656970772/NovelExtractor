@@ -12,6 +12,31 @@ export type ProviderPresetId = SaveProviderDto["presetId"];
 export type ProviderSaveState = "idle" | "saving" | "error";
 export type ProviderResourceState = "ready" | "loading" | "error";
 export type ProviderModelFetchState = "idle" | "loading" | "error";
+export const AUTO_PROVIDER_OPTION_ID = "__auto__";
+
+export type ExtractionModelSelectionMode = "explicit" | "auto";
+
+export interface ExtractionProviderModelOption {
+  id: string;
+  displayName: string;
+  isDefault: boolean;
+}
+
+export type ExtractionProviderOption =
+  | {
+      id: typeof AUTO_PROVIDER_OPTION_ID;
+      kind: "auto";
+      displayName: string;
+      models: [];
+    }
+  | {
+      id: string;
+      kind: "provider";
+      displayName: string;
+      providerConfigId: string;
+      defaultModelId: string;
+      models: ExtractionProviderModelOption[];
+    };
 
 export interface ProviderFormState {
   providerId?: string;
@@ -221,18 +246,72 @@ export function clearProviderSecretAfterSave(state: ProviderFormState): Provider
 export function getExtractionModelsFromProviders(
   providers: readonly ProviderViewDto[]
 ): ExtractionModel[] {
-  return providers.flatMap((provider) => {
-    if (!provider.enabled) {
+  return getExtractionProviderOptionsFromProviders(providers).flatMap((providerOption) => {
+    if (providerOption.kind !== "provider") {
       return [];
     }
 
-    return provider.models
-      .filter((model) => model.enabled)
-      .map((model) => ({
-        id: `${provider.id}:${model.id}`,
-        providerConfigId: provider.id,
-        modelId: model.id,
-        displayName: `${provider.displayName} / ${model.displayName}`
-      }));
+    return providerOption.models.map((model) => ({
+      id: `${providerOption.providerConfigId}:${model.id}`,
+      providerConfigId: providerOption.providerConfigId,
+      modelId: model.id,
+      displayName: `${providerOption.displayName} / ${model.displayName}`
+    }));
   });
+}
+
+function getEnabledProviderModels(
+  provider: ProviderViewDto
+): ExtractionProviderModelOption[] {
+  return provider.models
+    .filter((model) => model.enabled)
+    .map((model) => ({
+      id: model.id,
+      displayName: model.displayName,
+      isDefault: model.isDefault
+    }));
+}
+
+function getDefaultExtractionModelId(
+  models: readonly ExtractionProviderModelOption[]
+): string {
+  return models.find((model) => model.isDefault)?.id ?? models[0]?.id ?? "";
+}
+
+export function getExtractionProviderOptionsFromProviders(
+  providers: readonly ProviderViewDto[]
+): ExtractionProviderOption[] {
+  const providerOptions = providers.flatMap((provider): ExtractionProviderOption[] => {
+    if (!provider.enabled || !provider.hasApiKey) {
+      return [];
+    }
+
+    const models = getEnabledProviderModels(provider);
+    if (models.length === 0) {
+      return [];
+    }
+
+    return [
+      {
+        id: provider.id,
+        kind: "provider",
+        displayName: provider.displayName,
+        providerConfigId: provider.id,
+        defaultModelId: getDefaultExtractionModelId(models),
+        models
+      }
+    ];
+  });
+
+  return providerOptions.length > 0
+    ? [
+        {
+          id: AUTO_PROVIDER_OPTION_ID,
+          kind: "auto",
+          displayName: "自动",
+          models: []
+        },
+        ...providerOptions
+      ]
+    : [];
 }

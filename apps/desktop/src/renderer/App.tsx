@@ -38,7 +38,7 @@ import {
   type SettingsSaveState
 } from "./features/settings/StorageSettingsModal";
 import {
-  getExtractionModelsFromProviders,
+  getExtractionProviderOptionsFromProviders,
   type ProviderSaveState
 } from "./features/providers/providerViewModel";
 import { ProjectGate, type ProjectSummary } from "./features/project/ProjectGate";
@@ -117,8 +117,8 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
   const [templateSaveState, setTemplateSaveState] = useState<TemplateSaveState>("idle");
   const [templateSaveError, setTemplateSaveError] = useState<string | undefined>();
 
-  const extractionModels = useMemo(
-    () => getExtractionModelsFromProviders(providers),
+  const extractionProviderOptions = useMemo(
+    () => getExtractionProviderOptionsFromProviders(providers),
     [providers]
   );
 
@@ -732,7 +732,7 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
             createState={createState}
             errorMessage={extractionError}
             jobs={jobs}
-            models={extractionModels}
+            providerOptions={extractionProviderOptions}
             projectId={project.id}
             onSaveTemplate={saveTemplate}
             onOpenProviderConfig={() => setProviderModalOpen(true)}
