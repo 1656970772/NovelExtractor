@@ -156,7 +156,6 @@ function normalizeProviderModels(
     modelName: defaultModelName,
     models: normalizedModels.map((model) => ({
       ...model,
-      enabled: model.id === defaultModelName ? true : model.enabled,
       isDefault: model.id === defaultModelName
     }))
   };

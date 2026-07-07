@@ -207,6 +207,36 @@ describe("ProviderConfigModal and UserMenu", () => {
     );
   });
 
+  it("keeps the selected default model enabled while editing saved provider models", async () => {
+    const user = userEvent.setup();
+    renderModal({
+      providers: [
+        {
+          ...providerView,
+          models: [
+            providerView.models[0],
+            {
+              ...providerView.models[1],
+              enabled: false
+            }
+          ]
+        }
+      ]
+    });
+
+    await user.click(screen.getByRole("button", { name: "编辑 DeepSeek" }));
+
+    const defaultEnabled = screen.getByRole("checkbox", { name: "启用 DeepSeek V4 Flash" });
+    expect(defaultEnabled).toBeChecked();
+    expect(defaultEnabled).toBeDisabled();
+
+    await user.click(screen.getByRole("radio", { name: "设为默认 DeepSeek V4 Pro" }));
+
+    const nextDefaultEnabled = screen.getByRole("checkbox", { name: "启用 DeepSeek V4 Pro" });
+    expect(nextDefaultEnabled).toBeChecked();
+    expect(nextDefaultEnabled).toBeDisabled();
+  });
+
   it("adds a custom model row and saves it as the default model", async () => {
     const user = userEvent.setup();
     const { onSaveProvider } = renderModal({ providers: [] });

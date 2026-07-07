@@ -23,6 +23,7 @@ function getModelLabel(model: ProviderModelDto, index: number): string {
 function syncDefault(models: ProviderModelDto[], modelName: string): ProviderModelDto[] {
   return models.map((model) => ({
     ...model,
+    enabled: model.id === modelName ? true : model.enabled,
     isDefault: model.id === modelName
   }));
 }
@@ -55,7 +56,9 @@ export function ProviderModelListEditor({
 
   function updateRow(index: number, patch: Partial<ProviderModelDto>): void {
     const nextRows = rows.map((model, rowIndex) =>
-      rowIndex === index ? { ...model, ...patch } : model
+      rowIndex === index
+        ? { ...model, ...patch, enabled: model.isDefault ? true : patch.enabled ?? model.enabled }
+        : model
     );
     commit(nextRows);
   }
@@ -137,7 +140,8 @@ export function ProviderModelListEditor({
               <label className="provider-model-editor__enabled">
                 <input
                   aria-label={`启用 ${label}`}
-                  checked={model.enabled}
+                  checked={model.isDefault || model.enabled}
+                  disabled={disabled || model.isDefault}
                   onChange={(event) => updateRow(index, { enabled: event.target.checked })}
                   type="checkbox"
                 />

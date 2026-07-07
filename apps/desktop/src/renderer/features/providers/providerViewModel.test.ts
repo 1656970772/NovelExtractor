@@ -144,7 +144,7 @@ describe("providerViewModel", () => {
     expect(JSON.stringify(state)).not.toContain("sk-");
   });
 
-  it("cleans empty and duplicate models while keeping one default model in save dto", () => {
+  it("cleans empty and duplicate models while preserving model enabled flags in save dto", () => {
     const dto = buildSaveProviderDto({
       ...createProviderFormState("custom-openai-compatible"),
       providerId: "provider-1",
@@ -166,7 +166,7 @@ describe("providerViewModel", () => {
       modelName: "beta",
       models: [
         { id: "alpha", displayName: "Alpha", enabled: true, isDefault: false },
-        { id: "beta", displayName: "Beta", enabled: true, isDefault: true }
+        { id: "beta", displayName: "Beta", enabled: false, isDefault: true }
       ]
     });
   });
