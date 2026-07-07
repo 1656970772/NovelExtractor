@@ -1485,7 +1485,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(pauseRequestedJob).toMatchObject({
         id: job.id,
         status: "pause_requested",
-        allowedActions: ["pause"]
+        allowedActions: []
       });
 
       firstWindowResponse.resolve({
@@ -11136,7 +11136,7 @@ describe("P0 desktop IPC handlers", () => {
       await expect(contract.invoke(handlers, "jobs:pause", { jobId: job.id })).resolves.toMatchObject({
         id: job.id,
         status: "pause_requested",
-        allowedActions: ["pause"]
+        allowedActions: []
       });
 
       heldResponse.resolve(createChatCompletionResponse({ content: "NO_UPDATE" }));

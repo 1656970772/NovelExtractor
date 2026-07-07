@@ -275,7 +275,7 @@ export function getNextTaskStatusForAction(action: TaskAction): TaskStatus | nul
     case "restart":
       return "running";
     case "pause":
-      return "paused";
+      return "pause_requested";
     case "delete":
       return null;
     default:

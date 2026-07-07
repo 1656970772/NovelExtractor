@@ -8,6 +8,7 @@ import {
   filterJobs,
   getJobCardViewModel,
   getFilterCount,
+  isRuntimeActiveJobStatus,
   JOB_QUEUE_FILTERS,
   type JobQueueFilter
 } from "./jobQueueViewModel";
@@ -40,7 +41,7 @@ export function JobList({
   const [nowMs, setNowMs] = useState(() => Date.now());
   const sortedJobs = sortExtractionJobsByCreatedAtDesc(jobs);
   const visibleJobs = filterJobs(sortedJobs, activeFilter);
-  const hasRunningTimedJob = jobs.some((job) => job.status === "running" && Boolean(job.timing?.startedAt));
+  const hasRunningTimedJob = jobs.some((job) => isRuntimeActiveJobStatus(job.status) && Boolean(job.timing?.startedAt));
   const listScrollbar = useTransientScrollbar();
 
   useEffect(() => {
@@ -164,6 +165,15 @@ export function JobList({
                     </div>
                   </div>
                   <div className="job-row__actions">
+                    {job.status === "pause_requested" ? (
+                      <button
+                        className="button button--secondary button--compact"
+                        disabled
+                        type="button"
+                      >
+                        暂停中
+                      </button>
+                    ) : null}
                     {statusConfig.allowedActions.map((action) => (
                       <button
                         className="button button--secondary button--compact"
@@ -205,7 +215,7 @@ export function JobList({
                     </>
                   ) : null}
                   {job.status === "failed" ? <span>失败时间：{card.failedAtText}</span> : null}
-                  {job.status === "running" || job.status === "paused" ? (
+                  {isRuntimeActiveJobStatus(job.status) || job.status === "paused" ? (
                     <>
                       <span>已用时：{card.elapsedText}</span>
                       <span>预计总耗时：{card.estimatedTotalText}</span>

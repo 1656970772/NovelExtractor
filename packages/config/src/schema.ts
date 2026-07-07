@@ -218,7 +218,7 @@ export interface ReportFileNameInput {
 
 export type TaskAction = "start" | "pause" | "resume" | "restart" | "delete";
 
-export type TaskStatus = "pending" | "running" | "paused" | "completed" | "failed";
+export type TaskStatus = "pending" | "running" | "pause_requested" | "paused" | "completed" | "failed";
 
 export interface TaskActionEntry {
   label: string;

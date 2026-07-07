@@ -129,6 +129,63 @@ describe("builtin file tools", () => {
     expect(fs.readFileSync(path.join(context.reportsRoot, "人物.md"), "utf8")).toBe("# 人物小传\n\n韩立：主角，谨慎\n");
   });
 
+  it("normalizes residual string escapes in report write and edit arguments", async () => {
+    const context = makeContext();
+    const reportPath = path.join(context.reportsRoot, "转义残留.md");
+
+    await executeBuiltinFileTool(
+      "write_file",
+      {
+        path: "转义残留.md",
+        content: String.raw`# 转义残留\n\n- 引用：原文称\"神秘瓶子\"\n- 制表：A\tB\n- Unicode：\u4f60`
+      },
+      context
+    );
+    expect(fs.readFileSync(reportPath, "utf8")).toBe("# 转义残留\n\n- 引用：原文称\"神秘瓶子\"\n- 制表：A\tB\n- Unicode：你");
+
+    await executeBuiltinFileTool(
+      "edit_file",
+      {
+        path: "转义残留.md",
+        old_string: String.raw`原文称\"神秘瓶子\"`,
+        new_string: String.raw`原文称\"小瓶\"\n下一行`
+      },
+      context
+    );
+
+    await executeBuiltinFileTool(
+      "multi_edit",
+      {
+        path: "转义残留.md",
+        edits: [
+          { old_string: String.raw`A\tB`, new_string: String.raw`C\nD` },
+          { old_string: String.raw`\u4f60`, new_string: String.raw`\u597d` }
+        ]
+      },
+      context
+    );
+
+    expect(fs.readFileSync(reportPath, "utf8")).toBe("# 转义残留\n\n- 引用：原文称\"小瓶\"\n下一行\n- 制表：C\nD\n- Unicode：好");
+  });
+
+  it("matches report text that already contains residual escaped quotes", async () => {
+    const context = makeContext();
+    const reportPath = path.join(context.reportsRoot, "污染.md");
+    fs.writeFileSync(reportPath, String.raw`- 名字和类型：原文称\"神秘瓶子\"；材质不明。`, "utf8");
+
+    await executeBuiltinFileTool(
+      "edit_file",
+      {
+        path: "污染.md",
+        old_string: `原文称"神秘瓶子"`,
+        new_string: `原文称"小瓶"`
+      },
+      context
+    );
+
+    expect(fs.readFileSync(reportPath, "utf8")).toBe(`- 名字和类型：原文称"小瓶"；材质不明。`);
+  });
+
   it("recovers JSON-stringified array fields for report and edit tools", async () => {
     const context = makeContext();
     fs.writeFileSync(

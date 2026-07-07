@@ -25,6 +25,7 @@ import {
   type ReportFieldQuery,
   type ReportFieldWriteUpdate
 } from "./reportFieldBlocks";
+import { decodeResidualStringEscapes } from "./residualStringEscapes";
 
 export interface ToolExecutionContext {
   projectRoot: string;
@@ -373,18 +374,62 @@ function normalizeReasonixArguments(name: string, rawArguments: unknown, context
     return rawArguments;
   }
 
-  const normalizedArgs =
-    name === "multi_edit"
-      ? {
-          ...args,
-          edits: parseJsonArrayString(args.edits) ?? args.edits
-        }
-      : args;
+  const normalizedArgs = normalizeReasonixWriteArguments(name, args);
 
   return {
     ...normalizedArgs,
     path: toProjectRelativeReportPath(context, args.path)
   };
+}
+
+function normalizeReasonixWriteArguments(name: string, args: Record<string, unknown>): Record<string, unknown> {
+  if (name === "write_file") {
+    return {
+      ...args,
+      content: normalizeStringArgument(args.content)
+    };
+  }
+
+  if (name === "edit_file") {
+    return {
+      ...args,
+      old_string: normalizeStringArgument(args.old_string),
+      new_string: normalizeStringArgument(args.new_string)
+    };
+  }
+
+  if (name === "multi_edit") {
+    return {
+      ...args,
+      edits: normalizeMultiEditArguments(parseJsonArrayString(args.edits) ?? args.edits)
+    };
+  }
+
+  return args;
+}
+
+function normalizeMultiEditArguments(value: unknown): unknown {
+  if (!Array.isArray(value)) {
+    return value;
+  }
+
+  return value.map((item) => {
+    if (!isPlainRecord(item)) {
+      return item;
+    }
+    return {
+      ...item,
+      old_string: normalizeStringArgument(item.old_string),
+      new_string: normalizeStringArgument(item.new_string)
+    };
+  });
+}
+
+function normalizeStringArgument(value: unknown): unknown {
+  if (typeof value !== "string") {
+    return value;
+  }
+  return decodeResidualStringEscapes(value);
 }
 
 function executeMarkNoUpdate(rawArguments: unknown, context: ToolExecutionContext): string {

@@ -63,7 +63,7 @@ const JOB_STATUS_TRANSITIONS: Record<JobStatus, readonly JobStatus[]> = {
 const TASK_STATUS_BY_JOB_STATUS: Record<JobStatus, TaskStatus | null> = {
   created: "pending",
   running: "running",
-  pause_requested: "running",
+  pause_requested: "pause_requested",
   paused: "paused",
   failed: "failed",
   completed: "completed",

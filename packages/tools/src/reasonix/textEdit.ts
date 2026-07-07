@@ -1,3 +1,5 @@
+import { decodeResidualStringEscapes, decodeResidualStringEscapesWithMap } from "../residualStringEscapes";
+
 export interface EditApplyResult {
   updated: string;
   applied: number;
@@ -40,6 +42,15 @@ export function applyOldStringEdit(content: string, oldString: string, newString
 
     const ranges = fuzzyEditRanges(content, old);
     if (ranges.length === 0) {
+      const residualEscapeRanges = residualEscapeEditRanges(content, old);
+      if (residualEscapeRanges.length > 0) {
+        return {
+          updated: replaceEditRanges(content, residualEscapeRanges, matchReplacementLineEndings(content, decodeResidualStringEscapes(newStr))),
+          applied: residualEscapeRanges.length,
+          matches: residualEscapeRanges.length,
+          fuzzy: true
+        };
+      }
       return { updated: content, applied: 0, matches: 0, fuzzy: false };
     }
     return {
@@ -54,6 +65,20 @@ export function applyOldStringEdit(content: string, oldString: string, newString
   if (count === 0) {
     const ranges = fuzzyEditRanges(content, old);
     if (ranges.length !== 1) {
+      if (ranges.length === 0) {
+        const residualEscapeRanges = residualEscapeEditRanges(content, old);
+        if (residualEscapeRanges.length === 1) {
+          return {
+            updated: replaceEditRanges(content, residualEscapeRanges, matchReplacementLineEndings(content, decodeResidualStringEscapes(newStr))),
+            applied: 1,
+            matches: 1,
+            fuzzy: true
+          };
+        }
+        if (residualEscapeRanges.length > 1) {
+          return { updated: content, applied: 0, matches: residualEscapeRanges.length, fuzzy: false };
+        }
+      }
       return { updated: content, applied: 0, matches: ranges.length, fuzzy: false };
     }
     return {
@@ -72,6 +97,34 @@ export function applyOldStringEdit(content: string, oldString: string, newString
     };
   }
   return { updated: content, applied: 0, matches: count, fuzzy: false };
+}
+
+function residualEscapeEditRanges(content: string, old: string): EditRange[] {
+  if (old === "" || content === "") {
+    return [];
+  }
+
+  const decodedContent = decodeResidualStringEscapesWithMap(content);
+  const decodedOld = decodeResidualStringEscapes(old);
+  if (!decodedContent.changed && decodedOld === old) {
+    return [];
+  }
+
+  const ranges: EditRange[] = [];
+  let index = 0;
+  for (;;) {
+    const found = decodedContent.text.indexOf(decodedOld, index);
+    if (found === -1) {
+      return ranges;
+    }
+
+    const rawStart = decodedContent.rawStarts[found];
+    const rawEnd = decodedContent.rawEnds[found + decodedOld.length - 1];
+    if (rawStart !== undefined && rawEnd !== undefined) {
+      ranges.push({ start: rawStart, end: rawEnd });
+    }
+    index = found + decodedOld.length;
+  }
 }
 
 export function oldStringNotFoundError(path: string, oldString: string, content: string): Error {

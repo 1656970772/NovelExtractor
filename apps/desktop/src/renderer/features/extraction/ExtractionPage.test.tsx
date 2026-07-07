@@ -751,6 +751,23 @@ describe("ExtractionPage", () => {
     expect(screen.queryByRole("button", { name: "继续" })).not.toBeInTheDocument();
   });
 
+  it("shows a disabled pending pause control while the current window is finishing", () => {
+    render(
+      <ExtractionPage
+        models={[modelForTest]}
+        books={[]}
+        jobs={[{ id: "job-pausing", status: "pause_requested", progressText: "1/3" }]}
+        state="ready"
+      />
+    );
+
+    const jobPanel = screen.getByRole("region", { name: "提取任务" });
+    expect(within(jobPanel).getAllByText("暂停中")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "暂停中" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "暂停" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "继续" })).not.toBeInTheDocument();
+  });
+
   it("shows continue and restart when a task is paused", () => {
     render(
       <ExtractionPage
@@ -848,6 +865,7 @@ describe("ExtractionPage", () => {
       getTaskStatusConfig: () => ({
         pending: { label: "待开始", allowedActions: ["start"] },
         running: { label: "运行中", allowedActions: ["pause"] },
+        pause_requested: { label: "暂停中", allowedActions: [] },
         paused: { label: "已暂停", allowedActions: ["resume"] },
         completed: { label: "已完成", allowedActions: ["delete"] },
         failed: { label: "失败", allowedActions: ["resume", "restart", "delete"] }

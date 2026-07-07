@@ -13,6 +13,7 @@ import {
 
 const jobs: ExtractionJob[] = [
   { id: "running-1", status: "running", progressText: "运行中" },
+  { id: "pausing-1", status: "pause_requested", progressText: "暂停中" },
   { id: "paused-1", status: "paused", progressText: "暂停中" },
   { id: "failed-1", status: "failed", progressText: "失败" },
   { id: "completed-1", status: "completed", progressText: "完成" },
@@ -20,10 +21,10 @@ const jobs: ExtractionJob[] = [
 ];
 
 describe("jobQueueViewModel", () => {
-  it("keeps the configured filter order and counts exact statuses", () => {
+  it("keeps the configured filter order and counts active pause requests as running", () => {
     expect(JOB_QUEUE_FILTERS.map((filter) => `${filter.label}:${getFilterCount(jobs, filter.key)}`)).toEqual([
-      "全部:5",
-      "进行中:1",
+      "全部:6",
+      "进行中:2",
       "暂停:1",
       "失败:1",
       "已完成:1"
@@ -35,7 +36,7 @@ describe("jobQueueViewModel", () => {
 
     expect(allJobs).toEqual(jobs);
     expect(allJobs).not.toBe(jobs);
-    expect(filterJobs(jobs, "running").map((job) => job.id)).toEqual(["running-1"]);
+    expect(filterJobs(jobs, "running").map((job) => job.id)).toEqual(["running-1", "pausing-1"]);
     expect(filterJobs(jobs, "paused").map((job) => job.id)).toEqual(["paused-1"]);
     expect(filterJobs(jobs, "failed").map((job) => job.id)).toEqual(["failed-1"]);
     expect(filterJobs(jobs, "completed").map((job) => job.id)).toEqual(["completed-1"]);
@@ -86,6 +87,25 @@ describe("jobQueueViewModel", () => {
       {
         id: "running-live",
         status: "running",
+        timing: {
+          startedAt: "2026-07-02T10:00:00.000Z",
+          elapsedMs: 5_000,
+          estimatedTotalMs: 240_000,
+          estimateState: "available"
+        } as ExtractionJob["timing"]
+      },
+      { nowMs: Date.parse("2026-07-02T10:00:12.000Z") }
+    );
+
+    expect(card.elapsedText).toBe("00:00:12");
+    expect(card.estimatedTotalText).toBe("00:04:00");
+  });
+
+  it("keeps pause-requested jobs on the live elapsed timer until they are truly paused", () => {
+    const card = getJobCardViewModel(
+      {
+        id: "pausing-live",
+        status: "pause_requested",
         timing: {
           startedAt: "2026-07-02T10:00:00.000Z",
           elapsedMs: 5_000,

@@ -40,7 +40,7 @@ describe("job domain", () => {
     const mappings: Array<[JobStatus, TaskStatus | null]> = [
       ["created", "pending"],
       ["running", "running"],
-      ["pause_requested", "running"],
+      ["pause_requested", "pause_requested"],
       ["paused", "paused"],
       ["completed", "completed"],
       ["failed", "failed"],

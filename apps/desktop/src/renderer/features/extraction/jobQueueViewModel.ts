@@ -10,6 +10,10 @@ export const JOB_QUEUE_FILTERS: readonly { key: JobQueueFilter; label: string }[
   { key: "completed", label: "已完成" }
 ];
 
+export function isRuntimeActiveJobStatus(status: ExtractionJob["status"]): boolean {
+  return status === "running" || status === "pause_requested";
+}
+
 export interface JobCardViewModel {
   title: string;
   modelText: string;
@@ -33,7 +37,7 @@ export function getFilterCount(jobs: readonly ExtractionJob[], filter: JobQueueF
     return jobs.length;
   }
 
-  return jobs.filter((job) => job.status === filter).length;
+  return jobs.filter((job) => matchesFilter(job, filter)).length;
 }
 
 export function filterJobs(jobs: readonly ExtractionJob[], filter: JobQueueFilter): ExtractionJob[] {
@@ -41,7 +45,15 @@ export function filterJobs(jobs: readonly ExtractionJob[], filter: JobQueueFilte
     return [...jobs];
   }
 
-  return jobs.filter((job) => job.status === filter);
+  return jobs.filter((job) => matchesFilter(job, filter));
+}
+
+function matchesFilter(job: ExtractionJob, filter: JobQueueFilter): boolean {
+  if (filter === "running") {
+    return isRuntimeActiveJobStatus(job.status);
+  }
+
+  return job.status === filter;
 }
 
 export function formatDuration(milliseconds?: number): string {
@@ -157,7 +169,7 @@ export function getEstimatedTotalTimeLabel(job: ExtractionJob): string {
 }
 
 function getRunningElapsedMs(job: ExtractionJob, nowMs: number | undefined): number | undefined {
-  if (job.status !== "running" || !job.timing?.startedAt || nowMs === undefined) {
+  if (!isRuntimeActiveJobStatus(job.status) || !job.timing?.startedAt || nowMs === undefined) {
     return job.timing?.elapsedMs;
   }
 

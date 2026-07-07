@@ -268,6 +268,10 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
       label: "运行中",
       allowedActions: ["pause"]
     },
+    pause_requested: {
+      label: "暂停中",
+      allowedActions: []
+    },
     paused: {
       label: "已暂停",
       allowedActions: ["resume", "restart", "delete"]

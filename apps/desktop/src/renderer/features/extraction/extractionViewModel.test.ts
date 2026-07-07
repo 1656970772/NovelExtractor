@@ -4,6 +4,7 @@ import {
   buildCreateJobDto,
   createExtractionFormState,
   formatByteSize,
+  getNextTaskStatusForAction,
   mapJobDtoToExtractionJob,
   sortExtractionJobsByCreatedAtDesc
 } from "./extractionViewModel";
@@ -214,6 +215,26 @@ describe("extractionViewModel", () => {
       logFilePath: "runs/job-1/logs/20260630-153012.txt",
       createdAt: "2026-06-27T00:00:00.000Z"
     });
+  });
+
+  it("keeps pause requests in their own UI status until the runtime reaches a window boundary", () => {
+    const job: JobDto = {
+      id: "job-pausing",
+      bookId: "book-1",
+      status: "pause_requested",
+      progressText: "进度：1/3",
+      tokenText: "Token 10 / 缓存命中率 0.00%",
+      allowedActions: [],
+      createdAt: "2026-06-27T00:00:00.000Z",
+      updatedAt: "2026-06-27T00:00:00.000Z"
+    };
+
+    expect(mapJobDtoToExtractionJob(job)).toMatchObject({
+      id: "job-pausing",
+      status: "pause_requested",
+      progressText: "进度：1/3"
+    });
+    expect(getNextTaskStatusForAction("pause")).toBe("pause_requested");
   });
 
   it("sorts extraction jobs by creation time with undated jobs kept last", () => {
