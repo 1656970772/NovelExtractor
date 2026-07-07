@@ -10,7 +10,6 @@ import {
 } from "./extractionViewModel";
 import {
   AUTO_PROVIDER_OPTION_ID,
-  getExtractionModelsFromProviders,
   type ExtractionProviderOption
 } from "../providers/providerViewModel";
 
@@ -90,29 +89,6 @@ describe("extractionViewModel", () => {
     expect(state.extractionChapterCount).toBe(9);
     expect(state.overlapChapterCount).toBe(1);
     expect(state.skipAlreadyExtracted).toBe(true);
-  });
-
-  it("lists every enabled preset model from a saved cc-switch provider", () => {
-    const models = getExtractionModelsFromProviders([
-      {
-        id: "provider-mimo",
-        presetId: "xiaomi-mimo",
-        displayName: "Xiaomi MiMo",
-        kind: "openai-compatible",
-        baseUrl: "https://api.xiaomimimo.com/v1",
-        hasApiKey: true,
-        enabled: true,
-        models: [
-          { id: "mimo-v2.5-pro", displayName: "MiMo V2.5 Pro", enabled: true, isDefault: true },
-          { id: "mimo-v2.5", displayName: "MiMo V2.5", enabled: true, isDefault: false }
-        ]
-      }
-    ]);
-
-    expect(models.map((model) => model.displayName)).toEqual([
-      "Xiaomi MiMo / MiMo V2.5 Pro",
-      "Xiaomi MiMo / MiMo V2.5"
-    ]);
   });
 
   it("keeps explicit provider and repairs unavailable child models during reconcile", () => {

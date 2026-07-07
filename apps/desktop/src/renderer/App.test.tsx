@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { JobDto, ProjectDto, TemplateDto } from "../shared/ipcTypes";
 import { App } from "./App";
+import { AUTO_PROVIDER_OPTION_ID } from "./features/providers/providerViewModel";
 import { getDefaultTemplateViews } from "./features/templates/templateViewModel";
 import { applyThemeTokens } from "./theme";
 
@@ -338,7 +339,9 @@ describe("desktop workbench shell", () => {
 
     await user.click(screen.getByRole("button", { name: "提取" }));
 
-    expect(await screen.findByRole("combobox", { name: "模型服务" })).toHaveTextContent("DeepSeek");
+    expect(await screen.findByRole("combobox", { name: "模型服务" })).toHaveValue(
+      AUTO_PROVIDER_OPTION_ID
+    );
 
     const file = new File(["第一章 初入仙途"], "凡人修仙传.txt", { type: "text/plain" });
     await user.upload(screen.getByLabelText("选择小说文件"), file);
@@ -424,7 +427,9 @@ describe("desktop workbench shell", () => {
     render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
 
     await user.click(screen.getByRole("button", { name: "提取" }));
-    expect(await screen.findByRole("combobox", { name: "模型服务" })).toHaveTextContent("DeepSeek");
+    expect(await screen.findByRole("combobox", { name: "模型服务" })).toHaveValue(
+      AUTO_PROVIDER_OPTION_ID
+    );
 
     const file = new File(["第一章 初入仙途"], "凡人修仙传.txt", { type: "text/plain" });
     await user.upload(screen.getByLabelText("选择小说文件"), file);
@@ -605,7 +610,9 @@ describe("desktop workbench shell", () => {
     render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
 
     await user.click(screen.getByRole("button", { name: "提取" }));
-    expect(await screen.findByRole("combobox", { name: "模型服务" })).toHaveTextContent("DeepSeek");
+    expect(await screen.findByRole("combobox", { name: "模型服务" })).toHaveValue(
+      AUTO_PROVIDER_OPTION_ID
+    );
 
     const file = new File(["第一章 初入仙途"], "凡人修仙传.txt", { type: "text/plain" });
     await user.upload(screen.getByLabelText("选择小说文件"), file);

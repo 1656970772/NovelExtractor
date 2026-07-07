@@ -12,6 +12,13 @@ import {
 } from "./providerViewModel";
 
 describe("providerViewModel", () => {
+  it("does not export the legacy flat extraction model API", async () => {
+    const providerViewModel = await import("./providerViewModel");
+    const legacyApiName = ["get", "Extraction", "Models", "From", "Providers"].join("");
+
+    expect(providerViewModel).not.toHaveProperty(legacyApiName);
+  });
+
   it("builds a SaveProviderDto from the DeepSeek preset with config defaults", () => {
     const deepSeekPreset = getProviderPresets().find((preset) => preset.id === "deepseek");
     const state = createProviderFormState("deepseek");

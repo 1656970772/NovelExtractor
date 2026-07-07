@@ -6,7 +6,6 @@ import type {
   ProviderViewDto,
   SaveProviderDto
 } from "../../../shared/ipcTypes";
-import type { ExtractionModel } from "../extraction/extractionViewModel";
 
 export type ProviderPresetId = SaveProviderDto["presetId"];
 export type ProviderSaveState = "idle" | "saving" | "error";
@@ -241,23 +240,6 @@ export function clearProviderSecretAfterSave(state: ProviderFormState): Provider
     ...state,
     apiKey: ""
   };
-}
-
-export function getExtractionModelsFromProviders(
-  providers: readonly ProviderViewDto[]
-): ExtractionModel[] {
-  return getExtractionProviderOptionsFromProviders(providers).flatMap((providerOption) => {
-    if (providerOption.kind !== "provider") {
-      return [];
-    }
-
-    return providerOption.models.map((model) => ({
-      id: `${providerOption.providerConfigId}:${model.id}`,
-      providerConfigId: providerOption.providerConfigId,
-      modelId: model.id,
-      displayName: `${providerOption.displayName} / ${model.displayName}`
-    }));
-  });
 }
 
 function getEnabledProviderModels(
