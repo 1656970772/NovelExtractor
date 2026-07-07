@@ -262,6 +262,30 @@ describe("ProviderConfigModal and UserMenu", () => {
     );
   });
 
+  it("saves a custom second model with trimmed id as the default model", async () => {
+    const user = userEvent.setup();
+    const { onSaveProvider } = renderModal({ providers: [] });
+
+    await user.click(screen.getByRole("radio", { name: "自定义 OpenAI-compatible" }));
+    await user.type(screen.getByLabelText("Base URL"), "https://llm.example.test/v1");
+    await user.type(screen.getByLabelText("API key"), "sk-custom-test");
+    await user.type(screen.getByRole("textbox", { name: "模型型号 1" }), "custom-first");
+    await user.click(screen.getByRole("button", { name: "添加模型" }));
+    await user.type(screen.getByRole("textbox", { name: "模型型号 2" }), " custom-second ");
+    await user.click(screen.getByRole("radio", { name: "设为默认 custom-second" }));
+    await user.click(screen.getByRole("button", { name: "保存配置" }));
+
+    expect(onSaveProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelName: "custom-second",
+        models: [
+          expect.objectContaining({ id: "custom-first", enabled: true, isDefault: false }),
+          expect.objectContaining({ id: "custom-second", enabled: true, isDefault: true })
+        ]
+      })
+    );
+  });
+
   it("does not merge stale fetched models after switching presets", async () => {
     const user = userEvent.setup();
     let resolveFetch: ((models: FetchedProviderModelDto[]) => void) | undefined;

@@ -153,6 +153,34 @@ describe("providerViewModel", () => {
     expect(JSON.stringify(state)).not.toContain("sk-");
   });
 
+  it("normalizes saved provider models when creating form state", () => {
+    const savedProvider: ProviderViewDto = {
+      id: "provider-1",
+      presetId: "custom-openai-compatible",
+      displayName: "Custom Saved",
+      kind: "openai-compatible",
+      baseUrl: "https://llm.example.test/v1",
+      hasApiKey: true,
+      enabled: true,
+      models: [
+        { id: "   ", displayName: "Empty", enabled: true, isDefault: false },
+        { id: " beta ", displayName: " Beta ", enabled: false, isDefault: true },
+        { id: "beta", displayName: "Beta Duplicate", enabled: true, isDefault: true },
+        { id: " alpha ", displayName: " Alpha ", enabled: true, isDefault: true },
+        { id: "gamma", displayName: "Gamma", enabled: true, isDefault: false }
+      ]
+    };
+
+    const state = createProviderFormStateFromSavedProvider(savedProvider);
+
+    expect(state.modelName).toBe("beta");
+    expect(state.models).toEqual([
+      { id: "beta", displayName: "Beta", enabled: true, isDefault: true },
+      { id: "alpha", displayName: "Alpha", enabled: true, isDefault: false },
+      { id: "gamma", displayName: "Gamma", enabled: true, isDefault: false }
+    ]);
+  });
+
   it("builds save dto with the default model enabled even when form state has it disabled", () => {
     const dto = buildSaveProviderDto({
       ...createProviderFormState("deepseek"),

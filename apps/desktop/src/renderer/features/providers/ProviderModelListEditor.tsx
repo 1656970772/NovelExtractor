@@ -23,20 +23,20 @@ function getModelLabel(model: ProviderModelDto, index: number): string {
 function syncDefault(models: ProviderModelDto[], modelName: string): ProviderModelDto[] {
   return models.map((model) => ({
     ...model,
-    enabled: model.id === modelName ? true : model.enabled,
-    isDefault: model.id === modelName
+    enabled: model.id.trim() === modelName ? true : model.enabled,
+    isDefault: model.id.trim() === modelName
   }));
 }
 
 function resolveNextModelName(models: ProviderModelDto[], preferredModelName: string): string {
   const trimmedPreferred = preferredModelName.trim();
-  if (trimmedPreferred && models.some((model) => model.id === trimmedPreferred)) {
+  if (trimmedPreferred && models.some((model) => model.id.trim() === trimmedPreferred)) {
     return trimmedPreferred;
   }
 
   return (
-    models.find((model) => model.enabled && model.id.trim())?.id ??
-    models.find((model) => model.id.trim())?.id ??
+    models.find((model) => model.enabled && model.id.trim())?.id.trim() ??
+    models.find((model) => model.id.trim())?.id.trim() ??
     ""
   );
 }

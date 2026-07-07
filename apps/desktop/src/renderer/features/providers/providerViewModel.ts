@@ -213,7 +213,10 @@ export function selectProviderPreset(
 export function createProviderFormStateFromSavedProvider(
   provider: ProviderViewDto
 ): ProviderFormState {
-  const modelName = getPreferredModelName(provider.models);
+  const normalizedModels = normalizeProviderModels(
+    provider.models,
+    getPreferredModelName(provider.models)
+  );
 
   return {
     providerId: provider.id,
@@ -222,8 +225,8 @@ export function createProviderFormStateFromSavedProvider(
     kind: provider.kind,
     baseUrl: provider.baseUrl ?? "",
     apiKey: "",
-    models: syncDefaultModelFlags(provider.models, modelName),
-    modelName,
+    models: normalizedModels.models,
+    modelName: normalizedModels.modelName,
     modelFetchState: "idle",
     defaultModel: true,
     enabled: provider.enabled
