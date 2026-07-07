@@ -106,6 +106,25 @@ export interface OpenAiCompatibleClientOptions {
   retry?: Partial<OpenAiCompatibleRetryOptions>;
 }
 
+export type OpenAiCompatibleRequestErrorKind = "http" | "network" | "response_body";
+
+export interface OpenAiCompatibleRequestErrorDetails {
+  status?: number;
+  statusText?: string;
+  body?: unknown;
+}
+
+export class OpenAiCompatibleRequestError extends Error {
+  constructor(
+    message: string,
+    public readonly kind: OpenAiCompatibleRequestErrorKind,
+    public readonly details: OpenAiCompatibleRequestErrorDetails = {}
+  ) {
+    super(message);
+    this.name = "OpenAiCompatibleRequestError";
+  }
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   if (value !== null && typeof value === "object" && !Array.isArray(value)) {
     return value as Record<string, unknown>;
@@ -272,7 +291,7 @@ function isRetryableRequestError(
     return false;
   }
 
-  if (error.message.startsWith("OpenAI-compatible request failed with HTTP")) {
+  if (error instanceof OpenAiCompatibleRequestError && error.kind === "http") {
     return false;
   }
 
@@ -397,18 +416,32 @@ export class OpenAiCompatibleClient {
         body: JSON.stringify(body)
       });
     } catch (error) {
-      throw new Error(formatSafeError(error, redactionOptions));
+      const safeMessage = formatSafeError(error, redactionOptions);
+      throw new OpenAiCompatibleRequestError(safeMessage, "network", { body: safeMessage });
     }
 
     let responseBody: unknown;
     try {
       responseBody = await readResponseBody(response);
     } catch (error) {
-      throw new Error(formatSafeError(error, redactionOptions));
+      const safeMessage = formatSafeError(error, redactionOptions);
+      throw new OpenAiCompatibleRequestError(safeMessage, "response_body", {
+        status: response.status,
+        statusText: response.statusText,
+        body: safeMessage
+      });
     }
 
     if (!response.ok) {
-      throw new Error(formatHttpError(response, responseBody, redactionOptions));
+      throw new OpenAiCompatibleRequestError(
+        formatHttpError(response, responseBody, redactionOptions),
+        "http",
+        {
+          status: response.status,
+          statusText: response.statusText,
+          body: redactSecrets(responseBody, redactionOptions)
+        }
+      );
     }
 
     const adapter = getProtocolAdapter(this.provider.apiFormat);
