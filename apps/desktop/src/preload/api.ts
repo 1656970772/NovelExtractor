@@ -23,6 +23,7 @@ import type {
   TemplateDto,
   TemplateListDto,
   TemplateSelectionDto,
+  UpdateJobRetryPolicyDto,
   UploadTxtDto
 } from "../shared/ipcTypes";
 
@@ -59,6 +60,7 @@ export interface NovelExtractorDesktopApi {
   pauseJob(input: { jobId: string }): Promise<JobDto | void>;
   resumeJob(input: { jobId: string }): Promise<JobDto | void>;
   restartJob(input: { jobId: string }): Promise<JobDto | void>;
+  updateJobRetryPolicy(input: UpdateJobRetryPolicyDto): Promise<JobDto>;
   deleteJob(input: DeleteJobDto): Promise<void>;
   readJobLog(input: { jobId: string }): Promise<JobLogDto>;
   openJobLog(input: { jobId: string }): Promise<void>;
@@ -104,6 +106,7 @@ export function createNovelExtractorDesktopApi(
     pauseJob: (input) => invokeTyped(invoke, "jobs:pause", input),
     resumeJob: (input) => invokeTyped(invoke, "jobs:resume", input),
     restartJob: (input) => invokeTyped(invoke, "jobs:restart", input),
+    updateJobRetryPolicy: (input) => invokeTyped(invoke, "jobs:updateRetryPolicy", input),
     deleteJob: (input) => invokeTyped(invoke, "jobs:delete", input),
     readJobLog: (input) => invokeTyped(invoke, "jobs:readLog", input),
     openJobLog: (input) => invokeTyped(invoke, "jobs:openLog", input),

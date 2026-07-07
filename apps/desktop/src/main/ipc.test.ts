@@ -3,8 +3,12 @@ import type {
   BookUploadResultDto,
   CreateJobDto,
   DeleteJobDto,
+  DesktopIpcRequestMap,
+  DesktopIpcResponseMap,
+  InputSummaryDto,
   JobDto,
   JobLogDto,
+  JobModelSelectionMode,
   JobStatus,
   FetchProviderModelsDto,
   FetchedProviderModelDto,
@@ -21,6 +25,7 @@ import type {
   SaveTemplateDto,
   TemplateDto,
   TemplateSelectionDto,
+  UpdateJobRetryPolicyDto,
   UploadTxtDto
 } from "../shared/ipcTypes";
 import {
@@ -106,6 +111,11 @@ function createHandlers(): DesktopIpcHandlers {
     "jobs:pause": async () => undefined,
     "jobs:resume": async () => undefined,
     "jobs:restart": async () => undefined,
+    "jobs:updateRetryPolicy": async (input) => ({
+      ...job,
+      id: input.jobId,
+      autoRetryOnFailure: input.autoRetryOnFailure
+    }),
     "jobs:delete": async () => undefined,
     "jobs:readLog": async (input) => ({
       jobId: input.jobId,
@@ -158,6 +168,7 @@ describe("desktop IPC contract", () => {
       "jobs:pause",
       "jobs:resume",
       "jobs:restart",
+      "jobs:updateRetryPolicy",
       "jobs:delete",
       "jobs:readLog",
       "jobs:openLog",
@@ -212,6 +223,7 @@ describe("desktop IPC contract", () => {
   it("exports the desktop DTO types from the shared IPC module", () => {
     const providerKind: ProviderKind = "openai-compatible";
     const status: JobStatus = "running";
+    const modelSelectionMode: JobModelSelectionMode = "auto";
     const providerView: ProviderViewDto = {
       id: "provider-1",
       presetId: "kimi",
@@ -225,6 +237,7 @@ describe("desktop IPC contract", () => {
 
     expect(providerKind).toBe("openai-compatible");
     expect(status).toBe("running");
+    expect(modelSelectionMode).toBe("auto");
     expect(providerView).not.toHaveProperty("apiKey");
     expectTypeOf<ProjectDto>().toMatchTypeOf<{
       id: string;
@@ -286,9 +299,17 @@ describe("desktop IPC contract", () => {
       extractionChapterCount: number;
       overlapChapterCount: number;
       skipAlreadyExtracted: boolean;
+      modelSelectionMode?: JobModelSelectionMode;
+      autoRetryOnFailure?: boolean;
+    }>();
+    expectTypeOf<InputSummaryDto>().toMatchTypeOf<{
+      modelId: string;
+      modelSelectionMode?: JobModelSelectionMode;
     }>();
     expectTypeOf<JobDto>().toMatchTypeOf<{
       status: JobStatus;
+      modelSelectionMode?: JobModelSelectionMode;
+      autoRetryOnFailure?: boolean;
       allowedActions: Array<"start" | "pause" | "resume" | "restart" | "delete">;
     }>();
     expectTypeOf<ProjectRuntimeDto>().toMatchTypeOf<{
@@ -297,6 +318,12 @@ describe("desktop IPC contract", () => {
     }>();
     expectTypeOf<JobLogDto>().toMatchTypeOf<{ jobId: string; logFilePath?: string; content: string }>();
     expectTypeOf<DeleteJobDto>().toMatchTypeOf<{ jobId: string; confirm: true }>();
+    expectTypeOf<UpdateJobRetryPolicyDto>().toMatchTypeOf<{
+      jobId: string;
+      autoRetryOnFailure: boolean;
+    }>();
+    expectTypeOf<DesktopIpcRequestMap["jobs:updateRetryPolicy"]>().toEqualTypeOf<UpdateJobRetryPolicyDto>();
+    expectTypeOf<DesktopIpcResponseMap["jobs:updateRetryPolicy"]>().toEqualTypeOf<JobDto>();
   });
 
   it("stores API keys as opaque references and redacts provider views and log text", () => {

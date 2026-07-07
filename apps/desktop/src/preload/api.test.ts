@@ -80,6 +80,7 @@ describe("preload desktop API", () => {
     await api.pauseJob({ jobId: "job-1" });
     await api.resumeJob({ jobId: "job-1" });
     await api.restartJob({ jobId: "job-1" });
+    await api.updateJobRetryPolicy({ jobId: "job-1", autoRetryOnFailure: true });
     await api.deleteJob({ jobId: "job-1", confirm: true });
     await api.readJobLog({ jobId: "job-1" });
     await api.openJobLog({ jobId: "job-1" });
@@ -111,6 +112,7 @@ describe("preload desktop API", () => {
       "jobs:pause",
       "jobs:resume",
       "jobs:restart",
+      "jobs:updateRetryPolicy",
       "jobs:delete",
       "jobs:readLog",
       "jobs:openLog",
@@ -119,7 +121,29 @@ describe("preload desktop API", () => {
       "window:toggleMaximize",
       "window:close"
     ]);
-    expect(invoke).toHaveBeenCalledTimes(29);
+    expect(invoke).toHaveBeenCalledTimes(30);
+  });
+
+  it("updates a job retry policy through typed IPC", async () => {
+    const invoke = vi.fn().mockResolvedValue({
+      id: "job-1",
+      bookId: "book-1",
+      status: "failed",
+      progressText: "失败",
+      autoRetryOnFailure: true,
+      allowedActions: ["resume", "restart", "delete"],
+      createdAt: "2026-06-27T00:00:00.000Z",
+      updatedAt: "2026-06-27T00:01:00.000Z"
+    });
+    const api = createNovelExtractorDesktopApi(invoke);
+
+    const job = await api.updateJobRetryPolicy({ jobId: "job-1", autoRetryOnFailure: true });
+
+    expect(invoke).toHaveBeenCalledWith("jobs:updateRetryPolicy", {
+      jobId: "job-1",
+      autoRetryOnFailure: true
+    });
+    expect(job.autoRetryOnFailure).toBe(true);
   });
 
   it("opens the full job log through typed IPC", async () => {
@@ -180,6 +204,7 @@ describe("preload desktop API", () => {
       "pauseJob",
       "resumeJob",
       "restartJob",
+      "updateJobRetryPolicy",
       "deleteJob",
       "readJobLog",
       "openJobLog",
