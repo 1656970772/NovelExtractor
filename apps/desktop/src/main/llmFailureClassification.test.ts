@@ -54,6 +54,18 @@ describe("classifyLlmFailure", () => {
     });
   });
 
+  it("does not classify network errors by HTTP message fragments", () => {
+    const error = new OpenAiCompatibleRequestError("rate limit from proxy", "network", {
+      body: "rate limit from proxy"
+    });
+
+    expect(classifyLlmFailure(error, defaults)).toEqual({
+      switchable: false,
+      retryable: false,
+      reason: "network_fragment"
+    });
+  });
+
   it("does not classify ordinary errors as switchable LLM request failures", () => {
     expect(classifyLlmFailure(new Error("tool schema invalid"), defaults)).toEqual({
       switchable: false,

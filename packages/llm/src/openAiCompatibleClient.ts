@@ -245,10 +245,11 @@ function formatHttpError(
   body: unknown,
   options: RedactSecretsOptions
 ): string {
+  const safeStatusText = redactSecrets(response.statusText, options);
   const safeBody = redactSecrets(body, options);
   const bodyText = typeof safeBody === "string" ? safeBody : JSON.stringify(safeBody);
 
-  return `OpenAI-compatible request failed with HTTP ${response.status} ${response.statusText}: ${bodyText}`;
+  return `OpenAI-compatible request failed with HTTP ${response.status} ${safeStatusText}: ${bodyText}`;
 }
 
 const DEFAULT_RETRY_OPTIONS: OpenAiCompatibleRetryOptions = {
@@ -427,7 +428,7 @@ export class OpenAiCompatibleClient {
       const safeMessage = formatSafeError(error, redactionOptions);
       throw new OpenAiCompatibleRequestError(safeMessage, "response_body", {
         status: response.status,
-        statusText: response.statusText,
+        statusText: redactSecrets(response.statusText, redactionOptions),
         body: safeMessage
       });
     }
@@ -438,7 +439,7 @@ export class OpenAiCompatibleClient {
         "http",
         {
           status: response.status,
-          statusText: response.statusText,
+          statusText: redactSecrets(response.statusText, redactionOptions),
           body: redactSecrets(responseBody, redactionOptions)
         }
       );

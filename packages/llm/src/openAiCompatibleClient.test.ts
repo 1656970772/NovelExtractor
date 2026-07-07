@@ -997,6 +997,7 @@ describe("OpenAiCompatibleClient", () => {
 
   it("throws structured HTTP request errors with redacted details", async () => {
     const apiKey = "sk-" + "http-structured-secret";
+    const statusText = `Too Many Requests Bearer ${apiKey}`;
     const client = new OpenAiCompatibleClient(
       createProvider(),
       { resolveApiKey: async () => apiKey },
@@ -1008,7 +1009,7 @@ describe("OpenAiCompatibleClient", () => {
                 message: `rate limit for Bearer ${apiKey}`
               }
             }),
-            { status: 429, statusText: "Too Many Requests" }
+            { status: 429, statusText }
           );
         }),
         retry: { maxAttempts: 1 }
@@ -1031,7 +1032,7 @@ describe("OpenAiCompatibleClient", () => {
       kind: "http",
       details: {
         status: 429,
-        statusText: "Too Many Requests",
+        statusText: "Too Many Requests Bearer sk-***",
         body: {
           error: {
             message: "rate limit for Bearer sk-***"
@@ -1039,7 +1040,8 @@ describe("OpenAiCompatibleClient", () => {
         }
       }
     });
-    expect((thrown as Error).message).toContain("HTTP 429 Too Many Requests");
+    expect((thrown as Error).message).toContain("HTTP 429 Too Many Requests Bearer sk-***");
+    expect((thrown as OpenAiCompatibleRequestError).details.statusText).not.toContain(apiKey);
     expect(JSON.stringify(thrown)).not.toContain(apiKey);
     expect((thrown as Error).message).not.toContain(apiKey);
   });
@@ -1177,6 +1179,7 @@ describe("OpenAiCompatibleClient", () => {
 
   it("redacts secrets from response body read failures", async () => {
     const apiKey = "plain" + "secret12345";
+    const statusText = `OK Bearer ${apiKey}`;
     const client = new OpenAiCompatibleClient(
       createProvider(),
       { resolveApiKey: async () => apiKey },
@@ -1185,7 +1188,7 @@ describe("OpenAiCompatibleClient", () => {
           return {
             ok: true,
             status: 200,
-            statusText: "OK",
+            statusText,
             text: async () => {
               throw new Error(`failed to read response for api key ${apiKey}`);
             }
@@ -1209,6 +1212,15 @@ describe("OpenAiCompatibleClient", () => {
     const message = (thrown as Error).message;
     expect(message).toBe("failed to read response for api key ***");
     expect(message).not.toContain(apiKey);
+    expect(thrown).toMatchObject({
+      kind: "response_body",
+      details: {
+        status: 200,
+        statusText: "OK Bearer ***",
+        body: "failed to read response for api key ***"
+      }
+    });
+    expect(JSON.stringify(thrown)).not.toContain(apiKey);
   });
 
   it("redacts secrets from successful connection test raw responses", async () => {

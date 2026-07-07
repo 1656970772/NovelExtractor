@@ -66,6 +66,12 @@ export function classifyLlmFailure(
         detail: networkFragment
       };
     }
+
+    return {
+      switchable: false,
+      retryable: false,
+      reason: "network_fragment"
+    };
   }
 
   const messageFragment = includesFragment(text, defaults.switchableMessageFragments);
