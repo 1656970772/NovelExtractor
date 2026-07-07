@@ -13,13 +13,6 @@ import {
 } from "../providers/providerViewModel";
 import { getDefaultTemplateViews, type TemplateView } from "../templates/templateViewModel";
 
-export interface ExtractionModel {
-  id: string;
-  providerConfigId: string;
-  modelId: string;
-  displayName: string;
-}
-
 export interface ExtractionBook {
   id: string;
   displayName: string;

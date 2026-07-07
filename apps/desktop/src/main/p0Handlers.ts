@@ -699,6 +699,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       id: job.id,
       bookId: job.bookId,
       status: job.status,
+      modelSelectionMode: job.input.modelSelectionMode,
       progressText: job.progressText,
       progress: toJobProgressDto(job),
       timing: toJobTimingDto(job, clock.now()),
@@ -1327,11 +1328,17 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       throw new Error("重叠章节数必须小于单次窗口章节数");
     }
 
+    const modelSelectionMode = input.modelSelectionMode ?? "explicit";
+    if (modelSelectionMode !== "explicit" && modelSelectionMode !== "auto") {
+      throw new Error("模型选择模式无效");
+    }
+
     return {
       bookId: requireStringField(input, "bookId", "小说"),
       templateIds: requireStringArrayField(input, "templateIds", "模板"),
       providerConfigId: requireStringField(input, "providerConfigId", "模型供应商"),
       modelId: requireStringField(input, "modelId", "模型"),
+      modelSelectionMode,
       singleRunChapterCount,
       extractionChapterCount,
       overlapChapterCount,

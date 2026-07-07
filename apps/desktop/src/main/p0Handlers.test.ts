@@ -1069,6 +1069,37 @@ describe("P0 desktop IPC handlers", () => {
     ).rejects.toThrow(/重复\.md.*甲模板.*乙模板/u);
   });
 
+  it("preserves automatic model selection mode when creating jobs", async () => {
+    const contract = createIpcContract();
+    const handlers = createHandlers();
+    const book = await contract.invoke(handlers, "books:uploadTxt", {
+      projectId: "project-a",
+      filePath: utf8FixturePath,
+      displayName: "凡人修仙传.txt"
+    });
+    const template = await contract.invoke(handlers, "templates:save", {
+      projectId: "project-a",
+      scope: "project",
+      name: "模型选择模板",
+      fileName: "模型选择.md",
+      body: "记录模型选择模式。"
+    });
+
+    const job = await contract.invoke(handlers, "jobs:create", {
+      bookId: book.bookId,
+      templateIds: [template.id],
+      providerConfigId: "provider-1",
+      modelId: "mock-model",
+      modelSelectionMode: "auto",
+      singleRunChapterCount: 2,
+      extractionChapterCount: 3,
+      overlapChapterCount: 1,
+      skipAlreadyExtracted: true
+    });
+
+    expect(job.modelSelectionMode).toBe("auto");
+  });
+
   it("uses compressed template prompt profiles while keeping full template bodies in rule snapshots", async () => {
     const mockServer = await startMockOpenAiServer({
       respond: () => ({

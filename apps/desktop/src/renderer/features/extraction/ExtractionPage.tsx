@@ -21,7 +21,7 @@ import { getDefaultTemplateViews, type TemplateView } from "../templates/templat
 import { TemplateUploadPanel } from "../templates/TemplateUploadPanel";
 import { useTransientScrollbar } from "./useTransientScrollbar";
 
-export type { ExtractionBook, ExtractionJob, ExtractionModel } from "./extractionViewModel";
+export type { ExtractionBook, ExtractionJob } from "./extractionViewModel";
 
 export interface ExtractionPageProps {
   projectId?: string;
