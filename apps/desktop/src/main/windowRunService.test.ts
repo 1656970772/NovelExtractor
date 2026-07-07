@@ -526,12 +526,30 @@ describe("window run Reasonix tool loop integration", () => {
       toolCall: createToolCall("call-bad-updates", "upsert_report_section", {
         outputFileName: "[报告]NPC性格与代表事件.md",
         updates: "韩立,核心性格"
-      })
+      }),
+      expectToolResult: {
+        toolName: "upsert_report_section",
+        toolCallId: "call-bad-updates",
+        assertContent: (content) => {
+          const parsed = JSON.parse(content) as { hint?: string };
+          expect(content).toContain("tool_schema_invalid_arguments");
+          expect(content).toContain("$.updates 必须是数组");
+          expect(content).not.toContain("updates must be a non-empty array");
+          expect(parsed.hint).toContain("正确格式示例");
+          expect(parsed.hint).toContain("updates 必须是真 JSON 数组");
+          expect(parsed.hint).toContain('"updates":[{"operation":"add_card"');
+          expect(parsed.hint).toContain("不要把 updates 写成字符串");
+        }
+      }
     });
 
     expect(result.logText).toContain("tool_schema_invalid_arguments");
     expect(result.logText).toContain("$.updates 必须是数组");
     expect(result.logText).not.toContain("updates must be a non-empty array");
+    expect(result.logText).toContain("正确格式示例");
+    expect(result.logText).toContain("updates 必须是真 JSON 数组");
+    expect(result.logText).toContain("add_card");
+    expect(result.logText).toContain("不要把 updates 写成字符串");
     expect(result.reportContents["[报告]NPC性格与代表事件.md"]).toBe(
       "# NPC性格与代表事件\n\n### 韩立\n\n- 核心性格：旧内容。\n"
     );
@@ -1207,6 +1225,9 @@ describe("window run Reasonix tool loop integration", () => {
     expect(result).toMatchObject({ ok: true });
     expect(requestBodies).toHaveLength(3);
     expect(JSON.stringify(requestBodies[1])).toContain("报告正文不得包含内部运行路径");
+    expect(JSON.stringify(requestBodies[1])).toContain("正确格式示例");
+    expect(JSON.stringify(requestBodies[1])).toContain("updates 必须是真 JSON 数组");
+    expect(JSON.stringify(requestBodies[1])).toContain("不要把 updates 写成字符串");
     expect(JSON.stringify(requestBodies)).not.toContain(secret);
     expect(JSON.stringify(append.mock.calls)).not.toContain(secret);
   }, 20000);

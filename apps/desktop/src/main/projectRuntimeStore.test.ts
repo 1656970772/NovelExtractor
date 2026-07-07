@@ -2,13 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { Book, Chapter, ReportAsset } from "@novel-extractor/domain";
+import type { Book, ReportAsset } from "@novel-extractor/domain";
 import type { BookUploadResultDto } from "../shared/ipcTypes";
 import { createFileProjectRuntimeStore, type ProjectRuntimeJobRecord } from "./projectRuntimeStore";
 
 const fixedNow = "2026-07-02T11:30:00.000Z";
 
-function createBookRecord(): { book: Book; chapters: Chapter[]; upload: BookUploadResultDto } {
+function createBookRecord(): { book: Book; upload: BookUploadResultDto } {
   const book: Book = {
     id: "book-1",
     projectId: "project-a",
@@ -18,22 +18,6 @@ function createBookRecord(): { book: Book; chapters: Chapter[]; upload: BookUplo
     chapterCount: 2,
     createdAt: fixedNow
   };
-  const chapters: Chapter[] = [
-    {
-      id: "chapter-1",
-      bookId: "book-1",
-      index: 1,
-      title: "第一章 初入仙途",
-      textPath: "assets/books/book-1/chapters/0001.txt"
-    },
-    {
-      id: "chapter-2",
-      bookId: "book-1",
-      index: 2,
-      title: "第二章 丹药",
-      textPath: "assets/books/book-1/chapters/0002.txt"
-    }
-  ];
   const upload: BookUploadResultDto = {
     bookId: book.id,
     displayName: book.displayName,
@@ -44,7 +28,7 @@ function createBookRecord(): { book: Book; chapters: Chapter[]; upload: BookUplo
     encoding: "utf-8",
     chapterCount: book.chapterCount
   };
-  return { book, chapters, upload };
+  return { book, upload };
 }
 
 function createRunningJob(): ProjectRuntimeJobRecord {
@@ -81,9 +65,9 @@ describe("project runtime store", () => {
     await fs.rm(tempRoot, { force: true, recursive: true });
   });
 
-  it("persists uploaded books, chapters, jobs, and reports across store instances", async () => {
+  it("persists uploaded books, jobs, and reports without storing upload-time chapter slices", async () => {
     const store = createFileProjectRuntimeStore({ projectRoot: tempRoot });
-    const { book, chapters, upload } = createBookRecord();
+    const { book, upload } = createBookRecord();
     const job = {
       ...createRunningJob(),
       progress: {
@@ -108,7 +92,7 @@ describe("project runtime store", () => {
       updatedAt: fixedNow
     };
 
-    await store.saveUploadedBook({ book, chapters, upload });
+    await store.saveUploadedBook({ book, upload });
     await store.saveJob(job);
     await store.saveReport({ report, path: path.join(tempRoot, report.relativePath) });
 
@@ -117,7 +101,6 @@ describe("project runtime store", () => {
 
     expect(state.schemaVersion).toBe(1);
     expect(state.books).toEqual([{ book, upload }]);
-    expect(state.chaptersByBookId).toEqual({ "book-1": chapters });
     expect(state.jobs).toHaveLength(1);
     expect(state.jobs[0]).toMatchObject({
       id: "job-1",

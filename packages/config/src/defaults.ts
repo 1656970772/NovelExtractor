@@ -67,6 +67,11 @@ const PUBLIC_REPORT_METADATA_RULE =
   "正式报告中的资料来源、参考范围等公开元数据只能写窗口编号、章节范围、章节名或原文范围；不得暴露内部运行路径、项目路径、窗口文件名或流程性状态。";
 const TEMPLATE_EXAMPLE_EVIDENCE_RULE =
   "模板示例、字段说明、示例事件链和通用术语只作为格式参考；只有当前窗口原文或已读取既有报告明确证实时才可写入正式报告，未证实的分析结论必须写原文未说明或不写。";
+const TOOL_ERROR_FORMAT_EXAMPLES =
+  "正确格式示例：upsert_report_section 新增卡片参数 {\"outputFileName\":\"[报告]NPC性格与代表事件.md\",\"updates\":[{\"operation\":\"add_card\",\"cardName\":\"韩立\",\"content\":\"### 韩立\\n\\n- 核心性格：谨慎行事。\"}]}；" +
+  "upsert_report_section 替换字段参数 {\"outputFileName\":\"[报告]NPC性格与代表事件.md\",\"updates\":[{\"operation\":\"replace_field\",\"cardName\":\"韩立\",\"fieldName\":\"核心性格\",\"content\":\"- 核心性格：谨慎行事。\"}]}；" +
+  "read_report_excerpt 参数 {\"outputFileName\":\"[报告]NPC性格与代表事件.md\",\"queries\":[{\"cardName\":\"韩立\",\"fields\":[\"核心性格\"]}]}；" +
+  "mark_no_update 参数 {\"path\":\"[报告]NPC性格与代表事件.md\",\"reason\":\"当前窗口无新增信息\"}。updates 必须是真 JSON 数组，queries 也必须是真 JSON 数组；不要把 updates 写成字符串、Markdown 代码块或多层转义文本。";
 
 const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
   providerPresets: createCcSwitchProviderPresets(),
@@ -132,29 +137,29 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
     maxRepeatedRecoverableToolErrors: 3,
     recoverableToolErrorHints: {
       replacement_text_not_found:
-        "old_string 必须精确匹配文件中的原文；更新既有报告优先改用 read_report_excerpt 按卡片字段读取，再用 upsert_report_section 替换同一字段。",
+        `old_string 必须精确匹配文件中的原文；更新既有报告优先改用 read_report_excerpt 按卡片字段读取，再用 upsert_report_section 替换同一字段。${TOOL_ERROR_FORMAT_EXAMPLES}`,
       replacement_text_not_unique:
-        "old_string 在文件中匹配到多处；更新既有报告优先改用 read_report_excerpt 按卡片字段读取，再用 upsert_report_section 替换同一字段。",
+        `old_string 在文件中匹配到多处；更新既有报告优先改用 read_report_excerpt 按卡片字段读取，再用 upsert_report_section 替换同一字段。${TOOL_ERROR_FORMAT_EXAMPLES}`,
       read_tool_target_not_found:
-        "读取目标不存在；请改用当前窗口文本、reports 目录、本批选中报告文件名，或用 read_report_excerpt 读取报告字段块。",
+        `读取目标不存在；请改用当前窗口文本、reports 目录、本批选中报告文件名，或用 read_report_excerpt 读取报告字段块。${TOOL_ERROR_FORMAT_EXAMPLES}`,
       read_tool_scope_denied:
-        "只能读取当前窗口文本、当前书籍 reports 目录或本批选中输出报告；请改用窗口文件路径、reports、选中报告文件名或 read_report_excerpt。",
+        `只能读取当前窗口文本、当前书籍 reports 目录或本批选中输出报告；请改用窗口文件路径、reports、选中报告文件名或 read_report_excerpt。${TOOL_ERROR_FORMAT_EXAMPLES}`,
       bash_tool_scope_denied:
-        "桌面端 bash 只能在当前书籍 reports 目录内执行；不要读取 source、runs、rules、项目根路径、绝对路径或通过 .. 跳出 reports。",
+        `桌面端 bash 只能在当前书籍 reports 目录内执行；不要读取 source、runs、rules、项目根路径、绝对路径或通过 .. 跳出 reports。${TOOL_ERROR_FORMAT_EXAMPLES}`,
       write_tool_scope_denied:
-        "写工具只能写入本批允许的输出报告；path 必须使用模板 outputFileName 或对应报告文件名。",
+        `写工具只能写入本批允许的输出报告；path 必须使用模板 outputFileName 或对应报告文件名。${TOOL_ERROR_FORMAT_EXAMPLES}`,
       bash_runtime_failure:
-        "bash 命令执行失败；请根据 stderr/stdout 调整命令、参数或先用文件工具确认目标。",
+        `bash 命令执行失败；请根据 stderr/stdout 调整命令、参数或先用文件工具确认目标。${TOOL_ERROR_FORMAT_EXAMPLES}`,
       tool_schema_invalid_arguments:
-        "工具参数结构不符合 schema；请只传入该工具支持的字段，并确保 path/content/outputFileName/updates/queries/reason 等字段类型正确。",
+        `工具参数结构不符合 schema；请只传入该工具支持的字段，并确保 path/content/outputFileName/updates/queries/reason 等字段类型正确。${TOOL_ERROR_FORMAT_EXAMPLES}`,
       read_tool_invalid_arguments:
-        "读取工具参数无效；请检查 path 或 queries 是否符合工具 schema，并缩小读取范围。",
+        `读取工具参数无效；请检查 path 或 queries 是否符合工具 schema，并缩小读取范围。${TOOL_ERROR_FORMAT_EXAMPLES}`,
       edit_target_not_found:
-        "目标报告不存在；如果需要创建报告内容，请改用 upsert_report_section：operation=add_card 新增整张卡片，operation=add_field 新增字段块。",
+        `目标报告不存在；如果需要创建报告内容，请改用 upsert_report_section：operation=add_card 新增整张卡片，operation=add_field 新增字段块。${TOOL_ERROR_FORMAT_EXAMPLES}`,
       tool_not_enabled:
-        "只能调用当前请求 tools 清单中列出的工具；不要调用未列出的 shell、搜索、目录列出或编辑工具。",
+        `只能调用当前请求 tools 清单中列出的工具；不要调用未列出的 shell、搜索、目录列出或编辑工具。${TOOL_ERROR_FORMAT_EXAMPLES}`,
       tool_invalid_arguments:
-        "工具参数无效；请根据错误消息修正参数后重试，必要时先读取文件确认当前状态。"
+        `工具参数无效；请根据错误消息修正参数后重试，必要时先读取文件确认当前状态。${TOOL_ERROR_FORMAT_EXAMPLES}`
     },
     systemInstruction:
       "你是小说资料抽取助手。必须通过文件工具写入或更新正式模板 Markdown；如果本窗口没有任何可写入的新信息，最终文本必须严格返回 NO_UPDATE。最终文本只简短说明本窗口处理结果，不要放完整报告正文。",

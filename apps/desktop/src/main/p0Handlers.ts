@@ -9,7 +9,7 @@ import {
   type TemplateGroupFallbackStrategy,
   type NovelExtractorConfig
 } from "@novel-extractor/config";
-import type { Book, Chapter, Clock, IdGenerator, Project, ReportAsset } from "@novel-extractor/domain";
+import type { Book, Clock, IdGenerator, Project, ReportAsset } from "@novel-extractor/domain";
 import { toTaskStatus, type JobStatus } from "@novel-extractor/domain/job";
 import {
   ExtractionRulesError,
@@ -535,7 +535,6 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
   };
 
   const booksById = new Map<string, Book>();
-  const chaptersByBookId = new Map<string, Chapter[]>();
   const jobsById = new Map<string, P0JobRecord>();
   const reportsById = new Map<string, ReportAsset>();
   const reportPathById = new Map<string, string>();
@@ -559,7 +558,6 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
   const uploadedBookRepository: UploadedBookRepository = {
     async saveUploadedBook(input) {
       booksById.set(input.book.id, input.book);
-      chaptersByBookId.set(input.book.id, input.chapters);
       return input;
     }
   };
@@ -585,7 +583,6 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
   function hydrateProjectRuntimeState(state: ProjectRuntimeState): void {
     for (const { book } of state.books) {
       booksById.set(book.id, book);
-      chaptersByBookId.set(book.id, state.chaptersByBookId[book.id] ?? []);
     }
 
     for (const job of state.jobs) {
@@ -1663,7 +1660,6 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       };
       await getProjectRuntimeStore(project).saveUploadedBook({
         book: upload.book,
-        chapters: upload.chapters,
         upload: result
       });
       return result;

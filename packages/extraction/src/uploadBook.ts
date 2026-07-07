@@ -1,26 +1,23 @@
 import crypto from "node:crypto";
-import { constants as fsConstants, realpathSync } from "node:fs";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { Book, Chapter, Clock, IdGenerator, Project } from "@novel-extractor/domain";
+import type { Book, Clock, IdGenerator, Project } from "@novel-extractor/domain";
 import { createSafeProjectPath, toSafeRelativePath } from "@novel-extractor/persistence/safePaths";
 import { parseChapters } from "./chapterParser";
 import { decodeNovelText, type NovelTextEncoding } from "./textEncoding";
 
 export interface SaveUploadedBookInput {
   book: Book;
-  chapters: Chapter[];
 }
 
 export interface UploadedBookRepository {
-  saveUploadedBook(input: SaveUploadedBookInput): Promise<{ book: Book; chapters: Chapter[] }>;
+  saveUploadedBook(input: SaveUploadedBookInput): Promise<{ book: Book }>;
 }
 
 export interface UploadBookAssetLayout {
   sourceDirectoryName?: string;
   sourceFileName?: string;
-  chapterDirectoryName?: string;
-  chapterFileName?: (chapter: { index: number; title: string }) => string;
 }
 
 export interface UploadBookInput {
@@ -36,7 +33,6 @@ export interface UploadBookInput {
 
 export interface UploadBookResult {
   book: Book;
-  chapters: Chapter[];
   sourceRelativePath: string;
   encoding: NovelTextEncoding;
 }
@@ -58,9 +54,7 @@ export class UploadBookError extends Error {
 
 const DEFAULT_ASSET_LAYOUT = {
   sourceDirectoryName: "source",
-  sourceFileName: "original.txt",
-  chapterDirectoryName: "chapters",
-  chapterFileName: (chapter: { index: number }) => `${chapter.index.toString().padStart(4, "0")}.txt`
+  sourceFileName: "original.txt"
 } satisfies Required<UploadBookAssetLayout>;
 
 const DEFAULT_BOOK_ID_COLLISION_RETRY_LIMIT = 20;
@@ -113,18 +107,6 @@ export async function uploadBook(input: UploadBookInput): Promise<UploadBookResu
       assetLayout.sourceDirectoryName,
       assetLayout.sourceFileName
     );
-    const plannedChapterAssets = parsedChapters.map((parsedChapter) => ({
-      parsedChapter,
-      path: createSafeProjectPath(
-        input.project.rootPath,
-        "assets",
-        "books",
-        bookId,
-        assetLayout.chapterDirectoryName,
-        assetLayout.chapterFileName(parsedChapter)
-      )
-    }));
-    assertNoAssetPathCollisions(sourceDestination, plannedChapterAssets.map((chapterAsset) => chapterAsset.path));
 
     const sourceDirectory = createSafeProjectPath(
       input.project.rootPath,
@@ -133,32 +115,12 @@ export async function uploadBook(input: UploadBookInput): Promise<UploadBookResu
       bookId,
       assetLayout.sourceDirectoryName
     );
-    const chapterDirectory = createSafeProjectPath(
-      input.project.rootPath,
-      "assets",
-      "books",
-      bookId,
-      assetLayout.chapterDirectoryName
-    );
     const sourceAssetId = idGenerator.createId("source");
 
     await fs.mkdir(sourceDirectory, { recursive: true });
-    await fs.mkdir(chapterDirectory, { recursive: true });
 
     await copyFileExclusively(input.sourcePath, sourceDestination);
     const sourceRelativePath = toSafeRelativePath(input.project.rootPath, sourceDestination);
-
-    const chapters: Chapter[] = [];
-    for (const { parsedChapter, path: chapterPath } of plannedChapterAssets) {
-      await writeFileExclusively(chapterPath, parsedChapter.content);
-      chapters.push({
-        id: idGenerator.createId("chapter"),
-        bookId,
-        index: parsedChapter.index,
-        title: parsedChapter.title,
-        textPath: toSafeRelativePath(input.project.rootPath, chapterPath)
-      });
-    }
 
     const book: Book = {
       id: bookId,
@@ -168,11 +130,11 @@ export async function uploadBook(input: UploadBookInput): Promise<UploadBookResu
       ),
       sourceAssetId,
       sourceTextPath: sourceRelativePath,
-      chapterCount: chapters.length,
+      chapterCount: parsedChapters.length,
       createdAt: now
     };
 
-    const saved = await input.repository.saveUploadedBook({ book, chapters });
+    const saved = await input.repository.saveUploadedBook({ book });
 
     return {
       ...saved,
@@ -216,55 +178,9 @@ async function createAvailableBookAssetRoot(input: {
   );
 }
 
-function assertNoAssetPathCollisions(sourceDestination: string, chapterPaths: string[]): void {
-  const seenDestinations = new Map<string, string>();
-  const destinations = [
-    { role: "source", path: sourceDestination },
-    ...chapterPaths.map((chapterPath, index) => ({ role: `chapter ${index}`, path: chapterPath }))
-  ];
-
-  for (const destination of destinations) {
-    const key = getAssetPathCollisionKey(destination.path);
-    const existingRole = seenDestinations.get(key);
-    if (existingRole) {
-      throw new UploadBookError(
-        "BOOK_ASSET_PATH_COLLISION",
-        `Book asset path collision between ${existingRole} and ${destination.role}: ${destination.path}`
-      );
-    }
-
-    seenDestinations.set(key, destination.role);
-  }
-}
-
-function getAssetPathCollisionKey(targetPath: string): string {
-  let normalizedPath: string;
-
-  try {
-    normalizedPath = realpathSync.native(targetPath);
-  } catch (error) {
-    if (!isNodeError(error) || error.code !== "ENOENT") {
-      throw error;
-    }
-    normalizedPath = path.resolve(targetPath);
-  }
-
-  const normalized = path.normalize(normalizedPath).normalize("NFC");
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-}
-
 async function copyFileExclusively(sourcePath: string, destinationPath: string): Promise<void> {
   try {
     await fs.copyFile(sourcePath, destinationPath, fsConstants.COPYFILE_EXCL);
-  } catch (error) {
-    throwIfAssetAlreadyExists(error, destinationPath);
-    throw error;
-  }
-}
-
-async function writeFileExclusively(destinationPath: string, content: string): Promise<void> {
-  try {
-    await fs.writeFile(destinationPath, content, { encoding: "utf8", flag: "wx" });
   } catch (error) {
     throwIfAssetAlreadyExists(error, destinationPath);
     throw error;

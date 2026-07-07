@@ -1819,7 +1819,7 @@ function toRecoverableToolErrorResult(input: {
   toolName: string;
 }): Record<string, unknown> {
   const pathArgument = input.path ?? getRecoverableToolErrorTargetArgument(input.toolName, input.executionArguments);
-  const hint = input.hint ?? input.classification.hint;
+  const hint = mergeRecoverableToolHints(input.hint, input.classification.hint);
   const output = input.output ?? input.error.output;
 
   return {
@@ -1833,6 +1833,18 @@ function toRecoverableToolErrorResult(input: {
     ...(hint ? { hint: redactSecrets(hint, input.secrets) } : {}),
     ...(pathArgument ? { path: redactSecrets(pathArgument, input.secrets) } : {})
   };
+}
+
+function mergeRecoverableToolHints(primary: string | undefined, fallback: string | undefined): string | undefined {
+  const primaryHint = primary?.trim();
+  const fallbackHint = fallback?.trim();
+  if (!primaryHint) {
+    return fallbackHint;
+  }
+  if (!fallbackHint || primaryHint.includes(fallbackHint)) {
+    return primaryHint;
+  }
+  return `${primaryHint}${primaryHint.endsWith("。") ? "" : "。"}${fallbackHint}`;
 }
 
 const TOOL_EXECUTION_ERROR_CODES = new Set<string>([

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { Book, Chapter, ReportAsset } from "@novel-extractor/domain";
+import type { Book, ReportAsset } from "@novel-extractor/domain";
 import type { JobStatus } from "@novel-extractor/domain/job";
 import type { BookUploadResultDto, CreateJobDto } from "../shared/ipcTypes";
 
@@ -47,7 +47,6 @@ export interface ProjectRuntimeJobRecord {
 export interface ProjectRuntimeState {
   schemaVersion: 1;
   books: ProjectRuntimeBookRecord[];
-  chaptersByBookId: Record<string, Chapter[]>;
   jobs: ProjectRuntimeJobRecord[];
   reports: ReportAsset[];
   reportPathById: Record<string, string>;
@@ -62,7 +61,6 @@ export interface ProjectRuntimeStore {
   load(): Promise<ProjectRuntimeState>;
   saveUploadedBook(input: {
     book: Book;
-    chapters: Chapter[];
     upload: BookUploadResultDto;
   }): Promise<void>;
   saveJob(job: ProjectRuntimeJobRecord): Promise<void>;
@@ -79,7 +77,6 @@ function createEmptyState(): ProjectRuntimeState {
   return {
     schemaVersion: PROJECT_RUNTIME_SCHEMA_VERSION,
     books: [],
-    chaptersByBookId: {},
     jobs: [],
     reports: [],
     reportPathById: {}
@@ -92,10 +89,6 @@ function cloneBook(book: Book): Book {
 
 function cloneUpload(upload: BookUploadResultDto): BookUploadResultDto {
   return { ...upload };
-}
-
-function cloneChapter(chapter: Chapter): Chapter {
-  return { ...chapter };
 }
 
 function cloneJob(job: ProjectRuntimeJobRecord): ProjectRuntimeJobRecord {
@@ -121,12 +114,6 @@ function cloneState(state: ProjectRuntimeState): ProjectRuntimeState {
       book: cloneBook(record.book),
       upload: cloneUpload(record.upload)
     })),
-    chaptersByBookId: Object.fromEntries(
-      Object.entries(state.chaptersByBookId).map(([bookId, chapters]) => [
-        bookId,
-        chapters.map(cloneChapter)
-      ])
-    ),
     jobs: state.jobs.map(cloneJob),
     reports: state.reports.map(cloneReport),
     reportPathById: { ...state.reportPathById }
@@ -161,17 +148,6 @@ function isUpload(value: unknown): value is BookUploadResultDto {
     typeof value.byteSize === "number" &&
     typeof value.encoding === "string" &&
     typeof value.chapterCount === "number"
-  );
-}
-
-function isChapter(value: unknown): value is Chapter {
-  return (
-    isPlainRecord(value) &&
-    typeof value.id === "string" &&
-    typeof value.bookId === "string" &&
-    typeof value.index === "number" &&
-    typeof value.title === "string" &&
-    typeof value.textPath === "string"
   );
 }
 
@@ -278,15 +254,6 @@ function normalizeState(value: unknown): { changed: boolean; state: ProjectRunti
           isPlainRecord(record) && isBook(record.book) && isUpload(record.upload)
       )
     : [];
-  const chaptersByBookId = isPlainRecord(value.chaptersByBookId)
-    ? Object.fromEntries(
-        Object.entries(value.chaptersByBookId)
-          .filter((entry): entry is [string, Chapter[]] =>
-            Array.isArray(entry[1]) && entry[1].every(isChapter)
-          )
-          .map(([bookId, chapters]) => [bookId, chapters.map(cloneChapter)])
-      )
-    : {};
   const sourceJobs = Array.isArray(value.jobs) ? value.jobs.filter(isJob) : [];
   const jobs = sourceJobs.map(normalizeInterruptedJob);
   const reports = Array.isArray(value.reports) ? value.reports.filter(isReport) : [];
@@ -301,14 +268,14 @@ function normalizeState(value: unknown): { changed: boolean; state: ProjectRunti
   return {
     changed:
       value.schemaVersion !== PROJECT_RUNTIME_SCHEMA_VERSION ||
-      jobs.some((job, index) => job.status !== sourceJobs[index]?.status),
+      jobs.some((job, index) => job.status !== sourceJobs[index]?.status) ||
+      Object.prototype.hasOwnProperty.call(value, "chaptersByBookId"),
     state: {
       schemaVersion: PROJECT_RUNTIME_SCHEMA_VERSION,
       books: books.map((record) => ({
         book: cloneBook(record.book),
         upload: cloneUpload(record.upload)
       })),
-      chaptersByBookId,
       jobs,
       reports: reports.map(cloneReport),
       reportPathById
@@ -381,7 +348,6 @@ export function createFileProjectRuntimeStore(
             upload: cloneUpload(input.upload)
           }
         ];
-        state.chaptersByBookId[input.book.id] = input.chapters.map(cloneChapter);
       });
     },
 

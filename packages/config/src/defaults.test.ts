@@ -159,28 +159,18 @@ describe("default config", () => {
       ],
       maxRepeatedRecoverableToolErrors: 3,
       recoverableToolErrorHints: {
-        replacement_text_not_found: expect.stringContaining("read_report_excerpt"),
-        replacement_text_not_unique: expect.stringContaining("read_report_excerpt"),
-        read_tool_target_not_found:
-          "读取目标不存在；请改用当前窗口文本、reports 目录、本批选中报告文件名，或用 read_report_excerpt 读取报告字段块。",
-        read_tool_scope_denied:
-          "只能读取当前窗口文本、当前书籍 reports 目录或本批选中输出报告；请改用窗口文件路径、reports、选中报告文件名或 read_report_excerpt。",
-        bash_tool_scope_denied:
-          "桌面端 bash 只能在当前书籍 reports 目录内执行；不要读取 source、runs、rules、项目根路径、绝对路径或通过 .. 跳出 reports。",
-        write_tool_scope_denied:
-          "写工具只能写入本批允许的输出报告；path 必须使用模板 outputFileName 或对应报告文件名。",
-        bash_runtime_failure:
-          "bash 命令执行失败；请根据 stderr/stdout 调整命令、参数或先用文件工具确认目标。",
-        tool_schema_invalid_arguments:
-          "工具参数结构不符合 schema；请只传入该工具支持的字段，并确保 path/content/outputFileName/updates/queries/reason 等字段类型正确。",
-        read_tool_invalid_arguments:
-          "读取工具参数无效；请检查 path 或 queries 是否符合工具 schema，并缩小读取范围。",
-        edit_target_not_found:
-          "目标报告不存在；如果需要创建报告内容，请改用 upsert_report_section：operation=add_card 新增整张卡片，operation=add_field 新增字段块。",
-        tool_not_enabled:
-          "只能调用当前请求 tools 清单中列出的工具；不要调用未列出的 shell、搜索、目录列出或编辑工具。",
-        tool_invalid_arguments:
-          "工具参数无效；请根据错误消息修正参数后重试，必要时先读取文件确认当前状态。"
+        replacement_text_not_found: expect.stringContaining("正确格式示例"),
+        replacement_text_not_unique: expect.stringContaining("正确格式示例"),
+        read_tool_target_not_found: expect.stringContaining("正确格式示例"),
+        read_tool_scope_denied: expect.stringContaining("正确格式示例"),
+        bash_tool_scope_denied: expect.stringContaining("正确格式示例"),
+        write_tool_scope_denied: expect.stringContaining("正确格式示例"),
+        bash_runtime_failure: expect.stringContaining("正确格式示例"),
+        tool_schema_invalid_arguments: expect.stringContaining("updates 必须是真 JSON 数组"),
+        read_tool_invalid_arguments: expect.stringContaining("正确格式示例"),
+        edit_target_not_found: expect.stringContaining("正确格式示例"),
+        tool_not_enabled: expect.stringContaining("正确格式示例"),
+        tool_invalid_arguments: expect.stringContaining("正确格式示例")
       },
       systemInstruction: expect.stringContaining("文件工具"),
       windowInstructionLines: expect.arrayContaining([
@@ -188,6 +178,15 @@ describe("default config", () => {
         expect.stringContaining("outputFileName")
       ])
     });
+    const hints = getDefaultConfig().toolLoopDefaults.recoverableToolErrorHints;
+    for (const hint of Object.values(hints)) {
+      expect(hint).toContain("正确格式示例");
+      expect(hint).toContain("upsert_report_section");
+      expect(hint).toContain("read_report_excerpt");
+      expect(hint).toContain("mark_no_update");
+    }
+    expect(hints.tool_schema_invalid_arguments).toContain('"updates":[{"operation":"add_card"');
+    expect(hints.tool_schema_invalid_arguments).toContain("不要把 updates 写成字符串");
     expect(getDefaultConfig().toolLoopDefaults.windowInstructionLines.join("\n")).toContain(
       "mark_no_update"
     );

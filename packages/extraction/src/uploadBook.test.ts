@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import iconv from "iconv-lite";
-import type { Book, Chapter, Project } from "@novel-extractor/domain";
+import type { Book, Project } from "@novel-extractor/domain";
 import { ChapterParseError } from "./chapterParser";
 import { TextDecodingError } from "./textEncoding";
 import {
@@ -20,7 +20,7 @@ afterEach(async () => {
 });
 
 describe("uploadBook", () => {
-  it("copies the source txt, creates book metadata, and writes chapter text files", async () => {
+  it("copies the source txt, creates book metadata, and keeps chapter splitting out of upload assets", async () => {
     const { project, sourcePath } = await createProjectWithSource(
       "novel.txt",
       "第一章 起始\n第一段\n第2章 转折\n第二段"
@@ -33,15 +33,14 @@ describe("uploadBook", () => {
       displayName: "测试小说",
       repository,
       clock: { now: () => "2026-06-27T00:00:00.000Z" },
-      idGenerator: createSequentialIdGenerator(["book-1", "source-1", "chapter-1", "chapter-2"])
+      idGenerator: createSequentialIdGenerator(["book-1", "source-1"])
     });
 
     const bookRoot = path.join(project.rootPath, "assets", "books", "book-1");
     await expect(fs.readFile(path.join(bookRoot, "source", "original.txt"), "utf8")).resolves.toBe(
       "第一章 起始\n第一段\n第2章 转折\n第二段"
     );
-    await expect(fs.readFile(path.join(bookRoot, "chapters", "0000.txt"), "utf8")).resolves.toBe("第一段");
-    await expect(fs.readFile(path.join(bookRoot, "chapters", "0001.txt"), "utf8")).resolves.toBe("第二段");
+    await expect(pathExists(path.join(bookRoot, "chapters"))).resolves.toBe(false);
 
     expect(repository.savedUploads).toHaveLength(1);
     expect(repository.savedUploads[0].book).toMatchObject({
@@ -52,25 +51,10 @@ describe("uploadBook", () => {
       sourceTextPath: "assets/books/book-1/source/original.txt",
       chapterCount: 2
     });
-    expect(repository.savedUploads[0].chapters).toEqual([
-      {
-        id: "chapter-1",
-        bookId: "book-1",
-        index: 0,
-        title: "第一章 起始",
-        textPath: "assets/books/book-1/chapters/0000.txt"
-      },
-      {
-        id: "chapter-2",
-        bookId: "book-1",
-        index: 1,
-        title: "第2章 转折",
-        textPath: "assets/books/book-1/chapters/0001.txt"
-      }
-    ]);
+    expect("chapters" in repository.savedUploads[0]).toBe(false);
     expect(result.book.id).toBe("book-1");
     expect(result.sourceRelativePath).toBe(result.book.sourceTextPath);
-    expect(result.chapters).toHaveLength(2);
+    expect("chapters" in result).toBe(false);
   });
 
   it("uses the next book id when a previous book asset directory already exists", async () => {
@@ -84,7 +68,7 @@ describe("uploadBook", () => {
       sourcePath,
       repository,
       clock: { now: () => "2026-06-27T00:00:00.000Z" },
-      idGenerator: createSequentialIdGenerator(["book-1", "book-2", "source-2", "chapter-2"])
+      idGenerator: createSequentialIdGenerator(["book-1", "book-2", "source-2"])
     });
 
     expect(result.book.id).toBe("book-2");
@@ -167,7 +151,7 @@ describe("uploadBook", () => {
         project,
         sourcePath,
         repository,
-        idGenerator: createSequentialIdGenerator(["book-1", "source-1", "chapter-1"])
+        idGenerator: createSequentialIdGenerator(["book-1", "source-1"])
       })
     ).rejects.toBeInstanceOf(TextDecodingError);
 
@@ -208,7 +192,7 @@ describe("uploadBook", () => {
       project,
       sourcePath,
       repository,
-      idGenerator: createSequentialIdGenerator(["book-md", "source-md", "chapter-md"])
+      idGenerator: createSequentialIdGenerator(["book-md", "source-md"])
     });
 
     const bookDisplayName = result.book.displayName;
@@ -219,51 +203,6 @@ describe("uploadBook", () => {
     await expect(fs.readFile(savedPath, "utf8")).resolves.toContain("# Markdown 标记");
   });
 
-  it("rejects asset layouts where source and chapter files resolve to the same destination", async () => {
-    const { project, sourcePath } = await createProjectWithSource("novel.txt", "第一章 起始\n章节正文");
-    const repository = createFakeUploadedBookRepository();
-
-    await expect(
-      uploadBook({
-        project,
-        sourcePath,
-        repository,
-        idGenerator: createSequentialIdGenerator(["book-1", "source-1", "chapter-1"]),
-        assetLayout: {
-          sourceDirectoryName: "same",
-          chapterDirectoryName: "same",
-          sourceFileName: "shared.txt",
-          chapterFileName: () => "shared.txt"
-        }
-      })
-    ).rejects.toMatchObject({ code: "BOOK_ASSET_PATH_COLLISION" });
-
-    expect(repository.savedUploads).toHaveLength(0);
-    await expect(pathExists(path.join(project.rootPath, "assets", "books", "book-1"))).resolves.toBe(false);
-  });
-
-  it("rejects duplicate chapter asset destinations before writing chapter files", async () => {
-    const { project, sourcePath } = await createProjectWithSource(
-      "novel.txt",
-      "第一章 起始\n第一段\n第二章 转折\n第二段"
-    );
-    const repository = createFakeUploadedBookRepository();
-
-    await expect(
-      uploadBook({
-        project,
-        sourcePath,
-        repository,
-        idGenerator: createSequentialIdGenerator(["book-1", "source-1", "chapter-1", "chapter-2"]),
-        assetLayout: {
-          chapterFileName: () => "duplicate.txt"
-        }
-      })
-    ).rejects.toMatchObject({ code: "BOOK_ASSET_PATH_COLLISION" });
-
-    expect(repository.savedUploads).toHaveLength(0);
-    await expect(pathExists(path.join(project.rootPath, "assets", "books", "book-1"))).resolves.toBe(false);
-  });
 });
 
 async function createProjectWithSource(fileName: string, content: string | Buffer) {
@@ -295,7 +234,7 @@ function createFakeUploadedBookRepository(): UploadedBookRepository & {
     savedUploads,
     async saveUploadedBook(input) {
       savedUploads.push(input);
-      return { book: input.book as Book, chapters: input.chapters as Chapter[] };
+      return { book: input.book as Book };
     }
   };
 }

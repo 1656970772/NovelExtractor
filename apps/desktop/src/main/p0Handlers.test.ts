@@ -324,7 +324,6 @@ function createProjectRuntimeStoreFixture(input: {
   const state: ProjectRuntimeState = {
     schemaVersion: 1,
     books: [],
-    chaptersByBookId: {},
     jobs: [],
     reports: [],
     reportPathById: {}
@@ -343,7 +342,6 @@ function createProjectRuntimeStoreFixture(input: {
           upload: cloneJson(upload.upload)
         }
       ];
-      state.chaptersByBookId[upload.book.id] = upload.chapters.map(cloneJson);
     },
     async saveJob(job) {
       if (shouldFailRunningJobSave && job.status === "running") {
