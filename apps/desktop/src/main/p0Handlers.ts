@@ -1332,6 +1332,9 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       templateIds: requireStringArrayField(input, "templateIds", "模板"),
       providerConfigId: requireStringField(input, "providerConfigId", "模型供应商"),
       modelId: requireStringField(input, "modelId", "模型"),
+      ...(input.modelSelectionMode === "auto" || input.modelSelectionMode === "explicit"
+        ? { modelSelectionMode: input.modelSelectionMode }
+        : {}),
       singleRunChapterCount,
       extractionChapterCount,
       overlapChapterCount,
@@ -1490,6 +1493,16 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
           if (activeWindowRuntimes.get(jobId) === runtime) {
             activeWindowRuntimes.delete(jobId);
           }
+        },
+        async onModelCandidateChanged({ jobId, candidate }) {
+          const currentJob = requireJob(jobId);
+          runningJob = await updateJob(currentJob, {
+            input: {
+              ...currentJob.input,
+              providerConfigId: candidate.providerConfigId,
+              modelId: candidate.modelId
+            }
+          });
         },
         async onRuntimeState(state) {
           const currentJob = requireJob(state.jobId);

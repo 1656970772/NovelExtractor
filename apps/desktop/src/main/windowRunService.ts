@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { getDefaultConfig, getProviderPresets } from "@novel-extractor/config";
-import type { Book, Clock, IdGenerator, Project, ReportAsset } from "@novel-extractor/domain";
+import type { Book, Clock, IdGenerator, Project, ProviderConfig, ReportAsset } from "@novel-extractor/domain";
 import {
   buildTemplatePromptProfile,
   renderTemplatePromptProfileCard,
@@ -29,6 +29,7 @@ import {
   type ChatCompletionResult,
   type CredentialStore as LlmCredentialStore,
   type FetchLike,
+  type PreparedChatCompletionRequest,
   type ToolCall,
   type ToolCallArguments,
   type ToolDefinition
@@ -53,6 +54,7 @@ import {
   type ReportCoverageIndexStore,
   type ReportCoverageTarget
 } from "./reportCoverageIndex";
+import { classifyLlmFailure } from "./llmFailureClassification";
 import { planTemplateBatches } from "./templateBatchPlanner";
 import {
   replaceWindowTextReferencesForTaskLog,
@@ -75,6 +77,7 @@ interface WindowRunJobInput {
   bookId: string;
   input: {
     modelId: string;
+    modelSelectionMode?: "explicit" | "auto";
     providerConfigId: string;
     skipAlreadyExtracted: boolean;
     templateIds: string[];
@@ -98,6 +101,7 @@ export interface WindowRunServiceOptions {
   idGenerator: IdGenerator;
   onRuntimeCreated?(input: { jobId: string; runtime: JobRuntime }): Promise<void> | void;
   onRuntimeSettled?(input: { jobId: string; runtime: JobRuntime }): Promise<void> | void;
+  onModelCandidateChanged?(input: { jobId: string; candidate: ModelFallbackCandidate }): Promise<void> | void;
   onRuntimeState(state: JobRuntimeState): Promise<void> | void;
   providerStore: MainProviderStore;
   registerReport(input: { path: string; report: ReportAsset }): Promise<void> | void;
@@ -210,6 +214,21 @@ type WindowRunJobContext = {
   };
   coveragePlanByWindowId: Map<string, WindowCoveragePlan>;
 };
+
+export interface ModelFallbackCandidate {
+  providerConfigId: string;
+  providerId: string;
+  modelId: string;
+}
+
+interface RuntimeChatClient {
+  chatCompletion(input: {
+    messages: ChatCompletionMessage[];
+    tools: ToolDefinition[];
+    onRequestPrepared?: (snapshot: PreparedChatCompletionRequest) => void | Promise<void>;
+  }): Promise<ChatCompletionResult>;
+  currentCandidate(): ModelFallbackCandidate;
+}
 
 function getWindowMetadata(window: JobWindowInput): RuntimeWindowManifestWindow {
   const manifestWindow = window.metadata?.manifestWindow;
@@ -2373,6 +2392,57 @@ function replaceBatchOutcomeCorrectionMessage(
   });
 }
 
+function createModelFallbackCandidates(input: {
+  currentModelId: string;
+  currentProviderConfigId: string;
+  providerConfigs: readonly ProviderConfig[];
+}): ModelFallbackCandidate[] {
+  const candidates = input.providerConfigs
+    .filter((providerConfig) => providerConfig.enabled && Boolean(providerConfig.apiKeyRef))
+    .flatMap((providerConfig) => {
+      const enabledModels = providerConfig.models.filter((model) => model.enabled);
+      if (enabledModels.length === 0) {
+        return [];
+      }
+
+      const defaultModel = enabledModels.find((model) => model.isDefault) ?? enabledModels[0];
+      const currentModel = enabledModels.find((model) => model.id === input.currentModelId);
+      const modelId =
+        providerConfig.id === input.currentProviderConfigId && currentModel
+          ? currentModel.id
+          : defaultModel.id;
+
+      return [{
+        providerConfigId: providerConfig.id,
+        providerId: providerConfig.id,
+        modelId
+      }];
+    });
+
+  const currentIndex = candidates.findIndex(
+    (candidate) => candidate.providerConfigId === input.currentProviderConfigId
+  );
+
+  if (currentIndex <= 0) {
+    return candidates;
+  }
+
+  return [...candidates.slice(currentIndex), ...candidates.slice(0, currentIndex)];
+}
+
+function maxAutoFallbackSwitches(candidateCount: number): number {
+  const policyDefaults = DEFAULT_CONFIG as typeof DEFAULT_CONFIG & {
+    llmFailurePolicyDefaults?: { maxAutoFallbackRoundsPerWindow?: number };
+  };
+  const rounds = policyDefaults.llmFailurePolicyDefaults?.maxAutoFallbackRoundsPerWindow ?? 1;
+
+  return Math.max(0, candidateCount * Math.max(0, Math.floor(rounds)));
+}
+
+function formatModelCandidate(candidate: ModelFallbackCandidate): string {
+  return `${candidate.providerConfigId}/${candidate.modelId}`;
+}
+
 export function createWindowRunService(options: WindowRunServiceOptions): WindowRunService {
   const enabledToolNames = options.enabledToolNames ?? DEFAULT_ENABLED_TOOL_NAMES;
   const enabledToolNameSet = new Set<string>(enabledToolNames);
@@ -2432,11 +2502,9 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
     batchIndex: number;
     batchMaxTemplatesPerCall: number;
     batchTotal: number;
-    client: OpenAiCompatibleClient;
+    chatClient: RuntimeChatClient;
     job: WindowRunJobInput;
     manifestWindow: RuntimeWindowManifestWindow;
-    modelId: string;
-    providerId: string;
     totalWindowCount: number;
     toolLoopRoundReasonCounts: Map<ToolLoopRoundReason, number>;
     windowText: string;
@@ -2444,7 +2512,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
     const reportsRoot = toReportsRoot(input.artifacts);
     await fs.mkdir(reportsRoot, { recursive: true });
 
-    const secrets = await getReportRedactionSecrets(input.job.input.providerConfigId);
+    let secrets = await getReportRedactionSecrets(input.chatClient.currentCandidate().providerConfigId);
     options.taskLogger?.setSecrets(secrets);
     const allowedOutputFileNames = new Set(input.artifacts.templates.map((template) => template.fileName));
     const outcomeTracker = createBatchOutcomeTracker(
@@ -2579,12 +2647,16 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
           });
         }
 
+        const requestCandidate = input.chatClient.currentCandidate();
+        secrets = await getReportRedactionSecrets(requestCandidate.providerConfigId);
+        options.taskLogger?.setSecrets(secrets);
+
         await options.taskLogger?.append(
           ["大模型请求", "Prompt"],
           serializeModelRequestForTaskLog({
             value: {
-              供应商: input.providerId,
-              模型: input.modelId,
+              供应商: requestCandidate.providerId,
+              模型: requestCandidate.modelId,
               窗口: `${input.manifestWindow.index + 1}/${input.totalWindowCount}`,
               批次: `${input.batchIndex + 1}/${input.batchTotal}`,
               轮次: currentRoundIndex,
@@ -2594,18 +2666,17 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             windowText: input.windowText
           })
         );
-        const completion = await input.client.chatCompletion({
-          providerId: input.providerId,
-          modelId: input.modelId,
+        const completion = await input.chatClient.chatCompletion({
           messages,
           tools: toolDefinitions,
           onRequestPrepared: async (snapshot) => {
+            const preparedCandidate = input.chatClient.currentCandidate();
             await options.taskLogger?.append(
               ["大模型请求", "ProviderBody"],
               serializeModelRequestForTaskLog({
                 value: {
-                  供应商: input.providerId,
-                  模型: input.modelId,
+                  供应商: preparedCandidate.providerId,
+                  模型: preparedCandidate.modelId,
                   协议: snapshot.apiFormat,
                   请求URL: snapshot.url,
                   窗口: `${input.manifestWindow.index + 1}/${input.totalWindowCount}`,
@@ -3020,38 +3091,104 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
     }
   }
 
-  async function createLlmClient(job: WindowRunJobInput): Promise<{
-    client: OpenAiCompatibleClient;
-    modelId: string;
-    providerId: string;
-  }> {
+  async function createRuntimeChatClient(job: WindowRunJobInput): Promise<RuntimeChatClient> {
+    const providerConfigs = await options.providerStore.listProviderConfigs();
     const registry = createProviderRegistry({
       presets: getProviderPresets(),
-      providerConfigs: await options.providerStore.listProviderConfigs()
+      providerConfigs
     });
-    const { provider, modelId } = registry.resolveModelRef(
-      `${job.input.providerConfigId}/${job.input.modelId}`
-    );
+    const explicitCandidate = (): ModelFallbackCandidate => {
+      const { provider, modelId } = registry.resolveModelRef(
+        `${job.input.providerConfigId}/${job.input.modelId}`
+      );
+
+      return {
+        providerConfigId: job.input.providerConfigId,
+        providerId: provider.id,
+        modelId
+      };
+    };
+    const candidates =
+      job.input.modelSelectionMode === "auto"
+        ? createModelFallbackCandidates({
+            currentModelId: job.input.modelId,
+            currentProviderConfigId: job.input.providerConfigId,
+            providerConfigs
+          })
+        : [];
+    const initialCandidate = candidates[0] ?? explicitCandidate();
+    let currentIndex = Math.max(0, candidates.findIndex((candidate) =>
+      candidate.providerConfigId === initialCandidate.providerConfigId &&
+      candidate.modelId === initialCandidate.modelId
+    ));
+    let currentCandidate = initialCandidate;
+    let client = createClientForCandidate(currentCandidate);
+    const maxSwitches = maxAutoFallbackSwitches(candidates.length);
+
+    function createClientForCandidate(candidate: ModelFallbackCandidate): OpenAiCompatibleClient {
+      const { provider } = registry.resolveModelRef(`${candidate.providerConfigId}/${candidate.modelId}`);
+
+      return new OpenAiCompatibleClient(provider, llmCredentialStore, {
+        fetch: options.fetch
+      });
+    }
 
     return {
-      client: new OpenAiCompatibleClient(provider, llmCredentialStore, {
-        fetch: options.fetch
-      }),
-      modelId,
-      providerId: provider.id
+      currentCandidate() {
+        return currentCandidate;
+      },
+      async chatCompletion(chatInput) {
+        let switchCount = 0;
+        for (;;) {
+          try {
+            return await client.chatCompletion({
+              providerId: currentCandidate.providerId,
+              modelId: currentCandidate.modelId,
+              messages: chatInput.messages,
+              tools: chatInput.tools,
+              onRequestPrepared: chatInput.onRequestPrepared
+            });
+          } catch (error) {
+            const classification = classifyLlmFailure(error);
+            if (
+              job.input.modelSelectionMode !== "auto" ||
+              candidates.length === 0 ||
+              !classification.switchable ||
+              switchCount >= maxSwitches
+            ) {
+              throw error;
+            }
+
+            const previousCandidate = currentCandidate;
+            currentIndex = (currentIndex + 1) % candidates.length;
+            currentCandidate = candidates[currentIndex] ?? previousCandidate;
+            client = createClientForCandidate(currentCandidate);
+            switchCount += 1;
+            await options.taskLogger?.append(["上下文", "模型切换"], {
+              原因: classification.reason,
+              从: formatModelCandidate(previousCandidate),
+              到: formatModelCandidate(currentCandidate)
+            });
+            await options.onModelCandidateChanged?.({
+              jobId: job.id,
+              candidate: currentCandidate
+            });
+          }
+        }
+      }
     };
   }
 
   function createRuntimeInput(input: {
     artifacts: WindowRunArtifacts;
     job: WindowRunJobInput;
-    modelId: string;
+    candidate: ModelFallbackCandidate;
   }): JobRunInput {
     return {
       jobId: input.job.id,
       bookId: input.artifacts.book.id,
-      modelId: input.modelId,
-      providerConfigId: input.job.input.providerConfigId,
+      modelId: input.candidate.modelId,
+      providerConfigId: input.candidate.providerConfigId,
       templateIds: [...input.job.input.templateIds],
       windows: toJobWindowInputs(input.artifacts.runtimeWindowManifest),
       metadata: {
@@ -3126,11 +3263,9 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
 
   function createLlmAdapter(input: {
     artifacts: WindowRunArtifacts;
-    client: OpenAiCompatibleClient;
+    chatClient: RuntimeChatClient;
     context: WindowRunJobContext;
     job: WindowRunJobInput;
-    modelId: string;
-    providerId: string;
     totalWindowCount: number;
   }): JobLlmClient {
     return {
@@ -3152,7 +3287,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         };
 
         try {
-          secrets = await getReportRedactionSecrets(input.job.input.providerConfigId);
+          secrets = await getReportRedactionSecrets(input.chatClient.currentCandidate().providerConfigId);
           const coveragePlan = input.context.coveragePlanByWindowId.get(manifestWindow.windowId);
           if (!coveragePlan) {
             throw new Error(`Missing coverage plan for window ${manifestWindow.windowId}`);
@@ -3195,11 +3330,9 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
               batchIndex: templateBatchIndex,
               batchMaxTemplatesPerCall: templateBatching.maxTemplatesPerCall,
               batchTotal: templateBatches.length,
-              client: input.client,
+              chatClient: input.chatClient,
               job: input.job,
               manifestWindow,
-              modelId: input.modelId,
-              providerId: input.providerId,
               totalWindowCount: input.totalWindowCount,
               toolLoopRoundReasonCounts,
               windowText
@@ -3273,8 +3406,12 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         ...artifacts,
         templates: artifacts.templates.map(toFormalReportTemplate)
       };
-      const { client, modelId, providerId } = await createLlmClient(job);
-      const runtimeInput = createRuntimeInput({ artifacts: reportArtifacts, job, modelId });
+      const chatClient = await createRuntimeChatClient(job);
+      const runtimeInput = createRuntimeInput({
+        artifacts: reportArtifacts,
+        job,
+        candidate: chatClient.currentCandidate()
+      });
       const context = await createWindowRunJobContext({
         artifacts: reportArtifacts,
         job,
@@ -3294,11 +3431,9 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         clock: options.clock,
         llm: createLlmAdapter({
           artifacts: reportArtifacts,
-          client,
+          chatClient,
           context,
           job,
-          modelId,
-          providerId,
           totalWindowCount: runtimeInput.windows.length
         }),
         repository: {

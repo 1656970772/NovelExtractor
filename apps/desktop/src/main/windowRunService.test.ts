@@ -75,6 +75,230 @@ describe("window run bash sandbox cleanup", () => {
 });
 
 describe("window run coverage context", () => {
+  it("switches to the next provider default model after a switchable auto mode LLM failure", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-auto-model-switch-"));
+    scratchDirs.push(projectRoot);
+    await writeSingleWindowText(projectRoot);
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const minimaxKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "minimax-provider",
+      apiKey: "sk-minimax"
+    });
+    const deepSeekKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "deepseek-provider",
+      apiKey: "sk-deepseek"
+    });
+    const providers = [
+      createProviderConfig(minimaxKeyRef, {
+        id: "minimax-provider",
+        baseUrl: "https://minimax.local/v1",
+        modelId: "minimax-chat",
+        displayName: "MiniMax"
+      }),
+      createProviderConfig(deepSeekKeyRef, {
+        id: "deepseek-provider",
+        baseUrl: "https://deepseek.local/v1",
+        modelId: "deepseek-chat",
+        displayName: "DeepSeek"
+      })
+    ];
+    const requestUrls: string[] = [];
+    const requestBodies: Record<string, unknown>[] = [];
+    const append = vi.fn(async () => {});
+    const onModelCandidateChanged = vi.fn();
+    const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      requestUrls.push(String(url));
+      requestBodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+
+      if (requestUrls.length === 1) {
+        return new Response(JSON.stringify({ error: { message: "rate limit exceeded" } }), {
+          headers: { "Content-Type": "application/json" },
+          status: 429
+        });
+      }
+
+      return new Response(JSON.stringify(createChatCompletionResponse({ content: "NO_UPDATE" })), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      });
+    });
+
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      fetch,
+      findExistingReport: () => undefined,
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onModelCandidateChanged,
+      onRuntimeState: async () => {},
+      providerStore: createProviderStore(providers),
+      registerReport: () => {},
+      taskLogger: { append, setSecrets: vi.fn() } as any
+    });
+
+    const result = await service.runJobWindows({
+      artifacts: createWindowArtifacts({
+        projectRoot,
+        templates: [createTemplate({ id: "template-1", name: "人物", fileName: "人物.md" })]
+      }),
+      job: createWindowRunJob({
+        modelId: "minimax-chat",
+        modelSelectionMode: "auto",
+        providerConfigId: "minimax-provider",
+        templateIds: ["template-1"]
+      })
+    });
+
+    expect(result.ok).toBe(true);
+    expect(requestUrls).toEqual([
+      "https://minimax.local/v1/chat/completions",
+      "https://deepseek.local/v1/chat/completions"
+    ]);
+    expect(requestBodies[1]).toMatchObject({ model: "deepseek-chat" });
+    expect(append).toHaveBeenCalledWith(
+      ["上下文", "模型切换"],
+      expect.objectContaining({
+        从: expect.stringContaining("minimax-provider/minimax-chat"),
+        到: expect.stringContaining("deepseek-provider/deepseek-chat")
+      })
+    );
+    expect(onModelCandidateChanged).toHaveBeenCalledWith({
+      jobId: "job-1",
+      candidate: {
+        providerConfigId: "deepseek-provider",
+        providerId: "deepseek-provider",
+        modelId: "deepseek-chat"
+      }
+    });
+  }, 20000);
+
+  it("does not switch providers for a switchable LLM failure in explicit mode", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-explicit-no-switch-"));
+    scratchDirs.push(projectRoot);
+    await writeSingleWindowText(projectRoot);
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const minimaxKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "minimax-provider",
+      apiKey: "sk-minimax"
+    });
+    const deepSeekKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "deepseek-provider",
+      apiKey: "sk-deepseek"
+    });
+    const fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ error: { message: "rate limit exceeded" } }), {
+        headers: { "Content-Type": "application/json" },
+        status: 429
+      })
+    );
+
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      fetch,
+      findExistingReport: () => undefined,
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeState: async () => {},
+      providerStore: createProviderStore([
+        createProviderConfig(minimaxKeyRef, {
+          id: "minimax-provider",
+          baseUrl: "https://minimax.local/v1",
+          modelId: "minimax-chat"
+        }),
+        createProviderConfig(deepSeekKeyRef, {
+          id: "deepseek-provider",
+          baseUrl: "https://deepseek.local/v1",
+          modelId: "deepseek-chat"
+        })
+      ]),
+      registerReport: () => {},
+      taskLogger: { append: vi.fn(async () => {}), setSecrets: vi.fn() } as any
+    });
+
+    const result = await service.runJobWindows({
+      artifacts: createWindowArtifacts({
+        projectRoot,
+        templates: [createTemplate({ id: "template-1", name: "人物", fileName: "人物.md" })]
+      }),
+      job: createWindowRunJob({
+        modelId: "minimax-chat",
+        modelSelectionMode: "explicit",
+        providerConfigId: "minimax-provider",
+        templateIds: ["template-1"]
+      })
+    });
+
+    expect(result.ok).toBe(false);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  }, 20000);
+
+  it("cycles auto fallback candidates instead of excluding failed providers permanently", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-auto-model-cycle-"));
+    scratchDirs.push(projectRoot);
+    await writeSingleWindowText(projectRoot);
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const providers = ["one", "two", "three"].map((name) => {
+      const apiKeyRef = credentialStore.saveApiKey({
+        providerConfigId: `provider-${name}`,
+        apiKey: `sk-${name}`
+      });
+      return createProviderConfig(apiKeyRef, {
+        id: `provider-${name}`,
+        baseUrl: `https://${name}.local/v1`,
+        modelId: `model-${name}`
+      });
+    });
+    const requestUrls: string[] = [];
+    const fetch = vi.fn(async (url: string | URL | Request) => {
+      requestUrls.push(String(url));
+
+      if (requestUrls.length < 4) {
+        return new Response(JSON.stringify({ error: { message: "rate limit exceeded" } }), {
+          headers: { "Content-Type": "application/json" },
+          status: 429
+        });
+      }
+
+      return new Response(JSON.stringify(createChatCompletionResponse({ content: "NO_UPDATE" })), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      });
+    });
+
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      fetch,
+      findExistingReport: () => undefined,
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeState: async () => {},
+      providerStore: createProviderStore(providers),
+      registerReport: () => {},
+      taskLogger: { append: vi.fn(async () => {}), setSecrets: vi.fn() } as any
+    });
+
+    const result = await service.runJobWindows({
+      artifacts: createWindowArtifacts({
+        projectRoot,
+        templates: [createTemplate({ id: "template-1", name: "人物", fileName: "人物.md" })]
+      }),
+      job: createWindowRunJob({
+        modelId: "model-one",
+        modelSelectionMode: "auto",
+        providerConfigId: "provider-one",
+        templateIds: ["template-1"]
+      })
+    });
+
+    expect(result.ok).toBe(true);
+    expect(requestUrls).toEqual([
+      "https://one.local/v1/chat/completions",
+      "https://two.local/v1/chat/completions",
+      "https://three.local/v1/chat/completions",
+      "https://one.local/v1/chat/completions"
+    ]);
+  }, 20000);
+
   it("computes each template rules semantic hash once per job context", async () => {
     const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-rules-hash-cache-"));
     scratchDirs.push(projectRoot);
@@ -3172,23 +3396,34 @@ function extractBackgroundJobId(content: string): string {
   return match[1];
 }
 
-function createProviderConfig(apiKeyRef: ApiKeyRef): ProviderConfig {
+function createProviderConfig(
+  apiKeyRef: ApiKeyRef,
+  input: {
+    baseUrl?: string;
+    displayName?: string;
+    id?: string;
+    modelId?: string;
+  } = {}
+): ProviderConfig {
+  const id = input.id ?? "provider-1";
+  const modelId = input.modelId ?? "mock-model";
   return {
-    id: "provider-1",
+    id,
     presetId: "custom-openai-compatible" as const,
-    displayName: "Mock Provider",
+    displayName: input.displayName ?? "Mock Provider",
     kind: "openai-compatible" as const,
-    baseUrl: "https://mock.local/v1",
+    baseUrl: input.baseUrl ?? "https://mock.local/v1",
     apiKeyRef,
-    models: [{ id: "mock-model", displayName: "mock-model", enabled: true, isDefault: true }],
+    models: [{ id: modelId, displayName: modelId, enabled: true, isDefault: true }],
     enabled: true
   };
 }
 
-function createProviderStore(providerConfig: ProviderConfig) {
+function createProviderStore(providerConfig: ProviderConfig | ProviderConfig[]) {
+  const providerConfigs = Array.isArray(providerConfig) ? providerConfig : [providerConfig];
   return {
     async listProviderConfigs() {
-      return [providerConfig];
+      return providerConfigs;
     },
     async saveProviderConfig(config: ProviderConfig) {
       return config;
@@ -3265,17 +3500,30 @@ function createWindowArtifacts(input: {
   };
 }
 
-function createWindowRunJob(input: { skipAlreadyExtracted?: boolean; templateIds: string[] }) {
+function createWindowRunJob(input: {
+  modelId?: string;
+  modelSelectionMode?: "explicit" | "auto";
+  providerConfigId?: string;
+  skipAlreadyExtracted?: boolean;
+  templateIds: string[];
+}) {
   return {
     id: "job-1",
     bookId: "book-1",
     input: {
-      modelId: "mock-model",
-      providerConfigId: "provider-1",
+      modelId: input.modelId ?? "mock-model",
+      providerConfigId: input.providerConfigId ?? "provider-1",
+      ...(input.modelSelectionMode ? { modelSelectionMode: input.modelSelectionMode } : {}),
       skipAlreadyExtracted: input.skipAlreadyExtracted ?? false,
       templateIds: input.templateIds
     }
   };
+}
+
+async function writeSingleWindowText(projectRoot: string): Promise<void> {
+  const windowTextPath = path.join(projectRoot, "runs", "job-1", "windows", "window-0001.txt");
+  await fs.mkdir(path.dirname(windowTextPath), { recursive: true });
+  await fs.writeFile(windowTextPath, "第一章\n\n主角整理旧资料。", "utf8");
 }
 
 async function runWindowWithMockToolCall(input: {

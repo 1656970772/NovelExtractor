@@ -189,6 +189,7 @@ export interface CreateJobDto {
   templateIds: string[];
   providerConfigId: string;
   modelId: string;
+  modelSelectionMode?: "explicit" | "auto";
   singleRunChapterCount: number;
   extractionChapterCount: number;
   overlapChapterCount: number;

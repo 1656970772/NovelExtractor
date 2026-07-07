@@ -81,11 +81,12 @@ interface MockOpenAiServerOptions {
 function createProviderConfig(input: {
   apiKeyRef: ApiKeyRef;
   baseUrl: string;
+  id?: string;
   modelId?: string;
 }): ProviderConfig {
   const modelId = input.modelId ?? "mock-model";
   return {
-    id: "provider-1",
+    id: input.id ?? "provider-1",
     presetId: "custom-openai-compatible",
     displayName: "Mock Provider",
     kind: "openai-compatible",
@@ -103,10 +104,11 @@ function createProviderConfig(input: {
   };
 }
 
-function createProviderStore(providerConfig: ProviderConfig) {
+function createProviderStore(providerConfig: ProviderConfig | ProviderConfig[]) {
+  const providerConfigs = Array.isArray(providerConfig) ? providerConfig : [providerConfig];
   return {
     async listProviderConfigs() {
-      return [providerConfig];
+      return providerConfigs;
     },
     async saveProviderConfig(config: ProviderConfig) {
       return config;
@@ -1067,6 +1069,106 @@ describe("P0 desktop IPC handlers", () => {
         skipAlreadyExtracted: true
       })
     ).rejects.toThrow(/重复\.md.*甲模板.*乙模板/u);
+  });
+
+  it("updates job input summary when auto fallback switches the active model", async () => {
+    const firstServer = await startMockOpenAiServer({
+      expectedApiKey: "sk-one",
+      expectedModel: "model-one",
+      respond: () => ({
+        body: { error: { message: "rate limit exceeded" } },
+        status: 429
+      })
+    });
+    const secondServer = await startMockOpenAiServer({
+      expectedApiKey: "sk-two",
+      expectedModel: "model-two",
+      respond: () => ({
+        body: createChatCompletionResponse({ content: "NO_UPDATE" })
+      })
+    });
+    const contract = createIpcContract();
+    let apiKeySequence = 0;
+    const credentialStore = createMemoryCredentialStore({
+      idFactory: () => `api-key-${++apiKeySequence}`
+    });
+    const firstKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-one",
+      apiKey: "sk-one"
+    });
+    const secondKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-two",
+      apiKey: "sk-two"
+    });
+    const pushedJobs: JobDto[] = [];
+    const handlers = createHandlers({
+      credentialStore,
+      onJobUpdated: (job: JobDto) => {
+        pushedJobs.push(job);
+      },
+      providerStore: createProviderStore([
+        createProviderConfig({
+          id: "provider-one",
+          apiKeyRef: firstKeyRef,
+          baseUrl: firstServer.baseUrl,
+          modelId: "model-one"
+        }),
+        createProviderConfig({
+          id: "provider-two",
+          apiKeyRef: secondKeyRef,
+          baseUrl: secondServer.baseUrl,
+          modelId: "model-two"
+        })
+      ])
+    });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: utf8FixturePath,
+        displayName: "自动切换小说.txt"
+      });
+      const template = await contract.invoke(handlers, "templates:save", {
+        projectId: "project-a",
+        scope: "project",
+        name: "人物",
+        fileName: "人物.md",
+        body: "记录人物变化。"
+      });
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: [template.id],
+        providerConfigId: "provider-one",
+        modelId: "model-one",
+        modelSelectionMode: "auto",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 3,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: false
+      });
+
+      const completedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
+
+      expect(completedJob).toMatchObject({
+        status: "completed",
+        inputSummary: expect.objectContaining({
+          modelId: "model-two"
+        })
+      });
+      expect(pushedJobs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: job.id,
+            inputSummary: expect.objectContaining({
+              modelId: "model-two"
+            })
+          })
+        ])
+      );
+    } finally {
+      await firstServer.close();
+      await secondServer.close();
+    }
   });
 
   it("uses compressed template prompt profiles while keeping full template bodies in rule snapshots", async () => {
