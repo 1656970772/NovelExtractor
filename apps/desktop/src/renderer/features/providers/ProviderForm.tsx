@@ -2,12 +2,12 @@ import { getProviderPresets } from "@novel-extractor/config";
 import type { FormEvent } from "react";
 import {
   selectProviderPreset,
-  syncDefaultModelFlags,
   validateProviderForm,
   type ProviderFormState,
   type ProviderPresetId,
   type ProviderSaveState
 } from "./providerViewModel";
+import { ProviderModelListEditor } from "./ProviderModelListEditor";
 
 export interface ProviderFormProps {
   formState: ProviderFormState;
@@ -36,7 +36,6 @@ export function ProviderForm({
   const isSaving = saveState === "saving";
   const isFetchingModels = formState.modelFetchState === "loading";
   const isPresetLocked = !selectedPreset?.allowsUserModels;
-  const shouldUseModelSelect = formState.models.length > 0;
   const baseUrlPlaceholder =
     selectedPreset?.id === "custom-openai-compatible"
       ? CUSTOM_OPENAI_COMPATIBLE_BASE_URL_PLACEHOLDER
@@ -120,34 +119,12 @@ export function ProviderForm({
         />
       </label>
 
-      <label className="provider-form__field">
-        <span>模型名</span>
-        {shouldUseModelSelect ? (
-          <select
-            disabled={isSaving}
-            onChange={(event) => {
-              const modelName = event.target.value;
-              updateForm({
-                modelName,
-                models: syncDefaultModelFlags(formState.models, modelName)
-              });
-            }}
-            value={formState.modelName}
-          >
-            {formState.models.map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.displayName}
-              </option>
-            ))}
-          </select>
-        ) : (
-          <input
-            disabled={isSaving}
-            onChange={(event) => updateForm({ modelName: event.target.value })}
-            value={formState.modelName}
-          />
-        )}
-      </label>
+      <ProviderModelListEditor
+        disabled={isSaving}
+        modelName={formState.modelName}
+        models={formState.models}
+        onChange={(models, modelName) => updateForm({ models, modelName })}
+      />
 
       <div className="provider-form__model-actions">
         <button

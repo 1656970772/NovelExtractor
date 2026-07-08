@@ -1,12 +1,16 @@
 import { TemplateSelector } from "../templates/TemplateSelector";
 import type { TemplateView } from "../templates/templateViewModel";
-import type { ExtractionFormState, ExtractionModel, ExtractionBook } from "./extractionViewModel";
+import {
+  AUTO_PROVIDER_OPTION_ID,
+  type ExtractionProviderOption
+} from "../providers/providerViewModel";
+import type { ExtractionFormState, ExtractionBook } from "./extractionViewModel";
 
 export type CreateJobState = "idle" | "creating" | "error";
 
 export interface ExtractionParametersProps {
   books: readonly ExtractionBook[];
-  models: readonly ExtractionModel[];
+  providerOptions: readonly ExtractionProviderOption[];
   templates: readonly TemplateView[];
   formState: ExtractionFormState;
   createState?: CreateJobState;
@@ -39,9 +43,15 @@ function renderNumberValue(value: number): number | "" {
   return Number.isNaN(value) ? "" : value;
 }
 
+type ProviderOption = Extract<ExtractionProviderOption, { kind: "provider" }>;
+
+function isProviderOption(option: ExtractionProviderOption): option is ProviderOption {
+  return option.kind === "provider";
+}
+
 export function ExtractionParameters({
   books,
-  models,
+  providerOptions,
   templates,
   formState,
   createState = "idle",
@@ -52,8 +62,21 @@ export function ExtractionParameters({
   onOpenTemplateManager
 }: ExtractionParametersProps) {
   const isCreating = createState === "creating";
+  const providerOnlyOptions = providerOptions.filter(isProviderOption);
+  const selectedProviderOption = providerOnlyOptions.find(
+    (providerOption) => providerOption.id === formState.modelProviderOptionId
+  );
+  const providerSelectValue =
+    providerOnlyOptions.length === 0
+      ? ""
+      : selectedProviderOption
+        ? selectedProviderOption.id
+        : AUTO_PROVIDER_OPTION_ID;
   const canCreate =
-    books.length > 0 && models.length > 0 && formState.templateIds.length > 0 && !isCreating;
+    books.length > 0 &&
+    providerOnlyOptions.length > 0 &&
+    formState.templateIds.length > 0 &&
+    !isCreating;
 
   return (
     <section className="tool-panel parameters-panel" aria-labelledby="parameters-title">
@@ -172,24 +195,59 @@ export function ExtractionParameters({
           <legend>模型设置</legend>
 
           <label className="provider-form__field">
-            <span>模型</span>
+            <span>模型服务</span>
             <select
-              disabled={models.length === 0 || isCreating}
+              disabled={providerOnlyOptions.length === 0 || isCreating}
               onChange={(event) => {
-                onFormChange({ ...formState, modelOptionId: event.currentTarget.value });
+                const providerOptionId = event.currentTarget.value;
+                const providerOption = providerOnlyOptions.find(
+                  (option) => option.id === providerOptionId
+                );
+
+                onFormChange({
+                  ...formState,
+                  modelProviderOptionId: providerOption?.id ?? AUTO_PROVIDER_OPTION_ID,
+                  modelModelId:
+                    providerOption?.defaultModelId ?? providerOnlyOptions[0]?.defaultModelId ?? "",
+                  modelSelectionMode: providerOption ? "explicit" : "auto"
+                });
               }}
-              value={formState.modelOptionId}
+              value={providerSelectValue}
             >
-              {models.length === 0 ? <option value="">未配置模型</option> : null}
-              {models.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.displayName}
+              {providerOnlyOptions.length === 0 ? <option value="">未配置模型</option> : null}
+              {providerOptions.map((providerOption) => (
+                <option key={providerOption.id} value={providerOption.id}>
+                  {providerOption.displayName}
                 </option>
               ))}
             </select>
           </label>
 
-          {models.length === 0 ? (
+          {selectedProviderOption ? (
+            <label className="provider-form__field">
+              <span>子模型</span>
+              <select
+                disabled={isCreating}
+                onChange={(event) => {
+                  onFormChange({
+                    ...formState,
+                    modelProviderOptionId: selectedProviderOption.id,
+                    modelModelId: event.currentTarget.value,
+                    modelSelectionMode: "explicit"
+                  });
+                }}
+                value={formState.modelModelId}
+              >
+                {selectedProviderOption.models.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.displayName}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+
+          {providerOnlyOptions.length === 0 ? (
             <div className="empty-action">
               <p className="empty-text">暂无可用模型</p>
               {onOpenProviderConfig ? (

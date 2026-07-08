@@ -6,9 +6,13 @@ import {
   formatByteSize,
   getNextTaskStatusForAction,
   mapJobDtoToExtractionJob,
+  reconcileExtractionFormState,
   sortExtractionJobsByCreatedAtDesc
 } from "./extractionViewModel";
-import { getExtractionModelsFromProviders } from "../providers/providerViewModel";
+import {
+  AUTO_PROVIDER_OPTION_ID,
+  type ExtractionProviderOption
+} from "../providers/providerViewModel";
 
 const book: BookUploadResultDto = {
   bookId: "book-1",
@@ -21,18 +25,35 @@ const book: BookUploadResultDto = {
   chapterCount: 3
 };
 
-const model = {
-  id: "provider-1:model-a",
-  providerConfigId: "provider-1",
-  modelId: "model-a",
-  displayName: "DeepSeek / 模型 A"
+const autoProviderOption: ExtractionProviderOption = {
+  id: AUTO_PROVIDER_OPTION_ID,
+  kind: "auto",
+  displayName: "自动",
+  models: []
 };
+
+const deepSeekProviderOption: ExtractionProviderOption = {
+  id: "provider-1",
+  kind: "provider",
+  displayName: "DeepSeek",
+  providerConfigId: "provider-1",
+  defaultModelId: "model-a",
+  models: [
+    { id: "model-a", displayName: "模型 A", isDefault: true },
+    { id: "model-b", displayName: "模型 B", isDefault: false }
+  ]
+};
+
+const providerOptions: ExtractionProviderOption[] = [
+  autoProviderOption,
+  deepSeekProviderOption
+];
 
 describe("extractionViewModel", () => {
   it("creates default form state from configured templates, books, models, and defaults", () => {
     const state = createExtractionFormState({
       books: [book],
-      models: [model],
+      providerOptions,
       templates: [
         {
           id: "pill-analysis",
@@ -52,7 +73,9 @@ describe("extractionViewModel", () => {
     });
 
     expect(state.bookId).toBe("book-1");
-    expect(state.modelOptionId).toBe("provider-1:model-a");
+    expect(state.modelProviderOptionId).toBe(AUTO_PROVIDER_OPTION_ID);
+    expect(state.modelModelId).toBe("model-a");
+    expect(state.modelSelectionMode).toBe("auto");
     expect(state.templateIds).toEqual(["pill-analysis"]);
     expect(state.singleRunChapterCount).toBe(2);
     expect(state.extractionChapterCount).toBe(8);
@@ -61,7 +84,7 @@ describe("extractionViewModel", () => {
   });
 
   it("uses configured extraction parameter defaults when none are passed", () => {
-    const state = createExtractionFormState({ books: [book], models: [model] });
+    const state = createExtractionFormState({ books: [book], providerOptions });
 
     expect(state.singleRunChapterCount).toBe(3);
     expect(state.extractionChapterCount).toBe(9);
@@ -69,41 +92,72 @@ describe("extractionViewModel", () => {
     expect(state.skipAlreadyExtracted).toBe(true);
   });
 
-  it("lists every enabled preset model from a saved cc-switch provider", () => {
-    const models = getExtractionModelsFromProviders([
-      {
-        id: "provider-mimo",
-        presetId: "xiaomi-mimo",
-        displayName: "Xiaomi MiMo",
-        kind: "openai-compatible",
-        baseUrl: "https://api.xiaomimimo.com/v1",
-        hasApiKey: true,
-        enabled: true,
-        models: [
-          { id: "mimo-v2.5-pro", displayName: "MiMo V2.5 Pro", enabled: true, isDefault: true },
-          { id: "mimo-v2.5", displayName: "MiMo V2.5", enabled: true, isDefault: false }
-        ]
-      }
-    ]);
+  it("keeps explicit provider and repairs unavailable child models during reconcile", () => {
+    const state = createExtractionFormState({ books: [book], providerOptions });
+    const explicitState = {
+      ...state,
+      modelProviderOptionId: "provider-1",
+      modelModelId: "model-b",
+      modelSelectionMode: "explicit" as const
+    };
 
-    expect(models.map((model) => model.displayName)).toEqual([
-      "Xiaomi MiMo / MiMo V2.5 Pro",
-      "Xiaomi MiMo / MiMo V2.5"
-    ]);
+    const kept = reconcileExtractionFormState(explicitState, {
+      books: [book],
+      providerOptions
+    });
+
+    expect(kept.modelProviderOptionId).toBe("provider-1");
+    expect(kept.modelModelId).toBe("model-b");
+    expect(kept.modelSelectionMode).toBe("explicit");
+
+    const repaired = reconcileExtractionFormState(explicitState, {
+      books: [book],
+      providerOptions: [
+        autoProviderOption,
+        {
+          ...deepSeekProviderOption,
+          models: [{ id: "model-a", displayName: "模型 A", isDefault: true }]
+        }
+      ]
+    });
+
+    expect(repaired.modelProviderOptionId).toBe("provider-1");
+    expect(repaired.modelModelId).toBe("model-a");
+    expect(repaired.modelSelectionMode).toBe("explicit");
   });
 
-  it("builds a CreateJobDto with extraction window and ledger strategy parameters", () => {
+  it("falls back to auto selection when an explicit provider is no longer available", () => {
+    const state = createExtractionFormState({ books: [book], providerOptions });
+
+    const reconciled = reconcileExtractionFormState(
+      {
+        ...state,
+        modelProviderOptionId: "missing-provider",
+        modelModelId: "missing-model",
+        modelSelectionMode: "explicit"
+      },
+      { books: [book], providerOptions }
+    );
+
+    expect(reconciled.modelProviderOptionId).toBe(AUTO_PROVIDER_OPTION_ID);
+    expect(reconciled.modelModelId).toBe("model-a");
+    expect(reconciled.modelSelectionMode).toBe("auto");
+  });
+
+  it("builds an auto CreateJobDto with the first provider default model", () => {
     const dto = buildCreateJobDto(
       {
         bookId: "book-1",
         templateIds: ["pill-analysis"],
-        modelOptionId: "provider-1:model-a",
+        modelProviderOptionId: AUTO_PROVIDER_OPTION_ID,
+        modelModelId: "model-a",
+        modelSelectionMode: "auto",
         singleRunChapterCount: 4,
         extractionChapterCount: 12,
         overlapChapterCount: 0,
         skipAlreadyExtracted: false
       },
-      { models: [model] }
+      { providerOptions }
     );
 
     expect(dto).toEqual({
@@ -111,6 +165,36 @@ describe("extractionViewModel", () => {
       templateIds: ["pill-analysis"],
       providerConfigId: "provider-1",
       modelId: "model-a",
+      modelSelectionMode: "auto",
+      singleRunChapterCount: 4,
+      extractionChapterCount: 12,
+      overlapChapterCount: 0,
+      skipAlreadyExtracted: false
+    });
+  });
+
+  it("builds an explicit CreateJobDto with extraction window and ledger strategy parameters", () => {
+    const dto = buildCreateJobDto(
+      {
+        bookId: "book-1",
+        templateIds: ["pill-analysis"],
+        modelProviderOptionId: "provider-1",
+        modelModelId: "model-b",
+        modelSelectionMode: "explicit",
+        singleRunChapterCount: 4,
+        extractionChapterCount: 12,
+        overlapChapterCount: 0,
+        skipAlreadyExtracted: false
+      },
+      { providerOptions }
+    );
+
+    expect(dto).toEqual({
+      bookId: "book-1",
+      templateIds: ["pill-analysis"],
+      providerConfigId: "provider-1",
+      modelId: "model-b",
+      modelSelectionMode: "explicit",
       singleRunChapterCount: 4,
       extractionChapterCount: 12,
       overlapChapterCount: 0,
@@ -123,25 +207,29 @@ describe("extractionViewModel", () => {
       {
         bookId: "book-1",
         templateIds: ["pill-analysis"],
-        modelOptionId: "provider-1:model-a",
+        modelProviderOptionId: AUTO_PROVIDER_OPTION_ID,
+        modelModelId: "model-a",
+        modelSelectionMode: "auto",
         singleRunChapterCount: 3,
         extractionChapterCount: 9,
         overlapChapterCount: 3,
         skipAlreadyExtracted: true
       },
-      { models: [model] }
+      { providerOptions }
     );
     const shortExtractionDto = buildCreateJobDto(
       {
         bookId: "book-1",
         templateIds: ["pill-analysis"],
-        modelOptionId: "provider-1:model-a",
+        modelProviderOptionId: AUTO_PROVIDER_OPTION_ID,
+        modelModelId: "model-a",
+        modelSelectionMode: "auto",
         singleRunChapterCount: 5,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
         skipAlreadyExtracted: true
       },
-      { models: [model] }
+      { providerOptions }
     );
 
     expect(equalOverlapDto.overlapChapterCount).toBe(2);
@@ -182,6 +270,7 @@ describe("extractionViewModel", () => {
       tokenText: "Token 0 / 缓存命中率 0.00%",
       logFilePath: "runs/job-1/logs/20260630-153012.txt",
       allowedActions: ["start", "delete"],
+      autoRetryOnFailure: true,
       createdAt: "2026-06-27T00:00:00.000Z",
       updatedAt: "2026-06-27T00:00:00.000Z"
     };
@@ -213,7 +302,8 @@ describe("extractionViewModel", () => {
       },
       tokenText: "Token 0 / 缓存命中率 0.00%",
       logFilePath: "runs/job-1/logs/20260630-153012.txt",
-      createdAt: "2026-06-27T00:00:00.000Z"
+      createdAt: "2026-06-27T00:00:00.000Z",
+      autoRetryOnFailure: true
     });
   });
 

@@ -1071,6 +1071,37 @@ describe("P0 desktop IPC handlers", () => {
     ).rejects.toThrow(/重复\.md.*甲模板.*乙模板/u);
   });
 
+  it("preserves automatic model selection mode when creating jobs", async () => {
+    const contract = createIpcContract();
+    const handlers = createHandlers();
+    const book = await contract.invoke(handlers, "books:uploadTxt", {
+      projectId: "project-a",
+      filePath: utf8FixturePath,
+      displayName: "凡人修仙传.txt"
+    });
+    const template = await contract.invoke(handlers, "templates:save", {
+      projectId: "project-a",
+      scope: "project",
+      name: "模型选择模板",
+      fileName: "模型选择.md",
+      body: "记录模型选择模式。"
+    });
+
+    const job = await contract.invoke(handlers, "jobs:create", {
+      bookId: book.bookId,
+      templateIds: [template.id],
+      providerConfigId: "provider-1",
+      modelId: "mock-model",
+      modelSelectionMode: "auto",
+      singleRunChapterCount: 2,
+      extractionChapterCount: 3,
+      overlapChapterCount: 1,
+      skipAlreadyExtracted: true
+    });
+
+    expect(job.modelSelectionMode).toBe("auto");
+  });
+
   it("updates job input summary when auto fallback switches the active model", async () => {
     const firstServer = await startMockOpenAiServer({
       expectedApiKey: "sk-one",
@@ -1170,6 +1201,323 @@ describe("P0 desktop IPC handlers", () => {
       await secondServer.close();
     }
   });
+
+  it("automatically retries a failed job after the configured interval when enabled at creation", async () => {
+    const mockServer = await startMockOpenAiServer({
+      expectedApiKey: "sk-auto-retry-create",
+      respond: ({ requestIndex }) =>
+        requestIndex === 0
+          ? {
+              body: { error: { message: "temporary provider failure" } },
+              status: 500
+            }
+          : {
+              body: createChatCompletionResponse({ content: "NO_UPDATE" })
+            }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-auto-retry-create");
+    const handlers = createHandlers({
+      credentialStore,
+      failureRetryIntervalMs: 5,
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: mockServer.baseUrl
+        })
+      )
+    });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: utf8FixturePath,
+        displayName: "自动续跑小说.txt"
+      });
+      const template = await contract.invoke(handlers, "templates:save", {
+        projectId: "project-a",
+        scope: "project",
+        name: "续跑模板",
+        fileName: "续跑.md",
+        body: "记录续跑结果。"
+      });
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: [template.id],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        autoRetryOnFailure: true,
+        singleRunChapterCount: 2,
+        extractionChapterCount: 3,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: false
+      });
+
+      await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      await vi.waitFor(
+        async () => {
+          const runtime = await contract.invoke(handlers, "projectRuntime:get", { projectId: "project-a" });
+          const completedJob = requireJobDto(runtime.jobs.find((runtimeJob) => runtimeJob.id === job.id));
+          expect(completedJob).toMatchObject({
+            status: "completed",
+            autoRetryOnFailure: true
+          });
+        },
+        { timeout: 15_000 }
+      );
+
+      expect(mockServer.requests).toHaveLength(3);
+    } finally {
+      await mockServer.close();
+    }
+  }, 20000);
+
+  it("schedules retry when enabling policy on a failed job and cancels when disabled", async () => {
+    const mockServer = await startMockOpenAiServer({
+      expectedApiKey: "sk-auto-retry-toggle",
+      respond: ({ requestIndex }) =>
+        requestIndex === 0
+          ? {
+              body: { error: { message: "temporary provider failure" } },
+              status: 500
+            }
+          : {
+              body: createChatCompletionResponse({ content: "NO_UPDATE" })
+            }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-auto-retry-toggle");
+    const handlers = createHandlers({
+      credentialStore,
+      failureRetryIntervalMs: 5,
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: mockServer.baseUrl
+        })
+      )
+    });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: utf8FixturePath,
+        displayName: "开启续跑小说.txt"
+      });
+      const template = await contract.invoke(handlers, "templates:save", {
+        projectId: "project-a",
+        scope: "project",
+        name: "开启续跑模板",
+        fileName: "开启续跑.md",
+        body: "记录开启续跑结果。"
+      });
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: [template.id],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 3,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: false
+      });
+      const failedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
+      expect(failedJob.status).toBe("failed");
+
+      const retryEnabledJob = await contract.invoke(handlers, "jobs:updateRetryPolicy", {
+        jobId: job.id,
+        autoRetryOnFailure: true
+      });
+      expect(retryEnabledJob.autoRetryOnFailure).toBe(true);
+
+      await vi.waitFor(
+        async () => {
+          const runtime = await contract.invoke(handlers, "projectRuntime:get", { projectId: "project-a" });
+          const completedJob = requireJobDto(runtime.jobs.find((runtimeJob) => runtimeJob.id === job.id));
+          expect(completedJob.status).toBe("completed");
+        },
+        { timeout: 15_000 }
+      );
+      expect(mockServer.requests).toHaveLength(3);
+    } finally {
+      await mockServer.close();
+    }
+  }, 20000);
+
+  it("cancels a pending failed-job retry when retry policy is disabled", async () => {
+    const mockServer = await startMockOpenAiServer({
+      expectedApiKey: "sk-auto-retry-cancel",
+      respond: () => ({
+        body: { error: { message: "temporary provider failure" } },
+        status: 500
+      })
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-auto-retry-cancel");
+    const handlers = createHandlers({
+      credentialStore,
+      failureRetryIntervalMs: 50,
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: mockServer.baseUrl
+        })
+      )
+    });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: utf8FixturePath,
+        displayName: "取消续跑小说.txt"
+      });
+      const template = await contract.invoke(handlers, "templates:save", {
+        projectId: "project-a",
+        scope: "project",
+        name: "取消续跑模板",
+        fileName: "取消续跑.md",
+        body: "记录取消续跑结果。"
+      });
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: [template.id],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 3,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: false
+      });
+      const failedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
+      expect(failedJob.status).toBe("failed");
+
+      await contract.invoke(handlers, "jobs:updateRetryPolicy", {
+        jobId: job.id,
+        autoRetryOnFailure: true
+      });
+      const retryDisabledJob = await contract.invoke(handlers, "jobs:updateRetryPolicy", {
+        jobId: job.id,
+        autoRetryOnFailure: false
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 80));
+
+      expect(retryDisabledJob.autoRetryOnFailure).toBe(false);
+      expect(mockServer.requests).toHaveLength(1);
+    } finally {
+      await mockServer.close();
+    }
+  }, 20000);
+
+  it("stops the failed-job retry loop after the retry is accepted into the queue", async () => {
+    const heldResponse = createDeferred<unknown>();
+    const mockServer = await startMockOpenAiServer({
+      expectedApiKey: "sk-auto-retry-queued",
+      respond: ({ requestIndex }) => {
+        if (requestIndex === 0) {
+          return {
+            body: { error: { message: "temporary provider failure" } },
+            status: 500
+          };
+        }
+        if (requestIndex === 1) {
+          return heldResponse.promise.then((body) => ({ body }));
+        }
+        return {
+          body: createChatCompletionResponse({ content: "NO_UPDATE" })
+        };
+      }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-auto-retry-queued");
+    const handlers = createHandlers({
+      credentialStore,
+      failureRetryIntervalMs: 100,
+      jobSchedulerDefaults: {
+        maxConcurrentJobs: 1,
+        maxConcurrentJobsPerBook: 1
+      },
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: mockServer.baseUrl
+        })
+      )
+    });
+
+    try {
+      const retryBook = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: await writeTempNovel(tempRoot, "auto-retry-queued.txt", 1),
+        displayName: "续跑排队小说.txt"
+      });
+      const blockingBook = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: await writeTempNovel(tempRoot, "auto-retry-blocking.txt", 1),
+        displayName: "占用槽位小说.txt"
+      });
+      const createInput = {
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 99,
+        extractionChapterCount: 99,
+        overlapChapterCount: 1,
+        skipAlreadyExtracted: true
+      };
+      const retryJob = await contract.invoke(handlers, "jobs:create", {
+        ...createInput,
+        autoRetryOnFailure: true,
+        bookId: retryBook.bookId
+      });
+      const blockingJob = await contract.invoke(handlers, "jobs:create", {
+        ...createInput,
+        bookId: blockingBook.bookId
+      });
+
+      const failedJob = await startJobAndWaitForTerminal(contract, handlers, retryJob.id);
+      expect(failedJob.status).toBe("failed");
+      expect(mockServer.requests).toHaveLength(1);
+
+      await expect(contract.invoke(handlers, "jobs:start", { jobId: blockingJob.id })).resolves.toMatchObject({
+        id: blockingJob.id,
+        status: "running"
+      });
+      await vi.waitFor(() => expect(mockServer.requests).toHaveLength(2));
+
+      await vi.waitFor(
+        async () => {
+          const runtime = await contract.invoke(handlers, "projectRuntime:get", { projectId: "project-a" });
+          const queuedRetryJob = requireJobDto(runtime.jobs.find((runtimeJob) => runtimeJob.id === retryJob.id));
+          expect(queuedRetryJob).toMatchObject({
+            autoRetryOnFailure: true,
+            progressText: "等待可用运行槽",
+            status: "failed"
+          });
+        },
+        { timeout: 15_000 }
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(mockServer.requests).toHaveLength(2);
+
+      heldResponse.resolve(createChatCompletionResponse({ content: "NO_UPDATE" }));
+      const completedBlockingJob = await waitForJobTerminal(contract, handlers, blockingJob.id);
+      expect(completedBlockingJob.status).toBe("completed");
+      await vi.waitFor(
+        async () => {
+          const runtime = await contract.invoke(handlers, "projectRuntime:get", { projectId: "project-a" });
+          const completedRetryJob = requireJobDto(runtime.jobs.find((runtimeJob) => runtimeJob.id === retryJob.id));
+          expect(completedRetryJob.status).toBe("completed");
+        },
+        { timeout: 15_000 }
+      );
+      expect(mockServer.requests).toHaveLength(3);
+    } finally {
+      heldResponse.resolve(createChatCompletionResponse({ content: "NO_UPDATE" }));
+      await mockServer.close();
+    }
+  }, 20000);
 
   it("uses compressed template prompt profiles while keeping full template bodies in rule snapshots", async () => {
     const mockServer = await startMockOpenAiServer({
@@ -1616,11 +1964,11 @@ describe("P0 desktop IPC handlers", () => {
     expect(runtime.jobs).toEqual([
       expect.objectContaining({
         id: job.id,
-        inputSummary: {
+        inputSummary: expect.objectContaining({
           bookDisplayName: "凡人修仙传.txt",
           modelId: "mock-model",
           templateNames: []
-        }
+        })
       })
     ]);
   });

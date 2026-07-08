@@ -172,6 +172,22 @@ function assertNonEmptyStringArray(value: unknown, label: string): asserts value
   });
 }
 
+function assertHttpStatusArray(value: unknown, label: string): asserts value is number[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new ConfigInvariantError(`${label} must contain at least one status.`);
+  }
+
+  value.forEach((status, index) => {
+    if (!Number.isInteger(status) || status < 100 || status > 599) {
+      throw new ConfigInvariantError(`${label} ${index + 1} must be a valid HTTP status.`);
+    }
+  });
+  assertUnique(
+    value.map((status) => String(status)),
+    label
+  );
+}
+
 function assertProviderReasoning(value: unknown, label: string): void {
   assertConfigObject(value, label);
 
@@ -507,6 +523,44 @@ function assertJobSchedulerDefaults(config: NovelExtractorConfig): void {
   }
 }
 
+function assertJobFailureRetryDefaults(config: NovelExtractorConfig): void {
+  const defaults = config.jobFailureRetryDefaults;
+  assertConfigObject(defaults, "job failure retry defaults");
+
+  if (typeof defaults.failureRetryIntervalMs !== "number") {
+    throw new ConfigInvariantError("failure retry interval must be a positive integer.");
+  }
+  assertPositiveInteger(defaults.failureRetryIntervalMs, "failure retry interval");
+}
+
+function assertLlmFailurePolicyDefaults(config: NovelExtractorConfig): void {
+  const defaults = config.llmFailurePolicyDefaults;
+  assertConfigObject(defaults, "llm failure policy defaults");
+
+  assertHttpStatusArray(defaults.switchableHttpStatuses, "switchable http statuses");
+  assertNonEmptyStringArray(
+    defaults.switchableMessageFragments,
+    "switchable message fragments"
+  );
+  assertUnique(defaults.switchableMessageFragments, "switchable message fragments");
+  assertNonEmptyStringArray(
+    defaults.switchableNetworkErrorFragments,
+    "switchable network error fragments"
+  );
+  assertUnique(
+    defaults.switchableNetworkErrorFragments,
+    "switchable network error fragments"
+  );
+
+  if (typeof defaults.maxAutoFallbackRoundsPerWindow !== "number") {
+    throw new ConfigInvariantError("max auto fallback rounds must be a positive integer.");
+  }
+  assertPositiveInteger(
+    defaults.maxAutoFallbackRoundsPerWindow,
+    "max auto fallback rounds"
+  );
+}
+
 export function assertValidConfigInvariants(config: NovelExtractorConfig): void {
   assertProviderPresets(config);
 
@@ -617,6 +671,8 @@ export function assertValidConfigInvariants(config: NovelExtractorConfig): void 
   assertRuleLayerDefaults(config);
   assertQuantityPolicyDefaults(config);
   assertJobSchedulerDefaults(config);
+  assertJobFailureRetryDefaults(config);
+  assertLlmFailurePolicyDefaults(config);
 
   assertUnique(
     [...config.menu.mainNavigation, ...config.menu.userMenu].map((item) => item.id),

@@ -31,6 +31,7 @@ export const DESKTOP_IPC_CHANNELS = [
   "jobs:pause",
   "jobs:resume",
   "jobs:restart",
+  "jobs:updateRetryPolicy",
   "jobs:delete",
   "jobs:readLog",
   "jobs:openLog",
@@ -184,16 +185,19 @@ export interface TemplateListDto {
   templates: TemplateDto[];
 }
 
+export type JobModelSelectionMode = "explicit" | "auto";
+
 export interface CreateJobDto {
   bookId: string;
   templateIds: string[];
   providerConfigId: string;
   modelId: string;
-  modelSelectionMode?: "explicit" | "auto";
+  modelSelectionMode?: JobModelSelectionMode;
   singleRunChapterCount: number;
   extractionChapterCount: number;
   overlapChapterCount: number;
   skipAlreadyExtracted: boolean;
+  autoRetryOnFailure?: boolean;
 }
 
 export interface JobProgressDto {
@@ -220,12 +224,15 @@ export interface InputSummaryDto {
   bookDisplayName: string;
   templateNames: string[];
   modelId: string;
+  modelSelectionMode?: JobModelSelectionMode;
 }
 
 export interface JobDto {
   id: string;
   bookId: string;
   status: JobStatus;
+  modelSelectionMode?: JobModelSelectionMode;
+  autoRetryOnFailure?: boolean;
   progressText: string;
   progress?: JobProgressDto;
   timing?: JobTimingDto;
@@ -263,6 +270,11 @@ export interface DeleteJobDto {
   confirm: true;
 }
 
+export interface UpdateJobRetryPolicyDto {
+  jobId: string;
+  autoRetryOnFailure: boolean;
+}
+
 export interface DesktopIpcRequestMap {
   "project:create": { displayName: string };
   "project:list": undefined;
@@ -285,6 +297,7 @@ export interface DesktopIpcRequestMap {
   "jobs:pause": { jobId: string };
   "jobs:resume": { jobId: string };
   "jobs:restart": { jobId: string };
+  "jobs:updateRetryPolicy": UpdateJobRetryPolicyDto;
   "jobs:delete": DeleteJobDto;
   "jobs:readLog": { jobId: string };
   "jobs:openLog": OpenJobLogDto;
@@ -317,6 +330,7 @@ export interface DesktopIpcResponseMap {
   "jobs:pause": JobDto | void;
   "jobs:resume": JobDto | void;
   "jobs:restart": JobDto | void;
+  "jobs:updateRetryPolicy": JobDto;
   "jobs:delete": void;
   "jobs:readLog": JobLogDto;
   "jobs:openLog": void;

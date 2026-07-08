@@ -6,12 +6,36 @@ import type {
   ProviderViewDto,
   SaveProviderDto
 } from "../../../shared/ipcTypes";
-import type { ExtractionModel } from "../extraction/extractionViewModel";
 
 export type ProviderPresetId = SaveProviderDto["presetId"];
 export type ProviderSaveState = "idle" | "saving" | "error";
 export type ProviderResourceState = "ready" | "loading" | "error";
 export type ProviderModelFetchState = "idle" | "loading" | "error";
+export const AUTO_PROVIDER_OPTION_ID = "__auto__";
+
+export type ExtractionModelSelectionMode = "explicit" | "auto";
+
+export interface ExtractionProviderModelOption {
+  id: string;
+  displayName: string;
+  isDefault: boolean;
+}
+
+export type ExtractionProviderOption =
+  | {
+      id: typeof AUTO_PROVIDER_OPTION_ID;
+      kind: "auto";
+      displayName: string;
+      models: [];
+    }
+  | {
+      id: string;
+      kind: "provider";
+      displayName: string;
+      providerConfigId: string;
+      defaultModelId: string;
+      models: ExtractionProviderModelOption[];
+    };
 
 export interface ProviderFormState {
   providerId?: string;
@@ -72,6 +96,72 @@ function resolveModelName(models: readonly ProviderModelDto[], modelName: string
   return models[0]?.id ?? trimmedModelName;
 }
 
+function getPreferredModelName(models: readonly ProviderModelDto[]): string {
+  return (
+    models.find((model) => model.isDefault)?.id ??
+    models.find((model) => model.enabled)?.id ??
+    models[0]?.id ??
+    ""
+  );
+}
+
+function normalizeProviderModels(
+  models: readonly ProviderModelDto[],
+  modelName: string
+): { models: ProviderModelDto[]; modelName: string } {
+  const normalizedModels: ProviderModelDto[] = [];
+  const seenModelIds = new Set<string>();
+
+  for (const model of models) {
+    const id = model.id.trim();
+    if (!id || seenModelIds.has(id)) {
+      continue;
+    }
+
+    seenModelIds.add(id);
+    normalizedModels.push({
+      id,
+      displayName: model.displayName.trim() || id,
+      enabled: model.enabled,
+      isDefault: model.isDefault
+    });
+  }
+
+  if (normalizedModels.length === 0) {
+    const fallbackModelName = modelName.trim();
+    return {
+      modelName: fallbackModelName,
+      models: fallbackModelName
+        ? [
+            {
+              id: fallbackModelName,
+              displayName: fallbackModelName,
+              enabled: true,
+              isDefault: true
+            }
+          ]
+        : []
+    };
+  }
+
+  const requestedModelName = modelName.trim();
+  const defaultModel =
+    normalizedModels.find((model) => model.id === requestedModelName) ??
+    normalizedModels.find((model) => model.enabled && model.isDefault) ??
+    normalizedModels.find((model) => model.enabled) ??
+    normalizedModels[0];
+  const defaultModelName = defaultModel?.id ?? "";
+
+  return {
+    modelName: defaultModelName,
+    models: normalizedModels.map((model) => ({
+      ...model,
+      enabled: model.id === defaultModelName ? true : model.enabled,
+      isDefault: model.id === defaultModelName
+    }))
+  };
+}
+
 export function syncDefaultModelFlags(
   models: readonly ProviderModelDto[],
   modelName: string
@@ -80,6 +170,7 @@ export function syncDefaultModelFlags(
 
   return models.map((model) => ({
     ...model,
+    enabled: model.id === defaultModelName ? true : model.enabled,
     isDefault: model.id === defaultModelName
   }));
 }
@@ -119,6 +210,29 @@ export function selectProviderPreset(
   };
 }
 
+export function createProviderFormStateFromSavedProvider(
+  provider: ProviderViewDto
+): ProviderFormState {
+  const normalizedModels = normalizeProviderModels(
+    provider.models,
+    getPreferredModelName(provider.models)
+  );
+
+  return {
+    providerId: provider.id,
+    presetId: provider.presetId,
+    displayName: provider.displayName,
+    kind: provider.kind,
+    baseUrl: provider.baseUrl ?? "",
+    apiKey: "",
+    models: normalizedModels.models,
+    modelName: normalizedModels.modelName,
+    modelFetchState: "idle",
+    defaultModel: true,
+    enabled: provider.enabled
+  };
+}
+
 export function validateProviderForm(state: ProviderFormState): ProviderFormValidation {
   const errors: ProviderFormValidation["errors"] = {};
 
@@ -130,11 +244,11 @@ export function validateProviderForm(state: ProviderFormState): ProviderFormVali
     errors.baseUrl = "请输入 Base URL";
   }
 
-  if (!state.apiKey.trim()) {
+  if (!state.providerId && !state.apiKey.trim()) {
     errors.apiKey = "请输入 API key";
   }
 
-  if (!state.modelName.trim()) {
+  if (!state.modelName.trim() && !state.models.some((model) => model.id.trim())) {
     errors.modelName = "请输入模型名";
   }
 
@@ -145,23 +259,7 @@ export function validateProviderForm(state: ProviderFormState): ProviderFormVali
 }
 
 export function buildSaveProviderDto(state: ProviderFormState): SaveProviderDto {
-  const modelName =
-    state.models.length > 0
-      ? resolveModelName(state.models, state.modelName)
-      : state.modelName.trim();
-  const models =
-    state.models.length > 0
-      ? syncDefaultModelFlags(state.models, modelName)
-      : modelName
-        ? [
-            {
-              id: modelName,
-              displayName: modelName,
-              enabled: true,
-              isDefault: true
-            }
-          ]
-        : [];
+  const { modelName, models } = normalizeProviderModels(state.models, state.modelName);
 
   return {
     providerId: state.providerId,
@@ -218,21 +316,58 @@ export function clearProviderSecretAfterSave(state: ProviderFormState): Provider
   };
 }
 
-export function getExtractionModelsFromProviders(
+function getEnabledProviderModels(
+  provider: ProviderViewDto
+): ExtractionProviderModelOption[] {
+  return provider.models
+    .filter((model) => model.enabled)
+    .map((model) => ({
+      id: model.id,
+      displayName: model.displayName,
+      isDefault: model.isDefault
+    }));
+}
+
+function getDefaultExtractionModelId(
+  models: readonly ExtractionProviderModelOption[]
+): string {
+  return models.find((model) => model.isDefault)?.id ?? models[0]?.id ?? "";
+}
+
+export function getExtractionProviderOptionsFromProviders(
   providers: readonly ProviderViewDto[]
-): ExtractionModel[] {
-  return providers.flatMap((provider) => {
-    if (!provider.enabled) {
+): ExtractionProviderOption[] {
+  const providerOptions = providers.flatMap((provider): ExtractionProviderOption[] => {
+    if (!provider.enabled || !provider.hasApiKey) {
       return [];
     }
 
-    return provider.models
-      .filter((model) => model.enabled)
-      .map((model) => ({
-        id: `${provider.id}:${model.id}`,
+    const models = getEnabledProviderModels(provider);
+    if (models.length === 0) {
+      return [];
+    }
+
+    return [
+      {
+        id: provider.id,
+        kind: "provider",
+        displayName: provider.displayName,
         providerConfigId: provider.id,
-        modelId: model.id,
-        displayName: `${provider.displayName} / ${model.displayName}`
-      }));
+        defaultModelId: getDefaultExtractionModelId(models),
+        models
+      }
+    ];
   });
+
+  return providerOptions.length > 0
+    ? [
+        {
+          id: AUTO_PROVIDER_OPTION_ID,
+          kind: "auto",
+          displayName: "自动",
+          models: []
+        },
+        ...providerOptions
+      ]
+    : [];
 }

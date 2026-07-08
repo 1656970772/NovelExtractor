@@ -333,4 +333,35 @@ describe("default config", () => {
       queuedByBookLimitText: "等待同书任务完成"
     });
   });
+
+  it("provides retry policy defaults for failed jobs and LLM fallback switching", () => {
+    expect(getDefaultConfig().jobFailureRetryDefaults).toEqual({
+      failureRetryIntervalMs: 300000
+    });
+    expect(getDefaultConfig().llmFailurePolicyDefaults).toEqual({
+      switchableHttpStatuses: [408, 409, 425, 429, 500, 502, 503, 504],
+      switchableMessageFragments: expect.arrayContaining([
+        "rate limit",
+        "too many requests",
+        "quota",
+        "insufficient_quota",
+        "insufficient balance",
+        "余额不足",
+        "额度不足",
+        "timeout",
+        "timed out"
+      ]),
+      switchableNetworkErrorFragments: expect.arrayContaining([
+        "terminated",
+        "fetch failed",
+        "network error",
+        "socket hang up",
+        "ECONNRESET",
+        "ETIMEDOUT",
+        "EPIPE",
+        "UND_ERR"
+      ]),
+      maxAutoFallbackRoundsPerWindow: 2
+    });
+  });
 });

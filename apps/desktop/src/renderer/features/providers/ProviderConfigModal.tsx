@@ -12,6 +12,7 @@ import {
   buildSaveProviderDto,
   clearProviderSecretAfterSave,
   createProviderFormState,
+  createProviderFormStateFromSavedProvider,
   mergeFetchedModelsIntoForm,
   type ProviderFormState,
   type ProviderResourceState,
@@ -183,9 +184,19 @@ export function ProviderConfigModal({
               <ul className="provider-list">
                 {providers.map((provider) => (
                   <li className="provider-row" key={provider.id}>
-                    <div>
-                      <strong>{provider.displayName}</strong>
-                      <span>{provider.baseUrl ?? "未配置 Base URL"}</span>
+                    <div className="provider-row__header">
+                      <div>
+                        <strong>{provider.displayName}</strong>
+                        <span>{provider.baseUrl ?? "未配置 Base URL"}</span>
+                      </div>
+                      <button
+                        aria-label={`编辑 ${provider.displayName}`}
+                        className="button button--secondary button--compact"
+                        onClick={() => setFormState(createProviderFormStateFromSavedProvider(provider))}
+                        type="button"
+                      >
+                        编辑
+                      </button>
                     </div>
                     <div className="provider-row__meta">
                       <span>{provider.hasApiKey ? "API key 已保存" : "未保存 API key"}</span>

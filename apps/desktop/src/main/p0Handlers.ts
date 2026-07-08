@@ -25,6 +25,7 @@ import type { JobRuntime, JobRuntimeError, JobRuntimeState, TokenUsage } from "@
 import type { FetchLike } from "@novel-extractor/llm";
 import { renderSafeMarkdown } from "@novel-extractor/markdown/preview";
 import { createMemoryCredentialStore, type MemoryCredentialStore } from "./credentials";
+import { createFailureRetryScheduler } from "./failureRetryScheduler";
 import type { DesktopIpcHandlers } from "./ipc";
 import { createJobScheduler, type JobScheduler, type QueueBlockReason } from "./jobScheduler";
 import {
@@ -69,6 +70,7 @@ type P0Handlers = Pick<
   | "jobs:pause"
   | "jobs:resume"
   | "jobs:restart"
+  | "jobs:updateRetryPolicy"
   | "jobs:delete"
   | "jobs:readLog"
   | "jobs:openLog"
@@ -106,6 +108,7 @@ export interface P0IpcHandlersOptions {
   onJobUpdated?: (job: JobDto) => void;
   enabledToolNames?: readonly string[];
   jobSchedulerDefaults?: Partial<NovelExtractorConfig["jobSchedulerDefaults"]>;
+  failureRetryIntervalMs?: number;
   shell?: {
     openPath(path: string): Promise<string>;
   };
@@ -524,15 +527,18 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
   const clock = options.clock ?? systemClock;
   const createInitialWindowEstimateMs = () => createRandomInitialWindowEstimateMs(options.estimateRandom);
   const idGenerator = options.idGenerator ?? createSequentialIdGenerator();
+  const defaultConfig = getDefaultConfig();
   const workspaceRoot =
     options.workspaceRoot ??
     process.env.NOVEL_EXTRACTOR_E2E_DATA_DIR ??
     path.join(process.cwd(), ".novel-extractor-data");
 
   const schedulerDefaults = {
-    ...getDefaultConfig().jobSchedulerDefaults,
+    ...defaultConfig.jobSchedulerDefaults,
     ...options.jobSchedulerDefaults
   };
+  const failureRetryIntervalMs =
+    options.failureRetryIntervalMs ?? defaultConfig.jobFailureRetryDefaults.failureRetryIntervalMs;
 
   const booksById = new Map<string, Book>();
   const jobsById = new Map<string, P0JobRecord>();
@@ -588,6 +594,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
 
     for (const job of state.jobs) {
       jobsById.set(job.id, job);
+      syncFailureRetrySchedule(job);
     }
 
     for (const report of state.reports) {
@@ -677,7 +684,8 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       templateNames: job.input.templateIds
         .map((templateId) => templatesById.get(templateId)?.name)
         .filter((name): name is string => Boolean(name)),
-      modelId: job.input.modelId
+      modelId: job.input.modelId,
+      modelSelectionMode: job.input.modelSelectionMode
     };
   }
 
@@ -699,6 +707,8 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       id: job.id,
       bookId: job.bookId,
       status: job.status,
+      modelSelectionMode: job.input.modelSelectionMode,
+      autoRetryOnFailure: job.input.autoRetryOnFailure,
       progressText: job.progressText,
       progress: toJobProgressDto(job),
       timing: toJobTimingDto(job, clock.now()),
@@ -1327,14 +1337,18 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       throw new Error("重叠章节数必须小于单次窗口章节数");
     }
 
+    const modelSelectionMode = input.modelSelectionMode ?? "explicit";
+    if (modelSelectionMode !== "explicit" && modelSelectionMode !== "auto") {
+      throw new Error("模型选择模式无效");
+    }
+
     return {
       bookId: requireStringField(input, "bookId", "小说"),
       templateIds: requireStringArrayField(input, "templateIds", "模板"),
       providerConfigId: requireStringField(input, "providerConfigId", "模型供应商"),
       modelId: requireStringField(input, "modelId", "模型"),
-      ...(input.modelSelectionMode === "auto" || input.modelSelectionMode === "explicit"
-        ? { modelSelectionMode: input.modelSelectionMode }
-        : {}),
+      modelSelectionMode,
+      autoRetryOnFailure: input.autoRetryOnFailure ?? false,
       singleRunChapterCount,
       extractionChapterCount,
       overlapChapterCount,
@@ -1583,6 +1597,48 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     }
   });
 
+  const failureRetryScheduler = createFailureRetryScheduler({
+    intervalMs: failureRetryIntervalMs,
+    async enqueue(jobId) {
+      const latestJob = jobsById.get(jobId);
+      if (!latestJob || latestJob.status !== "failed" || !latestJob.input.autoRetryOnFailure) {
+        return "accepted";
+      }
+      if (jobScheduler.isRunning(jobId)) {
+        return "failed";
+      }
+      if (jobScheduler.isQueued(jobId)) {
+        return "accepted";
+      }
+
+      try {
+        const updatedJob = await enqueueModelBackedJob(latestJob, { skipAlreadyExtracted: true });
+        if (jobScheduler.isQueued(jobId)) {
+          return "accepted";
+        }
+        return updatedJob.status === "failed" ? "failed" : "accepted";
+      } catch {
+        return "failed";
+      }
+    }
+  });
+
+  function syncFailureRetrySchedule(job: P0JobRecord): void {
+    if (job.status === "failed") {
+      if (jobScheduler.isQueued(job.id)) {
+        failureRetryScheduler.cancel(job.id);
+        return;
+      }
+      failureRetryScheduler.onJobFailed({
+        jobId: job.id,
+        autoRetryOnFailure: Boolean(job.input.autoRetryOnFailure)
+      });
+      return;
+    }
+
+    failureRetryScheduler.cancel(job.id);
+  }
+
   async function enqueueModelBackedJob(
     job: P0JobRecord,
     runOptions?: RunModelBackedJobOptions
@@ -1652,6 +1708,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       throw new Error(`Job not found: ${nextJob.id}`);
     }
     await notifyJobUpdated(nextJob);
+    syncFailureRetrySchedule(nextJob);
     return nextJob;
   }
 
@@ -1835,11 +1892,23 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       assertJobNotQueuedForAction(job.id, "重新开始");
       return enqueueModelBackedJob(job, { skipAlreadyExtracted: false });
     },
+    "jobs:updateRetryPolicy": async (input) => {
+      const job = requireJob(input.jobId);
+      const updatedJob = await updateJob(job, {
+        input: {
+          ...job.input,
+          templateIds: [...job.input.templateIds],
+          autoRetryOnFailure: input.autoRetryOnFailure
+        }
+      });
+      return await buildJobDto(updatedJob);
+    },
     "jobs:delete": async (input) => {
       if (!input.confirm) {
         throw new Error("Delete confirmation is required");
       }
       const jobId = input.jobId;
+      failureRetryScheduler.cancel(jobId);
       jobScheduler.remove(jobId);
       if (jobScheduler.isRunning(jobId)) {
         throw new Error("运行中的任务不能删除，请先等待任务完成或暂停。");

@@ -27,6 +27,12 @@ const providerView: ProviderViewDto = {
       displayName: "DeepSeek V4 Flash",
       enabled: true,
       isDefault: true
+    },
+    {
+      id: "deepseek-v4-pro",
+      displayName: "DeepSeek V4 Pro",
+      enabled: true,
+      isDefault: false
     }
   ],
   hasApiKey: true,
@@ -85,7 +91,7 @@ describe("ProviderConfigModal and UserMenu", () => {
     expect(within(dialog).getByRole("radio", { name: "Kimi" })).toBeInTheDocument();
     expect(within(dialog).getByRole("radio", { name: "MiniMax" })).toBeInTheDocument();
     expect(within(dialog).getByRole("radio", { name: "Xiaomi MiMo" })).toBeInTheDocument();
-    expect(within(dialog).getAllByRole("radio")).toHaveLength(11);
+    expect(within(screen.getByRole("group", { name: "服务模式" })).getAllByRole("radio")).toHaveLength(11);
   });
 
   it("closes the provider config dialog from the header action", async () => {
@@ -104,10 +110,9 @@ describe("ProviderConfigModal and UserMenu", () => {
 
     await user.click(screen.getByRole("radio", { name: "Xiaomi MiMo" }));
 
-    const modelSelect = screen.getByLabelText("模型名");
-    expect(modelSelect).toHaveDisplayValue("MiMo V2.5 Pro");
-    expect(within(modelSelect).getByRole("option", { name: "MiMo V2.5 Pro" })).toBeInTheDocument();
-    expect(within(modelSelect).getByRole("option", { name: "MiMo V2.5" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "模型型号 MiMo V2.5 Pro" })).toHaveValue("mimo-v2.5-pro");
+    expect(screen.getByRole("textbox", { name: "模型型号 MiMo V2.5" })).toHaveValue("mimo-v2.5");
+    expect(screen.getByRole("radio", { name: "设为默认 MiMo V2.5 Pro" })).toBeChecked();
     expect(screen.getByLabelText("Base URL")).toHaveAttribute("readonly");
   });
 
@@ -142,10 +147,9 @@ describe("ProviderConfigModal and UserMenu", () => {
       modelsUrl: "https://api.deepseek.com/models"
     });
 
-    const modelSelect = screen.getByLabelText("模型名");
-    expect(await within(modelSelect).findByRole("option", { name: "deepseek-live" })).toBeInTheDocument();
+    expect(await screen.findByRole("textbox", { name: "模型型号 deepseek-live" })).toHaveValue("deepseek-live");
 
-    await user.selectOptions(modelSelect, "deepseek-live");
+    await user.click(screen.getByRole("radio", { name: "设为默认 deepseek-live" }));
     await user.click(screen.getByRole("button", { name: "保存配置" }));
 
     expect(onSaveProvider).toHaveBeenCalledWith(
@@ -163,6 +167,121 @@ describe("ProviderConfigModal and UserMenu", () => {
             isDefault: true
           })
         ])
+      })
+    );
+  });
+
+  it("edits a saved provider without showing api key and saves updated default model", async () => {
+    const user = userEvent.setup();
+    const { onSaveProvider } = renderModal();
+
+    await user.click(screen.getByRole("button", { name: "编辑 DeepSeek" }));
+
+    expect(screen.getByLabelText("API key")).toHaveValue("");
+
+    await user.click(screen.getByRole("radio", { name: "设为默认 DeepSeek V4 Pro" }));
+    await user.clear(screen.getByRole("textbox", { name: "模型型号 DeepSeek V4 Pro" }));
+    await user.type(screen.getByRole("textbox", { name: "模型型号 DeepSeek V4 Pro" }), " deepseek-v4-pro-chat ");
+    await user.click(screen.getByRole("button", { name: "保存配置" }));
+
+    expect(onSaveProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: "provider-1",
+        apiKey: undefined,
+        modelName: "deepseek-v4-pro-chat",
+        models: [
+          expect.objectContaining({
+            id: "deepseek-v4-flash",
+            displayName: "DeepSeek V4 Flash",
+            enabled: true,
+            isDefault: false
+          }),
+          expect.objectContaining({
+            id: "deepseek-v4-pro-chat",
+            displayName: "DeepSeek V4 Pro",
+            enabled: true,
+            isDefault: true
+          })
+        ]
+      })
+    );
+  });
+
+  it("keeps the selected default model enabled while editing saved provider models", async () => {
+    const user = userEvent.setup();
+    renderModal({
+      providers: [
+        {
+          ...providerView,
+          models: [
+            providerView.models[0],
+            {
+              ...providerView.models[1],
+              enabled: false
+            }
+          ]
+        }
+      ]
+    });
+
+    await user.click(screen.getByRole("button", { name: "编辑 DeepSeek" }));
+
+    const defaultEnabled = screen.getByRole("checkbox", { name: "启用 DeepSeek V4 Flash" });
+    expect(defaultEnabled).toBeChecked();
+    expect(defaultEnabled).toBeDisabled();
+
+    await user.click(screen.getByRole("radio", { name: "设为默认 DeepSeek V4 Pro" }));
+
+    const nextDefaultEnabled = screen.getByRole("checkbox", { name: "启用 DeepSeek V4 Pro" });
+    expect(nextDefaultEnabled).toBeChecked();
+    expect(nextDefaultEnabled).toBeDisabled();
+  });
+
+  it("adds a custom model row and saves it as the default model", async () => {
+    const user = userEvent.setup();
+    const { onSaveProvider } = renderModal({ providers: [] });
+
+    await user.click(screen.getByRole("radio", { name: "自定义 OpenAI-compatible" }));
+    await user.type(screen.getByLabelText("Base URL"), "https://llm.example.test/v1");
+    await user.type(screen.getByLabelText("API key"), "sk-custom-test");
+    await user.type(screen.getByRole("textbox", { name: "模型型号 1" }), "custom-first");
+    await user.click(screen.getByRole("button", { name: "添加模型" }));
+    await user.type(screen.getByRole("textbox", { name: "模型型号 2" }), "custom-second");
+    await user.click(screen.getByRole("radio", { name: "设为默认 custom-second" }));
+    await user.click(screen.getByRole("button", { name: "保存配置" }));
+
+    expect(onSaveProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        presetId: "custom-openai-compatible",
+        modelName: "custom-second",
+        models: [
+          expect.objectContaining({ id: "custom-first", enabled: true, isDefault: false }),
+          expect.objectContaining({ id: "custom-second", enabled: true, isDefault: true })
+        ]
+      })
+    );
+  });
+
+  it("saves a custom second model with trimmed id as the default model", async () => {
+    const user = userEvent.setup();
+    const { onSaveProvider } = renderModal({ providers: [] });
+
+    await user.click(screen.getByRole("radio", { name: "自定义 OpenAI-compatible" }));
+    await user.type(screen.getByLabelText("Base URL"), "https://llm.example.test/v1");
+    await user.type(screen.getByLabelText("API key"), "sk-custom-test");
+    await user.type(screen.getByRole("textbox", { name: "模型型号 1" }), "custom-first");
+    await user.click(screen.getByRole("button", { name: "添加模型" }));
+    await user.type(screen.getByRole("textbox", { name: "模型型号 2" }), " custom-second ");
+    await user.click(screen.getByRole("radio", { name: "设为默认 custom-second" }));
+    await user.click(screen.getByRole("button", { name: "保存配置" }));
+
+    expect(onSaveProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelName: "custom-second",
+        models: [
+          expect.objectContaining({ id: "custom-first", enabled: true, isDefault: false }),
+          expect.objectContaining({ id: "custom-second", enabled: true, isDefault: true })
+        ]
       })
     );
   });
@@ -189,12 +308,12 @@ describe("ProviderConfigModal and UserMenu", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByLabelText("模型名")).toHaveValue("");
+      expect(screen.getByRole("textbox", { name: "模型型号 1" })).toHaveValue("");
     });
-    expect(screen.queryByRole("option", { name: "deepseek-live" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "模型型号 deepseek-live" })).not.toBeInTheDocument();
   });
 
-  it("uses a model combobox for custom providers after fetching live models", async () => {
+  it("uses editable model rows for custom providers after fetching live models", async () => {
     const user = userEvent.setup();
     const { onFetchProviderModels } = renderModal({
       providers: [],
@@ -212,8 +331,8 @@ describe("ProviderConfigModal and UserMenu", () => {
       modelsUrl: undefined
     });
 
-    const modelSelect = await screen.findByRole("combobox", { name: "模型名" });
-    expect(within(modelSelect).getByRole("option", { name: "custom-live-model" })).toBeInTheDocument();
+    expect(await screen.findByRole("textbox", { name: "模型型号 custom-live-model" })).toHaveValue("custom-live-model");
+    expect(screen.getByRole("radio", { name: "设为默认 custom-live-model" })).toBeChecked();
   });
 
   it("shows an OpenAI-compatible /v1 base URL example for custom providers", async () => {

@@ -6,14 +6,12 @@ import {
 } from "@novel-extractor/config";
 import { toTaskStatus } from "@novel-extractor/domain/job";
 import type { BookUploadResultDto, CreateJobDto, JobDto } from "../../../shared/ipcTypes";
+import {
+  AUTO_PROVIDER_OPTION_ID,
+  type ExtractionModelSelectionMode,
+  type ExtractionProviderOption
+} from "../providers/providerViewModel";
 import { getDefaultTemplateViews, type TemplateView } from "../templates/templateViewModel";
-
-export interface ExtractionModel {
-  id: string;
-  providerConfigId: string;
-  modelId: string;
-  displayName: string;
-}
 
 export interface ExtractionBook {
   id: string;
@@ -49,6 +47,7 @@ export interface ExtractionJobInputSummary {
   bookDisplayName: string;
   templateNames: string[];
   modelId: string;
+  modelSelectionMode?: "explicit" | "auto";
 }
 
 export interface ExtractionJob {
@@ -64,12 +63,15 @@ export interface ExtractionJob {
   failureReason?: string;
   logFilePath?: string;
   createdAt?: string;
+  autoRetryOnFailure?: boolean;
 }
 
 export interface ExtractionFormState {
   bookId: string;
   templateIds: string[];
-  modelOptionId: string;
+  modelProviderOptionId: string;
+  modelModelId: string;
+  modelSelectionMode: ExtractionModelSelectionMode;
   singleRunChapterCount: number;
   extractionChapterCount: number;
   overlapChapterCount: number;
@@ -78,15 +80,21 @@ export interface ExtractionFormState {
 
 export interface ExtractionFormStateInput {
   books: readonly (ExtractionBook | BookUploadResultDto)[];
-  models: readonly ExtractionModel[];
+  providerOptions: readonly ExtractionProviderOption[];
   templates?: readonly TemplateView[];
   defaults?: ExtractionParameterDefaults;
   selectedTemplateIds?: readonly string[];
 }
 
 export interface BuildCreateJobDtoContext {
-  models: readonly ExtractionModel[];
+  providerOptions: readonly ExtractionProviderOption[];
 }
+
+type ProviderOption = Extract<ExtractionProviderOption, { kind: "provider" }>;
+type FormModelSelection = Pick<
+  ExtractionFormState,
+  "modelProviderOptionId" | "modelModelId" | "modelSelectionMode"
+>;
 
 function getBookId(book: ExtractionBook | BookUploadResultDto): string {
   return "bookId" in book ? book.bookId : book.id;
@@ -113,17 +121,74 @@ function firstBookId(books: readonly (ExtractionBook | BookUploadResultDto)[]): 
   return books[0] ? getBookId(books[0]) : "";
 }
 
+function isProviderOption(option: ExtractionProviderOption): option is ProviderOption {
+  return option.kind === "provider";
+}
+
+function getProviderOptions(
+  providerOptions: readonly ExtractionProviderOption[]
+): ProviderOption[] {
+  return providerOptions.filter(isProviderOption);
+}
+
+function createAutoModelSelection(
+  providerOptions: readonly ExtractionProviderOption[]
+): FormModelSelection {
+  const firstProviderOption = getProviderOptions(providerOptions)[0];
+
+  return {
+    modelProviderOptionId: firstProviderOption ? AUTO_PROVIDER_OPTION_ID : "",
+    modelModelId: firstProviderOption?.defaultModelId ?? "",
+    modelSelectionMode: "auto"
+  };
+}
+
+function reconcileModelSelection(
+  state: ExtractionFormState,
+  providerOptions: readonly ExtractionProviderOption[]
+): FormModelSelection {
+  const providerOnlyOptions = getProviderOptions(providerOptions);
+
+  if (providerOnlyOptions.length === 0) {
+    return {
+      modelProviderOptionId: "",
+      modelModelId: "",
+      modelSelectionMode: "auto"
+    };
+  }
+
+  if (state.modelSelectionMode === "explicit") {
+    const selectedProvider = providerOnlyOptions.find(
+      (providerOption) => providerOption.id === state.modelProviderOptionId
+    );
+
+    if (selectedProvider) {
+      return {
+        modelProviderOptionId: selectedProvider.id,
+        modelModelId: selectedProvider.models.some((model) => model.id === state.modelModelId)
+          ? state.modelModelId
+          : selectedProvider.defaultModelId,
+        modelSelectionMode: "explicit"
+      };
+    }
+  }
+
+  return createAutoModelSelection(providerOptions);
+}
+
 export function createExtractionFormState({
   books,
-  models,
+  providerOptions,
   templates = getDefaultTemplateViews(),
   defaults = getExtractionParameterDefaults(),
   selectedTemplateIds
 }: ExtractionFormStateInput): ExtractionFormState {
+  const modelSelection = createAutoModelSelection(providerOptions);
+
   return {
     bookId: firstBookId(books),
     templateIds: getInitialTemplateIds(templates, selectedTemplateIds),
-    modelOptionId: models[0]?.id ?? "",
+    ...modelSelection,
     singleRunChapterCount: defaults.singleRunChapterCount,
     extractionChapterCount: defaults.extractionChapterCount,
     overlapChapterCount: defaults.overlapChapterCount,
@@ -133,10 +198,15 @@ export function createExtractionFormState({
 
 export function reconcileExtractionFormState(
   state: ExtractionFormState,
-  { books, models, templates = getDefaultTemplateViews(), selectedTemplateIds }: ExtractionFormStateInput
+  {
+    books,
+    providerOptions,
+    templates = getDefaultTemplateViews(),
+    selectedTemplateIds
+  }: ExtractionFormStateInput
 ): ExtractionFormState {
   const bookIds = new Set(books.map(getBookId));
-  const modelIds = new Set(models.map((model) => model.id));
+  const modelSelection = reconcileModelSelection(state, providerOptions);
   const templateIds = new Set(getTemplateIds(templates));
   const nextTemplateIds = selectedTemplateIds
     ? selectedTemplateIds.filter((templateId) => templateIds.has(templateId))
@@ -145,7 +215,7 @@ export function reconcileExtractionFormState(
   return {
     ...state,
     bookId: bookIds.has(state.bookId) ? state.bookId : firstBookId(books),
-    modelOptionId: modelIds.has(state.modelOptionId) ? state.modelOptionId : models[0]?.id ?? "",
+    ...modelSelection,
     templateIds: selectedTemplateIds
       ? nextTemplateIds
       : nextTemplateIds.length > 0
@@ -166,9 +236,19 @@ export function buildCreateJobDto(
   state: ExtractionFormState,
   context: BuildCreateJobDtoContext
 ): CreateJobDto {
-  const selectedModel = context.models.find((model) => model.id === state.modelOptionId);
+  const providerOptions = getProviderOptions(context.providerOptions);
+  const modelSelectionMode: ExtractionModelSelectionMode =
+    state.modelSelectionMode === "explicit" ? "explicit" : "auto";
+  const selectedProvider =
+    modelSelectionMode === "auto"
+      ? providerOptions[0]
+      : providerOptions.find((providerOption) => providerOption.id === state.modelProviderOptionId);
+  const selectedModelId =
+    modelSelectionMode === "auto"
+      ? selectedProvider?.defaultModelId
+      : selectedProvider?.models.find((model) => model.id === state.modelModelId)?.id;
 
-  if (!selectedModel) {
+  if (!selectedProvider || !selectedModelId) {
     throw new Error("请选择模型");
   }
 
@@ -193,8 +273,9 @@ export function buildCreateJobDto(
   return {
     bookId: state.bookId,
     templateIds: state.templateIds,
-    providerConfigId: selectedModel.providerConfigId,
-    modelId: selectedModel.modelId,
+    providerConfigId: selectedProvider.providerConfigId,
+    modelId: selectedModelId,
+    modelSelectionMode,
     singleRunChapterCount,
     extractionChapterCount,
     overlapChapterCount,
@@ -243,7 +324,8 @@ export function mapJobDtoToExtractionJob(job: JobDto): ExtractionJob | null {
     tokenText: job.tokenText,
     failureReason: job.failureReason,
     logFilePath: job.logFilePath,
-    createdAt: job.createdAt
+    createdAt: job.createdAt,
+    autoRetryOnFailure: job.autoRetryOnFailure
   };
 }
 

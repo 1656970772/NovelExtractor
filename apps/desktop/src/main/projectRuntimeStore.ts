@@ -232,14 +232,45 @@ function isReport(value: unknown): value is ReportAsset {
 }
 
 function normalizeInterruptedJob(job: ProjectRuntimeJobRecord): ProjectRuntimeJobRecord {
-  if (job.status !== "running" && job.status !== "pause_requested") {
-    return job;
+  const input = normalizeJobInput(job.input);
+  const baseJob =
+    input === job.input
+      ? job
+      : {
+          ...job,
+          input
+        };
+
+  if (baseJob.status !== "running" && baseJob.status !== "pause_requested") {
+    return baseJob;
   }
 
   return {
-    ...job,
+    ...baseJob,
     status: "paused",
     failureReason: undefined
+  };
+}
+
+function normalizeJobInput(input: CreateJobDto): CreateJobDto {
+  const modelSelectionMode =
+    input.modelSelectionMode === "auto" || input.modelSelectionMode === "explicit"
+      ? input.modelSelectionMode
+      : "explicit";
+  const autoRetryOnFailure =
+    typeof input.autoRetryOnFailure === "boolean" ? input.autoRetryOnFailure : false;
+
+  if (
+    modelSelectionMode === input.modelSelectionMode &&
+    autoRetryOnFailure === input.autoRetryOnFailure
+  ) {
+    return input;
+  }
+
+  return {
+    ...input,
+    modelSelectionMode,
+    autoRetryOnFailure
   };
 }
 
@@ -268,7 +299,14 @@ function normalizeState(value: unknown): { changed: boolean; state: ProjectRunti
   return {
     changed:
       value.schemaVersion !== PROJECT_RUNTIME_SCHEMA_VERSION ||
-      jobs.some((job, index) => job.status !== sourceJobs[index]?.status) ||
+      jobs.some((job, index) => {
+        const sourceJob = sourceJobs[index];
+        return (
+          job.status !== sourceJob?.status ||
+          job.input.modelSelectionMode !== sourceJob.input.modelSelectionMode ||
+          job.input.autoRetryOnFailure !== sourceJob.input.autoRetryOnFailure
+        );
+      }) ||
       Object.prototype.hasOwnProperty.call(value, "chaptersByBookId"),
     state: {
       schemaVersion: PROJECT_RUNTIME_SCHEMA_VERSION,

@@ -82,6 +82,23 @@ describe("jobQueueViewModel", () => {
     expect(card.completedAtText).toBe("2026-07-02 18:12:48");
   });
 
+  it("shows automatic retry policy text for enabled jobs", () => {
+    expect(
+      getJobCardViewModel({
+        id: "failed-retry",
+        status: "failed",
+        autoRetryOnFailure: true
+      }).retryPolicyText
+    ).toBe("自动续跑已开启");
+    expect(
+      getJobCardViewModel({
+        id: "running-retry",
+        status: "running",
+        autoRetryOnFailure: true
+      }).retryPolicyText
+    ).toBe("失败后自动续跑");
+  });
+
   it("uses the current clock for running elapsed time without changing the total estimate", () => {
     const card = getJobCardViewModel(
       {

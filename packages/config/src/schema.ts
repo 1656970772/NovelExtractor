@@ -211,6 +211,17 @@ export interface JobSchedulerDefaults {
   queuedByBookLimitText: string;
 }
 
+export interface JobFailureRetryDefaults {
+  failureRetryIntervalMs: number;
+}
+
+export interface LlmFailurePolicyDefaults {
+  switchableHttpStatuses: number[];
+  switchableMessageFragments: string[];
+  switchableNetworkErrorFragments: string[];
+  maxAutoFallbackRoundsPerWindow: number;
+}
+
 export interface ReportFileNameInput {
   name: string;
   outputFileName?: string;
@@ -324,6 +335,8 @@ export interface NovelExtractorConfig {
   ruleLayerDefaults: RuleLayerDefaults;
   quantityPolicyDefaults: QuantityPolicyDefaults;
   jobSchedulerDefaults: JobSchedulerDefaults;
+  jobFailureRetryDefaults: JobFailureRetryDefaults;
+  llmFailurePolicyDefaults: LlmFailurePolicyDefaults;
   taskActions: TaskActionConfig;
   taskStatus: TaskStatusConfig;
   assetTypes: AssetTypeConfig[];

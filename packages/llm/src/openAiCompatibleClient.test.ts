@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { CredentialStore as DomainCredentialStore } from "@novel-extractor/domain";
 import {
   OpenAiCompatibleClient,
+  OpenAiCompatibleRequestError,
   type CredentialStore,
   type FetchLike
 } from "./openAiCompatibleClient";
@@ -994,6 +995,83 @@ describe("OpenAiCompatibleClient", () => {
     ).rejects.not.toThrow(apiKey);
   });
 
+  it("throws structured HTTP request errors with redacted details", async () => {
+    const apiKey = "sk-" + "http-structured-secret";
+    const statusText = `Too Many Requests Bearer ${apiKey}`;
+    const client = new OpenAiCompatibleClient(
+      createProvider(),
+      { resolveApiKey: async () => apiKey },
+      {
+        fetch: vi.fn(async () => {
+          return new Response(
+            JSON.stringify({
+              error: {
+                message: `rate limit for Bearer ${apiKey}`
+              }
+            }),
+            { status: 429, statusText }
+          );
+        }),
+        retry: { maxAttempts: 1 }
+      }
+    );
+
+    let thrown: unknown;
+    try {
+      await client.chatCompletion({
+        providerId: "deepseek-user",
+        modelId: "novel-analysis",
+        messages: [{ role: "user", content: "hello" }]
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(OpenAiCompatibleRequestError);
+    expect(thrown).toMatchObject({
+      kind: "http",
+      details: {
+        status: 429,
+        statusText: "Too Many Requests Bearer sk-***",
+        body: {
+          error: {
+            message: "rate limit for Bearer sk-***"
+          }
+        }
+      }
+    });
+    expect((thrown as Error).message).toContain("HTTP 429 Too Many Requests Bearer sk-***");
+    expect((thrown as OpenAiCompatibleRequestError).details.statusText).not.toContain(apiKey);
+    expect(JSON.stringify(thrown)).not.toContain(apiKey);
+    expect((thrown as Error).message).not.toContain(apiKey);
+  });
+
+  it("throws structured network request errors after fetch failures", async () => {
+    const client = new OpenAiCompatibleClient(
+      createProvider(),
+      { resolveApiKey: async () => "sk-timeout-secret" },
+      {
+        fetch: vi.fn(async () => {
+          throw new Error("ETIMEDOUT");
+        }),
+        retry: { maxAttempts: 1 }
+      }
+    );
+
+    await expect(
+      client.chatCompletion({
+        providerId: "deepseek-user",
+        modelId: "novel-analysis",
+        messages: [{ role: "user", content: "hello" }]
+      })
+    ).rejects.toMatchObject({
+      kind: "network",
+      details: {
+        body: "ETIMEDOUT"
+      }
+    });
+  });
+
   it("redacts secrets from fetch failures and connection tests", async () => {
     const apiKey = "sk-" + "network-secret";
     const client = new OpenAiCompatibleClient(
@@ -1101,6 +1179,7 @@ describe("OpenAiCompatibleClient", () => {
 
   it("redacts secrets from response body read failures", async () => {
     const apiKey = "plain" + "secret12345";
+    const statusText = `OK Bearer ${apiKey}`;
     const client = new OpenAiCompatibleClient(
       createProvider(),
       { resolveApiKey: async () => apiKey },
@@ -1109,7 +1188,7 @@ describe("OpenAiCompatibleClient", () => {
           return {
             ok: true,
             status: 200,
-            statusText: "OK",
+            statusText,
             text: async () => {
               throw new Error(`failed to read response for api key ${apiKey}`);
             }
@@ -1133,6 +1212,15 @@ describe("OpenAiCompatibleClient", () => {
     const message = (thrown as Error).message;
     expect(message).toBe("failed to read response for api key ***");
     expect(message).not.toContain(apiKey);
+    expect(thrown).toMatchObject({
+      kind: "response_body",
+      details: {
+        status: 200,
+        statusText: "OK Bearer ***",
+        body: "failed to read response for api key ***"
+      }
+    });
+    expect(JSON.stringify(thrown)).not.toContain(apiKey);
   });
 
   it("redacts secrets from successful connection test raw responses", async () => {

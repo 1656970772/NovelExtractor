@@ -158,16 +158,17 @@ describe("window run coverage context", () => {
     expect(append).toHaveBeenCalledWith(
       ["上下文", "模型切换"],
       expect.objectContaining({
-        从: expect.stringContaining("minimax-provider/minimax-chat"),
-        到: expect.stringContaining("deepseek-provider/deepseek-chat")
+        从: expect.stringContaining("MiniMax / minimax-chat"),
+        到: expect.stringContaining("DeepSeek / deepseek-chat")
       })
     );
     expect(onModelCandidateChanged).toHaveBeenCalledWith({
       jobId: "job-1",
       candidate: {
         providerConfigId: "deepseek-provider",
-        providerId: "deepseek-provider",
-        modelId: "deepseek-chat"
+        providerDisplayName: "DeepSeek",
+        modelId: "deepseek-chat",
+        modelDisplayName: "deepseek-chat"
       }
     });
   }, 20000);

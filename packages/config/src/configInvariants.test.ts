@@ -26,6 +26,17 @@ interface ToolLoopDefaultsTestShape {
   windowInstructionLines: string[];
 }
 
+interface JobFailureRetryDefaultsTestShape {
+  failureRetryIntervalMs: number;
+}
+
+interface LlmFailurePolicyDefaultsTestShape {
+  switchableHttpStatuses: number[];
+  switchableMessageFragments: string[];
+  switchableNetworkErrorFragments: string[];
+  maxAutoFallbackRoundsPerWindow: number;
+}
+
 const TOOL_ERROR_FORMAT_EXAMPLE =
   '正确格式示例：edit_file 参数 {"path":"[报告]NPC性格与代表事件.md","old_string":"旧","new_string":"新"}。';
 
@@ -494,6 +505,52 @@ describe("config invariants", () => {
     expectInvariantViolation(withJobSchedulerDefaults({ queuedByGlobalLimitText: " " }), /global limit queue text/i);
     expectInvariantViolation(withJobSchedulerDefaults({ queuedByBookLimitText: "" }), /book limit queue text/i);
   });
+
+  it("requires failed job retry defaults to be configured with a positive interval", () => {
+    const missingDefaults = getDefaultConfig();
+    delete (missingDefaults as unknown as Record<string, unknown>).jobFailureRetryDefaults;
+    expectInvariantViolation(missingDefaults, /job failure retry defaults/i);
+
+    expectInvariantViolation(
+      withJobFailureRetryDefaults({ failureRetryIntervalMs: 0 }),
+      /failure retry interval/i
+    );
+    expectInvariantViolation(
+      withJobFailureRetryDefaults({ failureRetryIntervalMs: 1.5 }),
+      /failure retry interval/i
+    );
+  });
+
+  it("requires LLM failure policy defaults to contain switchable error rules", () => {
+    const missingDefaults = getDefaultConfig();
+    delete (missingDefaults as unknown as Record<string, unknown>).llmFailurePolicyDefaults;
+    expectInvariantViolation(missingDefaults, /llm failure policy defaults/i);
+
+    expectInvariantViolation(
+      withLlmFailurePolicyDefaults({ switchableHttpStatuses: [] }),
+      /switchable http statuses/i
+    );
+    expectInvariantViolation(
+      withLlmFailurePolicyDefaults({ switchableHttpStatuses: [429, 429] }),
+      /switchable http statuses/i
+    );
+    expectInvariantViolation(
+      withLlmFailurePolicyDefaults({ switchableHttpStatuses: [99] }),
+      /switchable http statuses/i
+    );
+    expectInvariantViolation(
+      withLlmFailurePolicyDefaults({ switchableMessageFragments: ["rate limit", " "] }),
+      /switchable message fragments/i
+    );
+    expectInvariantViolation(
+      withLlmFailurePolicyDefaults({ switchableNetworkErrorFragments: [] }),
+      /switchable network error fragments/i
+    );
+    expectInvariantViolation(
+      withLlmFailurePolicyDefaults({ maxAutoFallbackRoundsPerWindow: 0 }),
+      /max auto fallback rounds/i
+    );
+  });
 });
 
 function withJobSchedulerDefaults(
@@ -508,5 +565,32 @@ function withJobSchedulerDefaults(
     queuedByBookLimitText: "等待同书任务完成",
     ...overrides
   };
+  return config;
+}
+
+function withJobFailureRetryDefaults(
+  overrides: Partial<JobFailureRetryDefaultsTestShape>
+): NovelExtractorConfig {
+  const config = getDefaultConfig();
+  (config as unknown as { jobFailureRetryDefaults: JobFailureRetryDefaultsTestShape })
+    .jobFailureRetryDefaults = {
+      failureRetryIntervalMs: 300000,
+      ...overrides
+    };
+  return config;
+}
+
+function withLlmFailurePolicyDefaults(
+  overrides: Partial<LlmFailurePolicyDefaultsTestShape>
+): NovelExtractorConfig {
+  const config = getDefaultConfig();
+  (config as unknown as { llmFailurePolicyDefaults: LlmFailurePolicyDefaultsTestShape })
+    .llmFailurePolicyDefaults = {
+      switchableHttpStatuses: [408, 429, 500],
+      switchableMessageFragments: ["rate limit", "quota"],
+      switchableNetworkErrorFragments: ["fetch failed", "ECONNRESET"],
+      maxAutoFallbackRoundsPerWindow: 2,
+      ...overrides
+    };
   return config;
 }

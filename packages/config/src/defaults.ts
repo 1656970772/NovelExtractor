@@ -242,6 +242,34 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
     queuedByGlobalLimitText: "等待可用运行槽",
     queuedByBookLimitText: "等待同书任务完成"
   },
+  jobFailureRetryDefaults: {
+    failureRetryIntervalMs: 300000
+  },
+  llmFailurePolicyDefaults: {
+    switchableHttpStatuses: [408, 409, 425, 429, 500, 502, 503, 504],
+    switchableMessageFragments: [
+      "rate limit",
+      "too many requests",
+      "quota",
+      "insufficient_quota",
+      "insufficient balance",
+      "余额不足",
+      "额度不足",
+      "timeout",
+      "timed out"
+    ],
+    switchableNetworkErrorFragments: [
+      "terminated",
+      "fetch failed",
+      "network error",
+      "socket hang up",
+      "ECONNRESET",
+      "ETIMEDOUT",
+      "EPIPE",
+      "UND_ERR"
+    ],
+    maxAutoFallbackRoundsPerWindow: 2
+  },
   taskActions: {
     start: {
       label: "开始"

@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { JobDto, ProjectDto, TemplateDto } from "../shared/ipcTypes";
 import { App } from "./App";
+import { AUTO_PROVIDER_OPTION_ID } from "./features/providers/providerViewModel";
 import { getDefaultTemplateViews } from "./features/templates/templateViewModel";
 import { applyThemeTokens } from "./theme";
 
@@ -54,6 +55,7 @@ function installDesktopApiMock() {
     pauseJob: vi.fn(),
     resumeJob: vi.fn(),
     restartJob: vi.fn(),
+    updateJobRetryPolicy: vi.fn(),
     deleteJob: vi.fn(),
     readJobLog: vi.fn(),
     openJobLog: vi.fn(),
@@ -338,7 +340,9 @@ describe("desktop workbench shell", () => {
 
     await user.click(screen.getByRole("button", { name: "提取" }));
 
-    expect(await screen.findByText("DeepSeek / 模型 A")).toBeInTheDocument();
+    expect(await screen.findByRole("combobox", { name: "模型服务" })).toHaveValue(
+      AUTO_PROVIDER_OPTION_ID
+    );
 
     const file = new File(["第一章 初入仙途"], "凡人修仙传.txt", { type: "text/plain" });
     await user.upload(screen.getByLabelText("选择小说文件"), file);
@@ -367,6 +371,7 @@ describe("desktop workbench shell", () => {
         templateIds: ["pill-analysis"],
         providerConfigId: "provider-1",
         modelId: "model-a",
+        modelSelectionMode: "auto",
         singleRunChapterCount: 4,
         extractionChapterCount: 12,
         overlapChapterCount: 0,
@@ -423,7 +428,9 @@ describe("desktop workbench shell", () => {
     render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
 
     await user.click(screen.getByRole("button", { name: "提取" }));
-    expect(await screen.findByText("DeepSeek / 模型 A")).toBeInTheDocument();
+    expect(await screen.findByRole("combobox", { name: "模型服务" })).toHaveValue(
+      AUTO_PROVIDER_OPTION_ID
+    );
 
     const file = new File(["第一章 初入仙途"], "凡人修仙传.txt", { type: "text/plain" });
     await user.upload(screen.getByLabelText("选择小说文件"), file);
@@ -604,7 +611,9 @@ describe("desktop workbench shell", () => {
     render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
 
     await user.click(screen.getByRole("button", { name: "提取" }));
-    expect(await screen.findByText("DeepSeek / 模型 A")).toBeInTheDocument();
+    expect(await screen.findByRole("combobox", { name: "模型服务" })).toHaveValue(
+      AUTO_PROVIDER_OPTION_ID
+    );
 
     const file = new File(["第一章 初入仙途"], "凡人修仙传.txt", { type: "text/plain" });
     await user.upload(screen.getByLabelText("选择小说文件"), file);
@@ -721,6 +730,57 @@ describe("desktop workbench shell", () => {
     await user.click(await screen.findByRole("button", { name: "打开输出目录" }));
 
     expect(api.openJobOutputDirectory).toHaveBeenCalledWith({ jobId: "job-completed" });
+  });
+
+  it("updates failed-job retry policy through the desktop api", async () => {
+    const user = userEvent.setup();
+    const api = installDesktopApiMock();
+    api.getProjectRuntime.mockResolvedValue({
+      books: [],
+      jobs: [
+        {
+          id: "job-failed",
+          bookId: "book-1",
+          status: "failed",
+          progressText: "进度：0/2",
+          inputSummary: {
+            bookDisplayName: "凡人修仙传",
+            templateNames: ["丹药分析模板"],
+            modelId: "deepseek-chat"
+          },
+          allowedActions: ["resume", "restart", "delete"],
+          autoRetryOnFailure: false,
+          createdAt: "2026-07-02T10:00:00.000Z",
+          updatedAt: "2026-07-02T10:12:48.000Z"
+        }
+      ]
+    });
+    api.updateJobRetryPolicy.mockResolvedValue({
+      id: "job-failed",
+      bookId: "book-1",
+      status: "failed",
+      progressText: "进度：0/2",
+      inputSummary: {
+        bookDisplayName: "凡人修仙传",
+        templateNames: ["丹药分析模板"],
+        modelId: "deepseek-chat"
+      },
+      allowedActions: ["resume", "restart", "delete"],
+      autoRetryOnFailure: true,
+      createdAt: "2026-07-02T10:00:00.000Z",
+      updatedAt: "2026-07-02T10:13:00.000Z"
+    });
+
+    render(<App initialState={{ project: { id: "project-a", displayName: "仙途资料" } }} />);
+
+    await user.click(screen.getByRole("button", { name: "提取" }));
+    await user.click(await screen.findByRole("checkbox", { name: "失败后自动续跑" }));
+
+    expect(api.updateJobRetryPolicy).toHaveBeenCalledWith({
+      jobId: "job-failed",
+      autoRetryOnFailure: true
+    });
+    expect(await screen.findByText("自动续跑已开启")).toBeInTheDocument();
   });
 
   it("shows an extraction error when opening the job output directory fails", async () => {

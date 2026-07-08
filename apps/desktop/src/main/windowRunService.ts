@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { getDefaultConfig, getProviderPresets } from "@novel-extractor/config";
-import type { Book, Clock, IdGenerator, Project, ProviderConfig, ReportAsset } from "@novel-extractor/domain";
+import type { Book, Clock, IdGenerator, Project, ReportAsset } from "@novel-extractor/domain";
 import {
   buildTemplatePromptProfile,
   renderTemplatePromptProfileCard,
@@ -48,6 +48,10 @@ import {
 import type { TemplateDto } from "../shared/ipcTypes";
 import { createBatchOutcomeTracker, type BatchOutcome, type BatchOutcomeTracker } from "./batchOutcomeTracker";
 import { redactSecrets, type MemoryCredentialStore } from "./credentials";
+import {
+  createModelFallbackPlan,
+  type ModelFallbackCandidate
+} from "./modelFallbackPlan";
 import type { MainProviderStore } from "./providerStore";
 import {
   loadReportCoverageIndex,
@@ -214,12 +218,6 @@ type WindowRunJobContext = {
   };
   coveragePlanByWindowId: Map<string, WindowCoveragePlan>;
 };
-
-export interface ModelFallbackCandidate {
-  providerConfigId: string;
-  providerId: string;
-  modelId: string;
-}
 
 interface RuntimeChatClient {
   chatCompletion(input: {
@@ -2392,55 +2390,14 @@ function replaceBatchOutcomeCorrectionMessage(
   });
 }
 
-function createModelFallbackCandidates(input: {
-  currentModelId: string;
-  currentProviderConfigId: string;
-  providerConfigs: readonly ProviderConfig[];
-}): ModelFallbackCandidate[] {
-  const candidates = input.providerConfigs
-    .filter((providerConfig) => providerConfig.enabled && Boolean(providerConfig.apiKeyRef))
-    .flatMap((providerConfig) => {
-      const enabledModels = providerConfig.models.filter((model) => model.enabled);
-      if (enabledModels.length === 0) {
-        return [];
-      }
-
-      const defaultModel = enabledModels.find((model) => model.isDefault) ?? enabledModels[0];
-      const currentModel = enabledModels.find((model) => model.id === input.currentModelId);
-      const modelId =
-        providerConfig.id === input.currentProviderConfigId && currentModel
-          ? currentModel.id
-          : defaultModel.id;
-
-      return [{
-        providerConfigId: providerConfig.id,
-        providerId: providerConfig.id,
-        modelId
-      }];
-    });
-
-  const currentIndex = candidates.findIndex(
-    (candidate) => candidate.providerConfigId === input.currentProviderConfigId
-  );
-
-  if (currentIndex <= 0) {
-    return candidates;
-  }
-
-  return [...candidates.slice(currentIndex), ...candidates.slice(0, currentIndex)];
-}
-
 function maxAutoFallbackSwitches(candidateCount: number): number {
-  const policyDefaults = DEFAULT_CONFIG as typeof DEFAULT_CONFIG & {
-    llmFailurePolicyDefaults?: { maxAutoFallbackRoundsPerWindow?: number };
-  };
-  const rounds = policyDefaults.llmFailurePolicyDefaults?.maxAutoFallbackRoundsPerWindow ?? 1;
+  const rounds = DEFAULT_CONFIG.llmFailurePolicyDefaults.maxAutoFallbackRoundsPerWindow;
 
   return Math.max(0, candidateCount * Math.max(0, Math.floor(rounds)));
 }
 
 function formatModelCandidate(candidate: ModelFallbackCandidate): string {
-  return `${candidate.providerConfigId}/${candidate.modelId}`;
+  return `${candidate.providerDisplayName} / ${candidate.modelDisplayName}`;
 }
 
 export function createWindowRunService(options: WindowRunServiceOptions): WindowRunService {
@@ -2655,7 +2612,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
           ["大模型请求", "Prompt"],
           serializeModelRequestForTaskLog({
             value: {
-              供应商: requestCandidate.providerId,
+              供应商: requestCandidate.providerDisplayName,
               模型: requestCandidate.modelId,
               窗口: `${input.manifestWindow.index + 1}/${input.totalWindowCount}`,
               批次: `${input.batchIndex + 1}/${input.batchTotal}`,
@@ -2675,7 +2632,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
               ["大模型请求", "ProviderBody"],
               serializeModelRequestForTaskLog({
                 value: {
-                  供应商: preparedCandidate.providerId,
+                  供应商: preparedCandidate.providerDisplayName,
                   模型: preparedCandidate.modelId,
                   协议: snapshot.apiFormat,
                   请求URL: snapshot.url,
@@ -3101,29 +3058,32 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
       const { provider, modelId } = registry.resolveModelRef(
         `${job.input.providerConfigId}/${job.input.modelId}`
       );
+      const model = provider.models.find((candidate) => candidate.id === modelId);
 
       return {
         providerConfigId: job.input.providerConfigId,
-        providerId: provider.id,
-        modelId
+        providerDisplayName: provider.displayName,
+        modelId,
+        modelDisplayName: model?.displayName ?? modelId
       };
     };
-    const candidates =
+    const fallbackPlan =
       job.input.modelSelectionMode === "auto"
-        ? createModelFallbackCandidates({
-            currentModelId: job.input.modelId,
-            currentProviderConfigId: job.input.providerConfigId,
-            providerConfigs
-          })
-        : [];
-    const initialCandidate = candidates[0] ?? explicitCandidate();
-    let currentIndex = Math.max(0, candidates.findIndex((candidate) =>
-      candidate.providerConfigId === initialCandidate.providerConfigId &&
-      candidate.modelId === initialCandidate.modelId
-    ));
+        ? createModelFallbackPlan(
+            providerConfigs.map((providerConfig) => ({
+              id: providerConfig.id,
+              displayName: providerConfig.displayName,
+              enabled: providerConfig.enabled,
+              hasApiKey: Boolean(providerConfig.apiKeyRef),
+              models: providerConfig.models
+            })),
+            job.input.providerConfigId
+          )
+        : undefined;
+    const initialCandidate = fallbackPlan?.current() ?? explicitCandidate();
     let currentCandidate = initialCandidate;
     let client = createClientForCandidate(currentCandidate);
-    const maxSwitches = maxAutoFallbackSwitches(candidates.length);
+    const maxSwitches = maxAutoFallbackSwitches(fallbackPlan?.candidateCount() ?? 0);
 
     function createClientForCandidate(candidate: ModelFallbackCandidate): OpenAiCompatibleClient {
       const { provider } = registry.resolveModelRef(`${candidate.providerConfigId}/${candidate.modelId}`);
@@ -3142,17 +3102,18 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         for (;;) {
           try {
             return await client.chatCompletion({
-              providerId: currentCandidate.providerId,
+              providerId: currentCandidate.providerConfigId,
               modelId: currentCandidate.modelId,
               messages: chatInput.messages,
               tools: chatInput.tools,
               onRequestPrepared: chatInput.onRequestPrepared
             });
           } catch (error) {
-            const classification = classifyLlmFailure(error);
+            const classification = classifyLlmFailure(error, DEFAULT_CONFIG.llmFailurePolicyDefaults);
             if (
               job.input.modelSelectionMode !== "auto" ||
-              candidates.length === 0 ||
+              fallbackPlan === undefined ||
+              fallbackPlan.candidateCount() === 0 ||
               !classification.switchable ||
               switchCount >= maxSwitches
             ) {
@@ -3160,8 +3121,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             }
 
             const previousCandidate = currentCandidate;
-            currentIndex = (currentIndex + 1) % candidates.length;
-            currentCandidate = candidates[currentIndex] ?? previousCandidate;
+            currentCandidate = fallbackPlan.advance() ?? previousCandidate;
             client = createClientForCandidate(currentCandidate);
             switchCount += 1;
             await options.taskLogger?.append(["上下文", "模型切换"], {
