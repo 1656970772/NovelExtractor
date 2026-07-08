@@ -22,6 +22,7 @@ export interface JobCardViewModel {
   estimatedTotalText: string;
   completedAtText: string;
   failedAtText: string;
+  retryPolicyText?: string;
 }
 
 export interface JobCardViewModelOptions {
@@ -186,6 +187,11 @@ export function getJobCardViewModel(
     elapsedText: formatCardDuration(getRunningElapsedMs(job, options.nowMs)),
     estimatedTotalText: getCardEstimatedTotalTimeLabel(job),
     completedAtText: formatTimestamp(job.timing?.completedAt),
-    failedAtText: formatTimestamp(job.timing?.completedAt)
+    failedAtText: formatTimestamp(job.timing?.completedAt),
+    retryPolicyText: job.autoRetryOnFailure
+      ? job.status === "failed"
+        ? "自动续跑已开启"
+        : "失败后自动续跑"
+      : undefined
   };
 }

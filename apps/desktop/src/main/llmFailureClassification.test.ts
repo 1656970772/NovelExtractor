@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
 import type { LlmFailurePolicyDefaults } from "@novel-extractor/config";
 import { OpenAiCompatibleRequestError } from "@novel-extractor/llm";
+import { describe, expect, it } from "vitest";
 import { classifyLlmFailure } from "./llmFailureClassification";
 
 const defaults: LlmFailurePolicyDefaults = {
@@ -38,6 +38,20 @@ describe("classifyLlmFailure", () => {
       retryable: true,
       reason: "message_fragment",
       detail: "额度不足"
+    });
+  });
+
+  it("does not treat echoed HTTP body fragments as switchable provider errors", () => {
+    const error = new OpenAiCompatibleRequestError("HTTP 500 Internal Server Error", "http", {
+      status: 500,
+      statusText: "Internal Server Error",
+      body: { echo: "用户正文提到了 rate limit，但不是供应商错误" }
+    });
+
+    expect(classifyLlmFailure(error, defaults)).toEqual({
+      switchable: false,
+      retryable: false,
+      reason: "message_fragment"
     });
   });
 

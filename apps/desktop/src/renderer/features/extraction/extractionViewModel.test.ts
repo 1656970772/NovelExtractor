@@ -269,6 +269,7 @@ describe("extractionViewModel", () => {
       tokenText: "Token 0 / 缓存命中率 0.00%",
       logFilePath: "runs/job-1/logs/20260630-153012.txt",
       allowedActions: ["start", "delete"],
+      autoRetryOnFailure: true,
       createdAt: "2026-06-27T00:00:00.000Z",
       updatedAt: "2026-06-27T00:00:00.000Z"
     };
@@ -300,7 +301,8 @@ describe("extractionViewModel", () => {
       },
       tokenText: "Token 0 / 缓存命中率 0.00%",
       logFilePath: "runs/job-1/logs/20260630-153012.txt",
-      createdAt: "2026-06-27T00:00:00.000Z"
+      createdAt: "2026-06-27T00:00:00.000Z",
+      autoRetryOnFailure: true
     });
   });
 

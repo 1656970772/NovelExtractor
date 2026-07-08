@@ -10,6 +10,7 @@ export interface ModelFallbackCandidate {
 export interface ModelFallbackPlan {
   current(): ModelFallbackCandidate | undefined;
   advance(): ModelFallbackCandidate | undefined;
+  candidateCount(): number;
 }
 
 type FallbackProvider = Pick<
@@ -55,6 +56,7 @@ export function createModelFallbackPlan(
   );
 
   return {
+    candidateCount: () => candidates.length,
     current: () => candidates[index],
     advance: () => {
       if (candidates.length === 0) {

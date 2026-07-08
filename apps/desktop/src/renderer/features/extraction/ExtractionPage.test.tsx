@@ -877,6 +877,53 @@ describe("ExtractionPage", () => {
     expect(screen.getByRole("button", { name: "删除任务" })).toBeInTheDocument();
   });
 
+  it("toggles failed-job automatic retry from the task card", async () => {
+    const user = userEvent.setup();
+    const onRetryPolicyChange = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <ExtractionPage
+        providerOptions={providerOptionsForTest}
+        books={[]}
+        jobs={[
+          {
+            id: "job-retry",
+            status: "failed",
+            progressText: "2/3",
+            autoRetryOnFailure: false
+          }
+        ]}
+        state="ready"
+        onRetryPolicyChange={onRetryPolicyChange}
+      />
+    );
+
+    await user.click(screen.getByRole("checkbox", { name: "失败后自动续跑" }));
+
+    expect(onRetryPolicyChange).toHaveBeenCalledWith("job-retry", true);
+  });
+
+  it("shows automatic retry state and disables the toggle after completion", () => {
+    render(
+      <ExtractionPage
+        providerOptions={providerOptionsForTest}
+        books={[]}
+        jobs={[
+          {
+            id: "job-retry-completed",
+            status: "completed",
+            progressText: "3/3",
+            autoRetryOnFailure: true
+          }
+        ]}
+        state="ready"
+      />
+    );
+
+    expect(screen.getAllByText("失败后自动续跑").length).toBeGreaterThan(0);
+    expect(screen.getByRole("checkbox", { name: "失败后自动续跑" })).toBeDisabled();
+  });
+
   it("orders task rows by creation time with the newest task first inside the active filter", () => {
     render(
       <ExtractionPage

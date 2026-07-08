@@ -14,6 +14,33 @@ function includesFragment(value: string, fragments: readonly string[]): string |
   return fragments.find((fragment) => normalized.includes(fragment.toLowerCase()));
 }
 
+function collectErrorText(value: unknown): string[] {
+  if (typeof value === "string") {
+    return [value];
+  }
+
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return [];
+  }
+
+  const record = value as Record<string, unknown>;
+  const fragments: string[] = [];
+  const error = record.error;
+
+  if (error && typeof error === "object" && !Array.isArray(error)) {
+    fragments.push(...stringFields(error as Record<string, unknown>, ["message", "code", "type"]));
+  }
+
+  fragments.push(...stringFields(record, ["message", "code", "type"]));
+  return fragments;
+}
+
+function stringFields(record: Record<string, unknown>, fields: readonly string[]): string[] {
+  return fields
+    .map((field) => record[field])
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+}
+
 function stringifyForClassification(value: unknown): string {
   if (value === undefined) {
     return "";
@@ -55,8 +82,8 @@ export function classifyLlmFailure(
     };
   }
 
-  const text = `${error.message}\n${stringifyForClassification(error.details.body)}`;
   if (error.kind === "network" || error.kind === "response_body") {
+    const text = `${error.message}\n${stringifyForClassification(error.details.body)}`;
     const networkFragment = includesFragment(text, defaults.switchableNetworkErrorFragments);
     if (networkFragment) {
       return {
@@ -74,7 +101,8 @@ export function classifyLlmFailure(
     };
   }
 
-  const messageFragment = includesFragment(text, defaults.switchableMessageFragments);
+  const httpErrorText = [error.message, ...collectErrorText(error.details.body)].join("\n");
+  const messageFragment = includesFragment(httpErrorText, defaults.switchableMessageFragments);
   if (messageFragment) {
     return {
       switchable: true,
@@ -87,6 +115,6 @@ export function classifyLlmFailure(
   return {
     switchable: false,
     retryable: false,
-    reason: error.kind === "http" ? "message_fragment" : "network_fragment"
+    reason: "message_fragment"
   };
 }

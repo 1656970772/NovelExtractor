@@ -615,6 +615,33 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
     }
   }
 
+  async function updateJobRetryPolicy(
+    jobId: string,
+    autoRetryOnFailure: boolean
+  ): Promise<void> {
+    const api = window.novelExtractor;
+    if (!api?.updateJobRetryPolicy) {
+      setExtractionError("自动续跑设置失败");
+      return;
+    }
+
+    setExtractionError(undefined);
+
+    try {
+      const mappedJob = mapJobDtoToExtractionJob(
+        await api.updateJobRetryPolicy({ jobId, autoRetryOnFailure })
+      );
+      if (!mappedJob) {
+        return;
+      }
+      setJobs((currentJobs) =>
+        currentJobs.map((job) => (job.id === jobId ? mappedJob : job))
+      );
+    } catch (error) {
+      setExtractionError(getErrorMessage(error, "自动续跑设置失败"));
+    }
+  }
+
   async function readJobLog(jobId: string): Promise<string> {
     const api = window.novelExtractor;
     if (!api?.readJobLog) {
@@ -744,6 +771,7 @@ export function App({ initialState = DEFAULT_STATE }: AppProps) {
             onOpenJobLog={openJobLog}
             onOpenOutputDirectory={openJobOutputDirectory}
             onReadJobLog={readJobLog}
+            onRetryPolicyChange={updateJobRetryPolicy}
             onTemplateSelectionChange={(templateIds) => {
               void saveTemplateSelection(templateIds);
             }}

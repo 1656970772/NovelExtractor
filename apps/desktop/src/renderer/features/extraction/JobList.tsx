@@ -21,6 +21,7 @@ export interface JobListProps {
   onOpenJobLog?: (jobId: string) => Promise<void>;
   onReadJobLog?: (jobId: string) => Promise<string>;
   onOpenOutputDirectory?: (jobId: string) => Promise<void>;
+  onRetryPolicyChange?: (jobId: string, autoRetryOnFailure: boolean) => Promise<void>;
 }
 
 const STATUS_CONFIG = getTaskStatusConfig();
@@ -33,7 +34,8 @@ export function JobList({
   onJobAction,
   onOpenJobLog,
   onOpenOutputDirectory,
-  onReadJobLog
+  onReadJobLog,
+  onRetryPolicyChange
 }: JobListProps) {
   const [deleteCandidate, setDeleteCandidate] = useState<ExtractionJob | null>(null);
   const [activeFilter, setActiveFilter] = useState<JobQueueFilter>("all");
@@ -89,6 +91,10 @@ export function JobList({
     }
 
     void onOpenOutputDirectory?.(job.id).catch(() => undefined);
+  }
+
+  function updateRetryPolicy(job: ExtractionJob, checked: boolean): void {
+    void onRetryPolicyChange?.(job.id, checked).catch(() => undefined);
   }
 
   return (
@@ -205,6 +211,7 @@ export function JobList({
                     </>
                   ) : null}
                   {job.status === "failed" ? <span>失败时间：{card.failedAtText}</span> : null}
+                  {card.retryPolicyText ? <span>{card.retryPolicyText}</span> : null}
                   {job.status === "running" || job.status === "paused" ? (
                     <>
                       <span>已用时：{card.elapsedText}</span>
@@ -217,6 +224,15 @@ export function JobList({
                   ) : null}
                 </div>
                 <div className="job-card__footer">
+                  <label className="job-card__retry-toggle">
+                    <input
+                      checked={Boolean(job.autoRetryOnFailure)}
+                      disabled={job.status === "completed" || !onRetryPolicyChange}
+                      onChange={(event) => updateRetryPolicy(job, event.currentTarget.checked)}
+                      type="checkbox"
+                    />
+                    <span>失败后自动续跑</span>
+                  </label>
                   <JobLogPanel
                     footerActions={outputDirectoryAction}
                     jobId={job.id}

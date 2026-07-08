@@ -187,6 +187,46 @@ describe("project runtime store", () => {
     expect(state.jobs[0].timing).toBeUndefined();
   });
 
+  it("normalizes legacy job model selection and retry policy fields", async () => {
+    const filePath = path.join(tempRoot, "state", "project-runtime.json");
+    const legacyJob = {
+      ...createRunningJob(),
+      status: "completed"
+    } as ProjectRuntimeJobRecord;
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(
+      filePath,
+      `${JSON.stringify(
+        {
+          schemaVersion: 1,
+          books: [],
+          jobs: [legacyJob],
+          reports: [],
+          reportPathById: {}
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+
+    const store = createFileProjectRuntimeStore({ projectRoot: tempRoot });
+    const state = await store.load();
+
+    expect(state.jobs[0].input).toMatchObject({
+      modelSelectionMode: "explicit",
+      autoRetryOnFailure: false
+    });
+
+    const persisted = JSON.parse(await fs.readFile(filePath, "utf8")) as {
+      jobs: ProjectRuntimeJobRecord[];
+    };
+    expect(persisted.jobs[0].input).toMatchObject({
+      modelSelectionMode: "explicit",
+      autoRetryOnFailure: false
+    });
+  });
+
   it("returns an empty runtime state when the file is missing or corrupted", async () => {
     const missingStore = createFileProjectRuntimeStore({ projectRoot: tempRoot });
     await expect(missingStore.load()).resolves.toMatchObject({

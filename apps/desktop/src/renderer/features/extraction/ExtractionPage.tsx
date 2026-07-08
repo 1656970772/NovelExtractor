@@ -43,6 +43,7 @@ export interface ExtractionPageProps {
   onOpenJobLog?: (jobId: string) => Promise<void>;
   onReadJobLog?: (jobId: string) => Promise<string>;
   onOpenOutputDirectory?: (jobId: string) => Promise<void>;
+  onRetryPolicyChange?: (jobId: string, autoRetryOnFailure: boolean) => Promise<void>;
   onOpenProviderConfig?: () => void;
   onOpenNewTemplate?: () => void;
   onOpenTemplateManager?: () => void;
@@ -74,6 +75,7 @@ export function ExtractionPage({
   onReadJobLog,
   onOpenJobLog,
   onOpenOutputDirectory,
+  onRetryPolicyChange,
   onOpenProviderConfig,
   onOpenNewTemplate,
   onOpenTemplateManager,
@@ -218,6 +220,7 @@ export function ExtractionPage({
           onOpenJobLog={onOpenJobLog}
           onOpenOutputDirectory={onOpenOutputDirectory}
           onReadJobLog={onReadJobLog}
+          onRetryPolicyChange={onRetryPolicyChange}
         />
       </div>
     </section>

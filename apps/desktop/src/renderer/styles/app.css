@@ -919,6 +919,21 @@ p {
   white-space: nowrap;
 }
 
+.job-card__retry-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--app-color-ink-muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.job-card__retry-toggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
 .job-card__progress {
   display: grid;
   gap: 6px;

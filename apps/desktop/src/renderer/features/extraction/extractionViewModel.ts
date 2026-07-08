@@ -47,6 +47,7 @@ export interface ExtractionJobInputSummary {
   bookDisplayName: string;
   templateNames: string[];
   modelId: string;
+  modelSelectionMode?: "explicit" | "auto";
 }
 
 export interface ExtractionJob {
@@ -62,6 +63,7 @@ export interface ExtractionJob {
   failureReason?: string;
   logFilePath?: string;
   createdAt?: string;
+  autoRetryOnFailure?: boolean;
 }
 
 export interface ExtractionFormState {
@@ -322,7 +324,8 @@ export function mapJobDtoToExtractionJob(job: JobDto): ExtractionJob | null {
     tokenText: job.tokenText,
     failureReason: job.failureReason,
     logFilePath: job.logFilePath,
-    createdAt: job.createdAt
+    createdAt: job.createdAt,
+    autoRetryOnFailure: job.autoRetryOnFailure
   };
 }
 
