@@ -345,4 +345,30 @@ describe("task progress log summarizer", () => {
       })
     ).toBe("06:43:00 窗口失败：窗口 7/10，原因 同一工具错误重复超过 3 次：old_string is not unique in report.md");
   });
+
+  it("summarizes automatic failed-job retry scheduler entries", () => {
+    expect(
+      summarizeTaskLogEntry({
+        timestamp: "2026-07-02 06:44:00",
+        tags: ["自动续跑", "调度"],
+        value: { 事件: "触发", 下次间隔: "5 分钟" }
+      })
+    ).toBe("06:44:00 自动续跑触发：正在重新入队");
+
+    expect(
+      summarizeTaskLogEntry({
+        timestamp: "2026-07-02 06:44:01",
+        tags: ["自动续跑", "调度"],
+        value: { 事件: "已接收", 状态: "已进入运行" }
+      })
+    ).toBe("06:44:01 自动续跑已进入运行或排队，停止本轮定时重试");
+
+    expect(
+      summarizeTaskLogEntry({
+        timestamp: "2026-07-02 06:44:02",
+        tags: ["自动续跑", "调度"],
+        value: { 事件: "等待下次", 下次间隔: "5 分钟" }
+      })
+    ).toBe("06:44:02 自动续跑本次仍未成功，5 分钟后再次尝试");
+  });
 });

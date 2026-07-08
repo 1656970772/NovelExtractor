@@ -15,6 +15,16 @@ export interface TaskTextLogger {
   setSecrets(secrets: readonly string[]): void;
 }
 
+export interface AppendTaskTextLogEntryInput {
+  absolutePath: string;
+  simpleAbsolutePath: string;
+  simpleStartedAt?: string;
+  tags: readonly string[];
+  value: unknown;
+  clock?: Pick<Clock, "now">;
+  secrets?: readonly string[];
+}
+
 interface CreateTaskTextLoggerInput {
   clock?: Pick<Clock, "now">;
   jobId: string;
@@ -408,6 +418,66 @@ function renderPlainText(value: unknown, depth = 0, seen = new WeakSet<object>()
   return String(value);
 }
 
+function renderTaskLogLine(input: {
+  secrets: readonly string[];
+  tags: readonly string[];
+  timestamp: string;
+  value: unknown;
+}): string {
+  const timestamp = toDisplayTimestamp(input.timestamp);
+  const tagText = input.tags.map((tag) => `[${tag}]`).join("");
+  const rendered = redactTaskLogText(renderPlainText(input.value), input.secrets);
+  const linePrefix = `[${timestamp}]${tagText}`;
+
+  if (!rendered.includes("\n")) {
+    return `${linePrefix} ${rendered}\n`;
+  }
+
+  return `${linePrefix}\n${rendered}\n`;
+}
+
+function renderTaskLogSimpleLine(input: {
+  createdAt: string;
+  secrets: readonly string[];
+  tags: readonly string[];
+  timestamp: string;
+  value: unknown;
+}): string {
+  const summarized = summarizeTaskLogEntry({
+    tags: input.tags,
+    timestamp: toElapsedTimestamp(input.createdAt, input.timestamp),
+    value: input.value
+  });
+  return `${redactTaskLogText(summarized, input.secrets)}\n`;
+}
+
+export async function appendTaskTextLogEntry(input: AppendTaskTextLogEntryInput): Promise<void> {
+  const clock = input.clock ?? systemClock;
+  const timestamp = clock.now();
+  const secrets = [...(input.secrets ?? [])];
+  await fs.appendFile(
+    input.absolutePath,
+    renderTaskLogLine({
+      secrets,
+      tags: input.tags,
+      timestamp,
+      value: input.value
+    }),
+    "utf8"
+  );
+  await fs.appendFile(
+    input.simpleAbsolutePath,
+    renderTaskLogSimpleLine({
+      createdAt: input.simpleStartedAt ?? timestamp,
+      secrets,
+      tags: input.tags,
+      timestamp,
+      value: input.value
+    }),
+    "utf8"
+  );
+}
+
 export async function createTaskTextLogger(input: CreateTaskTextLoggerInput): Promise<TaskTextLogger> {
   const clock = input.clock ?? systemClock;
   const createdAt = clock.now();
@@ -421,21 +491,22 @@ export async function createTaskTextLogger(input: CreateTaskTextLoggerInput): Pr
   let secrets = [...(input.secrets ?? [])];
 
   function renderLine(tags: readonly string[], value: unknown, timestampValue = clock.now()): string {
-    const timestamp = toDisplayTimestamp(timestampValue);
-    const tagText = tags.map((tag) => `[${tag}]`).join("");
-    const rendered = redactTaskLogText(renderPlainText(value), secrets);
-    const linePrefix = `[${timestamp}]${tagText}`;
-
-    if (!rendered.includes("\n")) {
-      return `${linePrefix} ${rendered}\n`;
-    }
-
-    return `${linePrefix}\n${rendered}\n`;
+    return renderTaskLogLine({
+      secrets,
+      tags,
+      timestamp: timestampValue,
+      value
+    });
   }
 
   function renderSimpleLine(tags: readonly string[], value: unknown, timestampValue = clock.now()): string {
-    const summarized = summarizeTaskLogEntry({ tags, timestamp: toElapsedTimestamp(createdAt, timestampValue), value });
-    return `${redactTaskLogText(summarized, secrets)}\n`;
+    return renderTaskLogSimpleLine({
+      createdAt,
+      secrets,
+      tags,
+      timestamp: timestampValue,
+      value
+    });
   }
 
   async function appendBoth(tags: readonly string[], value: unknown, timestampValue = clock.now()): Promise<void> {

@@ -450,6 +450,26 @@ function summarizeWarning(value: unknown): string {
   return `运行警告：${warning}`;
 }
 
+function summarizeAutoRetry(value: unknown): string {
+  const event = stringField(value, "事件") ?? asText(value) ?? "已记录";
+  const interval = stringField(value, "下次间隔") ?? "稍后";
+
+  if (event === "触发") {
+    return "自动续跑触发：正在重新入队";
+  }
+  if (event === "已接收") {
+    return "自动续跑已进入运行或排队，停止本轮定时重试";
+  }
+  if (event === "等待下次") {
+    return `自动续跑本次仍未成功，${interval}后再次尝试`;
+  }
+  if (event === "跳过") {
+    return "自动续跑跳过：当前任务状态已变化";
+  }
+
+  return `自动续跑：${event}`;
+}
+
 function fallbackMessage(tags: readonly string[]): string {
   const label = tags.length > 0 ? tags.join("/") : "日志";
   return `${label}：已记录`;
@@ -493,6 +513,8 @@ export function summarizeTaskLogEntry(entry: TaskProgressLogEntry): string {
     message = summarizeTaskError(entry.value);
   } else if (firstTag === "警告" && secondTag === "bash") {
     message = summarizeWarning(entry.value);
+  } else if (firstTag === "自动续跑") {
+    message = summarizeAutoRetry(entry.value);
   } else {
     message = fallbackMessage(entry.tags);
   }

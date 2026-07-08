@@ -1266,6 +1266,9 @@ describe("P0 desktop IPC handlers", () => {
         { timeout: 15_000 }
       );
 
+      const retryLog = await contract.invoke(handlers, "jobs:readLog", { jobId: job.id });
+      expect(retryLog.content).toContain("自动续跑触发");
+      expect(retryLog.content).toContain("自动续跑已进入运行或排队，停止本轮定时重试");
       expect(mockServer.requests).toHaveLength(3);
     } finally {
       await mockServer.close();

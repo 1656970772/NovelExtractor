@@ -38,7 +38,7 @@ import {
 } from "./projectRuntimeStore";
 import { createFileProjectStore, type MainProjectStore } from "./projectStore";
 import { createMemoryProviderStore, type MainProviderStore } from "./providerStore";
-import { createTaskTextLogger, type TaskTextLogger } from "./taskTextLogger";
+import { appendTaskTextLogEntry, createTaskTextLogger, type TaskTextLogger } from "./taskTextLogger";
 import { createWindowRunService, type WindowRunArtifacts } from "./windowRunService";
 import type {
   CreateJobDto,
@@ -542,6 +542,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
 
   const booksById = new Map<string, Book>();
   const jobsById = new Map<string, P0JobRecord>();
+  const pendingAutoRetryRunLogsByJobId = new Map<string, { intervalText: string }>();
   const reportsById = new Map<string, ReportAsset>();
   const reportPathById = new Map<string, string>();
   const projectRuntimeStoresByRoot = new Map<string, ProjectRuntimeStore>();
@@ -1187,6 +1188,48 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     }
   }
 
+  function formatFailureRetryInterval(ms: number): string {
+    if (ms > 0 && ms % 60000 === 0) {
+      return `${ms / 60000} 分钟`;
+    }
+    if (ms > 0 && ms % 1000 === 0) {
+      return `${ms / 1000} 秒`;
+    }
+    return `${ms}ms`;
+  }
+
+  async function appendExistingJobLogEntry(
+    job: P0JobRecord,
+    tags: readonly string[],
+    value: unknown
+  ): Promise<void> {
+    if (!job.logFilePath) {
+      return;
+    }
+
+    const book = requireBook(job.bookId);
+    const project = await ensureProject(book.projectId);
+    await appendTaskTextLogEntry({
+      absolutePath: path.join(project.rootPath, job.logFilePath),
+      simpleAbsolutePath: path.join(project.rootPath, deriveSimpleLogFilePath(job.logFilePath)),
+      simpleStartedAt: job.timing?.startedAt,
+      clock,
+      tags,
+      value
+    });
+  }
+
+  async function appendAutoRetryLog(job: P0JobRecord, value: Record<string, unknown>): Promise<void> {
+    try {
+      await appendExistingJobLogEntry(job, ["自动续跑", "调度"], {
+        任务ID: job.id,
+        ...value
+      });
+    } catch {
+      // Auto-retry logging is diagnostic only; it must not break the retry loop.
+    }
+  }
+
   async function openJobLog(job: P0JobRecord): Promise<void> {
     if (!job.logFilePath) {
       throw new Error("任务尚未开始，完整日志文件还没有生成。");
@@ -1357,6 +1400,9 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
   }
 
   interface RunModelBackedJobOptions {
+    autoRetryLog?: {
+      intervalText: string;
+    };
     skipAlreadyExtracted?: boolean;
   }
 
@@ -1376,6 +1422,24 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
         skipAlreadyExtracted: runOptions.skipAlreadyExtracted
       }
     };
+  }
+
+  function getRunOptionsForScheduledJob(
+    scheduledJob: P0JobRecord,
+    latestJob: P0JobRecord
+  ): RunModelBackedJobOptions | undefined {
+    const runOptions: RunModelBackedJobOptions = {};
+    const autoRetryLog = pendingAutoRetryRunLogsByJobId.get(scheduledJob.id);
+    if (autoRetryLog) {
+      runOptions.autoRetryLog = autoRetryLog;
+    }
+    if (scheduledJob.input.skipAlreadyExtracted !== latestJob.input.skipAlreadyExtracted) {
+      runOptions.skipAlreadyExtracted = scheduledJob.input.skipAlreadyExtracted;
+    }
+
+    return runOptions.autoRetryLog || runOptions.skipAlreadyExtracted !== undefined
+      ? runOptions
+      : undefined;
   }
 
   function toTerminalFailurePatch(
@@ -1471,6 +1535,19 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
         logFilePath: taskLogger.relativePath,
         runOptions
       });
+      if (runOptions?.autoRetryLog) {
+        await taskLogger.append(["自动续跑", "调度"], {
+          任务ID: runningJob.id,
+          事件: "触发",
+          下次间隔: runOptions.autoRetryLog.intervalText
+        });
+        await taskLogger.append(["自动续跑", "调度"], {
+          任务ID: runningJob.id,
+          事件: "已接收",
+          状态: "已进入运行",
+          下次间隔: runOptions.autoRetryLog.intervalText
+        });
+      }
       const artifacts = await preparePreRunArtifacts(withRunOptions(runningJob, runOptions));
       await taskLogger.append(["上下文", "任务"], {
         任务ID: runningJob.id,
@@ -1572,17 +1649,14 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     maxConcurrentJobsPerBook: schedulerDefaults.maxConcurrentJobsPerBook,
     async onStarted(job) {
       const latestJob = requireJob(job.id);
-      const runOptions = job.input.skipAlreadyExtracted === latestJob.input.skipAlreadyExtracted
-        ? undefined
-        : { skipAlreadyExtracted: job.input.skipAlreadyExtracted };
+      const runOptions = getRunOptionsForScheduledJob(job, latestJob);
 
       await markJobRunning(withRunOptions(latestJob, runOptions), { runOptions });
     },
     async run(job) {
       const latestJob = requireJob(job.id);
-      const runOptions = job.input.skipAlreadyExtracted === latestJob.input.skipAlreadyExtracted
-        ? undefined
-        : { skipAlreadyExtracted: job.input.skipAlreadyExtracted };
+      const runOptions = getRunOptionsForScheduledJob(job, latestJob);
+      pendingAutoRetryRunLogsByJobId.delete(job.id);
 
       await runModelBackedJob(latestJob, runOptions);
     },
@@ -1604,20 +1678,62 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       if (!latestJob || latestJob.status !== "failed" || !latestJob.input.autoRetryOnFailure) {
         return "accepted";
       }
+      const retryIntervalText = formatFailureRetryInterval(failureRetryIntervalMs);
       if (jobScheduler.isRunning(jobId)) {
+        await appendAutoRetryLog(latestJob, {
+          事件: "等待下次",
+          原因: "任务仍在运行",
+          下次间隔: retryIntervalText
+        });
         return "failed";
       }
       if (jobScheduler.isQueued(jobId)) {
+        await appendAutoRetryLog(latestJob, {
+          事件: "已接收",
+          状态: "已在队列",
+          下次间隔: retryIntervalText
+        });
         return "accepted";
       }
 
       try {
-        const updatedJob = await enqueueModelBackedJob(latestJob, { skipAlreadyExtracted: true });
+        pendingAutoRetryRunLogsByJobId.set(jobId, {
+          intervalText: retryIntervalText
+        });
+        const updatedJob = await enqueueModelBackedJob(latestJob, {
+          skipAlreadyExtracted: true
+        });
+        const nextJob = jobsById.get(jobId) ?? latestJob;
         if (jobScheduler.isQueued(jobId)) {
+          await appendAutoRetryLog(nextJob, {
+            事件: "已接收",
+            状态: "已进入队列",
+            下次间隔: retryIntervalText
+          });
           return "accepted";
         }
-        return updatedJob.status === "failed" ? "failed" : "accepted";
-      } catch {
+        if (updatedJob.status === "failed") {
+          pendingAutoRetryRunLogsByJobId.delete(jobId);
+          await appendAutoRetryLog(nextJob, {
+            事件: "等待下次",
+            原因: "本次续跑仍失败",
+            下次间隔: retryIntervalText
+          });
+          return "failed";
+        }
+        await appendAutoRetryLog(nextJob, {
+          事件: "已接收",
+          状态: updatedJob.status,
+          下次间隔: retryIntervalText
+        });
+        return "accepted";
+      } catch (error) {
+        pendingAutoRetryRunLogsByJobId.delete(jobId);
+        await appendAutoRetryLog(latestJob, {
+          事件: "等待下次",
+          原因: getFailureReason(error),
+          下次间隔: retryIntervalText
+        });
         return "failed";
       }
     }
@@ -1894,6 +2010,9 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     },
     "jobs:updateRetryPolicy": async (input) => {
       const job = requireJob(input.jobId);
+      if (!input.autoRetryOnFailure) {
+        pendingAutoRetryRunLogsByJobId.delete(job.id);
+      }
       const updatedJob = await updateJob(job, {
         input: {
           ...job.input,
@@ -1909,6 +2028,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       }
       const jobId = input.jobId;
       failureRetryScheduler.cancel(jobId);
+      pendingAutoRetryRunLogsByJobId.delete(jobId);
       jobScheduler.remove(jobId);
       if (jobScheduler.isRunning(jobId)) {
         throw new Error("运行中的任务不能删除，请先等待任务完成或暂停。");
