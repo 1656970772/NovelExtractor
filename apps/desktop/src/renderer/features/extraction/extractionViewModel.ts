@@ -1,4 +1,5 @@
 import {
+  getDefaultConfig,
   getExtractionParameterDefaults,
   type ExtractionParameterDefaults,
   type TaskAction,
@@ -75,6 +76,7 @@ export interface ExtractionFormState {
   singleRunChapterCount: number;
   extractionChapterCount: number;
   overlapChapterCount: number;
+  templateBatchSize: number;
   skipAlreadyExtracted: boolean;
 }
 
@@ -184,6 +186,8 @@ export function createExtractionFormState({
   selectedTemplateIds
 }: ExtractionFormStateInput): ExtractionFormState {
   const modelSelection = createAutoModelSelection(providerOptions);
+  const templateBatchSize =
+    getDefaultConfig().extractionRuleDefaults.templateBatching.maxTemplatesPerCall;
 
   return {
     bookId: firstBookId(books),
@@ -192,6 +196,7 @@ export function createExtractionFormState({
     singleRunChapterCount: defaults.singleRunChapterCount,
     extractionChapterCount: defaults.extractionChapterCount,
     overlapChapterCount: defaults.overlapChapterCount,
+    templateBatchSize,
     skipAlreadyExtracted: true
   };
 }
@@ -269,6 +274,7 @@ export function buildCreateJobDto(
     singleRunChapterCount - 1,
     toNonNegativeInteger(state.overlapChapterCount)
   );
+  const templateBatchSize = toPositiveInteger(state.templateBatchSize);
 
   return {
     bookId: state.bookId,
@@ -279,6 +285,7 @@ export function buildCreateJobDto(
     singleRunChapterCount,
     extractionChapterCount,
     overlapChapterCount,
+    templateBatchSize,
     skipAlreadyExtracted: state.skipAlreadyExtracted
   };
 }

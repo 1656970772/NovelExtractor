@@ -74,6 +74,7 @@ describe("preload desktop API", () => {
       singleRunChapterCount: 1,
       extractionChapterCount: 2,
       overlapChapterCount: 0,
+      templateBatchSize: 1,
       skipAlreadyExtracted: true
     });
     await api.startJob({ jobId: "job-1" });

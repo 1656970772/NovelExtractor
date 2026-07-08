@@ -109,6 +109,7 @@ export interface P0IpcHandlersOptions {
   enabledToolNames?: readonly string[];
   jobSchedulerDefaults?: Partial<NovelExtractorConfig["jobSchedulerDefaults"]>;
   failureRetryIntervalMs?: number;
+  templateBatchFailureRetryIntervalMs?: number;
   shell?: {
     openPath(path: string): Promise<string>;
   };
@@ -236,7 +237,7 @@ function formatTokenText(
 }
 
 function formatRuntimeProgress(state: Pick<JobRuntimeState, "completedWindowCount" | "totalWindowCount">): string {
-  return `进度：${state.completedWindowCount}/${state.totalWindowCount}`;
+  return `进度：${state.completedWindowCount}/${state.totalWindowCount} 模板窗口`;
 }
 
 function toJobStatusFromRuntime(status: JobRuntimeState["status"]): JobStatus {
@@ -539,6 +540,9 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
   };
   const failureRetryIntervalMs =
     options.failureRetryIntervalMs ?? defaultConfig.jobFailureRetryDefaults.failureRetryIntervalMs;
+  const templateBatchFailureRetryIntervalMs =
+    options.templateBatchFailureRetryIntervalMs ??
+    defaultConfig.extractionRuleDefaults.templateBatching.failureRetryIntervalMs;
 
   const booksById = new Map<string, Book>();
   const jobsById = new Map<string, P0JobRecord>();
@@ -1137,6 +1141,10 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     }).length;
   }
 
+  function estimateRuntimeTemplateWindowTargetCount(book: Book, input: CreateJobDto): number {
+    return estimateRuntimeWindowCount(book, input) * Math.max(1, input.templateIds.length);
+  }
+
   async function notifyJobUpdated(job: P0JobRecord): Promise<void> {
     try {
       options.onJobUpdated?.(await buildJobDto(job));
@@ -1153,7 +1161,8 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       `模板 ${job.input.templateIds.length} 个`,
       `单次章节 ${job.input.singleRunChapterCount}`,
       `提取章节 ${job.input.extractionChapterCount}`,
-      `重叠章节 ${job.input.overlapChapterCount}`
+      `重叠章节 ${job.input.overlapChapterCount}`,
+      `单批次模板 ${job.input.templateBatchSize}`
     ].join("，");
   }
 
@@ -1371,6 +1380,11 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       "overlapChapterCount",
       "重叠章节数"
     );
+    const templateBatchSize = requirePositiveIntegerField(
+      input,
+      "templateBatchSize",
+      "单批次模板数"
+    );
 
     if (extractionChapterCount < singleRunChapterCount) {
       throw new Error("提取章节数必须大于或等于单次窗口章节数");
@@ -1395,6 +1409,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       singleRunChapterCount,
       extractionChapterCount,
       overlapChapterCount,
+      templateBatchSize,
       skipAlreadyExtracted: requireBooleanField(input, "skipAlreadyExtracted", "跳过已提取")
     };
   }
@@ -1481,7 +1496,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
 
     return {
       status: "running",
-      progressText: "正在准备运行窗口",
+      progressText: `进度：0/${input.initialTotalWindowCount} 模板窗口`,
       tokenText: formatTokenText(null),
       failureReason: undefined,
       logFilePath: input.logFilePath ?? job.logFilePath,
@@ -1516,7 +1531,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       job,
       toInitialRunningPatch(job, {
         ...input,
-        initialTotalWindowCount: estimateRuntimeWindowCount(requireBook(job.bookId), job.input)
+        initialTotalWindowCount: estimateRuntimeTemplateWindowTargetCount(requireBook(job.bookId), job.input)
       })
     );
   }
@@ -1563,8 +1578,26 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
         规则快照: artifacts.rulesSnapshotPath,
         报告目录: ["reports", artifacts.book.id].join("/")
       });
+      const totalTemplateWindowCount =
+        artifacts.runtimeWindowManifest.windows.length * Math.max(1, artifacts.templates.length);
+      const initialWindowEstimateMs = runningJob.timing?.initialWindowEstimateMs ?? createInitialWindowEstimateMs();
       runningJob = await updateJob(runningJob, {
-        progressText: `进度：0/${artifacts.runtimeWindowManifest.windows.length}`
+        progressText: `进度：0/${totalTemplateWindowCount} 模板窗口`,
+        progress: {
+          completedWindowCount: 0,
+          totalWindowCount: totalTemplateWindowCount,
+          skippedWindowCount: 0,
+          executedWindowCount: 0
+        },
+        timing: {
+          ...runningJob.timing,
+          initialWindowEstimateMs,
+          effectiveTotalWindowCount: totalTemplateWindowCount,
+          executedWindowElapsedMs: 0,
+          estimatedTotalMs: initialWindowEstimateMs * totalTemplateWindowCount,
+          estimatedRemainingMs: undefined,
+          estimateFrozenAt: undefined
+        }
       });
 
       const windowRunService = createWindowRunService({
@@ -1596,7 +1629,10 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
           });
         },
         async onRuntimeState(state) {
-          const currentJob = requireJob(state.jobId);
+          const currentJob = jobsById.get(state.jobId);
+          if (!currentJob) {
+            return;
+          }
           await updateJob(
             currentJob,
             toJobPatchFromRuntimeState(state, currentJob, clock, { createInitialWindowEstimateMs })
@@ -1604,6 +1640,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
         },
         providerStore,
         enabledToolNames: options.enabledToolNames,
+        templateBatchFailureRetryIntervalMs,
         taskLogger,
         async registerReport({ path: reportPath, report }) {
           reportsById.set(report.id, report);
@@ -1616,8 +1653,12 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
         job: withRunOptions(runningJob, runOptions)
       });
 
+      const latestJob = jobsById.get(runningJob.id);
+      if (!latestJob) {
+        return await buildJobDto(runningJob);
+      }
+
       if (!result.ok) {
-        const latestJob = requireJob(runningJob.id);
         const failedJob = await updateJob(
           latestJob,
           toTerminalFailurePatch(latestJob, getRuntimeErrorReason(result.error))
@@ -1625,7 +1666,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
         return await buildJobDto(failedJob);
       }
 
-      return await buildJobDto(requireJob(runningJob.id));
+      return await buildJobDto(latestJob);
     } catch (error) {
       if (taskLogger) {
         try {
@@ -1634,7 +1675,10 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
           // The job status is the source of truth; logging must not keep it running forever.
         }
       }
-      const latestJob = jobsById.get(runningJob.id) ?? runningJob;
+      const latestJob = jobsById.get(runningJob.id);
+      if (!latestJob) {
+        return await buildJobDto(runningJob);
+      }
       return await buildJobDto(
         await updateJob(latestJob, {
           ...toTerminalFailurePatch(latestJob, getFailureReason(error)),
@@ -1940,12 +1984,12 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       const project = await ensureProject(book.projectId);
       await resolveTemplatesForProject(book.projectId, normalizedInput.templateIds);
       const now = clock.now();
-      const totalWindowCount = estimateRuntimeWindowCount(book, normalizedInput);
+      const totalWindowCount = estimateRuntimeTemplateWindowTargetCount(book, normalizedInput);
       const job: P0JobRecord = {
         id: await createUniqueJobId(project.rootPath),
         bookId: book.id,
         status: "created",
-        progressText: `进度：0/${totalWindowCount}`,
+        progressText: `进度：0/${totalWindowCount} 模板窗口`,
         progress: {
           completedWindowCount: 0,
           totalWindowCount
@@ -2030,8 +2074,12 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       failureRetryScheduler.cancel(jobId);
       pendingAutoRetryRunLogsByJobId.delete(jobId);
       jobScheduler.remove(jobId);
-      if (jobScheduler.isRunning(jobId)) {
-        throw new Error("运行中的任务不能删除，请先等待任务完成或暂停。");
+      const runtime = activeWindowRuntimes.get(jobId);
+      if (runtime) {
+        const result = await runtime.deleteJob(jobId);
+        if (!result.ok && result.error.code !== "job_not_found") {
+          throw new Error(formatRuntimeControlFailure("删除", result.error));
+        }
       }
       const job = jobsById.get(jobId);
       jobsById.delete(jobId);

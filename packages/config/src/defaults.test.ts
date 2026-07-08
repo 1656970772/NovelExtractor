@@ -23,10 +23,12 @@ describe("default config", () => {
   });
 
   it("provides extraction parameter defaults for window overlap", () => {
-    expect(getDefaultConfig().extractionParameterDefaults).toMatchObject({
-      singleRunChapterCount: 3,
-      extractionChapterCount: 9,
-      overlapChapterCount: 1
+    const config = getDefaultConfig();
+
+    expect(config.extractionParameterDefaults).toEqual({
+      singleRunChapterCount: 10,
+      extractionChapterCount: 10,
+      overlapChapterCount: 0
     });
   });
 
@@ -40,7 +42,7 @@ describe("default config", () => {
       onFallbackNoMatch: "no-update"
     });
     expect(config.extractionRuleDefaults.templateGroupFallbackStrategy).toBe("by-output-file");
-    expect(config.extractionRuleDefaults.maxFullTemplatesPerCall).toBe(4);
+    expect(config.extractionRuleDefaults.maxFullTemplatesPerCall).toBe(1);
     expect(config.extractionRuleDefaults.ruleSections.commonExtractionRules).toEqual(
       expect.arrayContaining([
         "仅根据当前窗口文本与模板快照抽取信息，禁止补写、推测或编造原文未出现的内容。"
@@ -233,9 +235,10 @@ describe("default config", () => {
     const config = getDefaultConfig();
 
     expect(config.extractionRuleDefaults.templateBatching).toEqual({
-      maxTemplatesPerCall: 4,
-      promptBudgetChars: expect.any(Number),
-      nonMergeableTemplateTags: []
+      maxTemplatesPerCall: 1,
+      promptBudgetChars: 48000,
+      nonMergeableTemplateTags: [],
+      failureRetryIntervalMs: 60000
     });
     expect(config.extractionRuleDefaults.templateBatching.maxTemplatesPerCall).toBe(
       config.extractionRuleDefaults.maxFullTemplatesPerCall

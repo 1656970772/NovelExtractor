@@ -7,6 +7,8 @@ export interface TemplateBatchPlannerTemplate {
 }
 
 export interface TemplateBatch<TTemplate extends TemplateBatchPlannerTemplate> {
+  batchId: string;
+  batchIndex: number;
   templates: TTemplate[];
   splitReason: TemplateBatchSplitReason;
 }
@@ -17,32 +19,32 @@ export interface PlanTemplateBatchesInput<TTemplate extends TemplateBatchPlanner
 }
 
 function toBatchSize(maxTemplatesPerCall: number): number {
+  if (!Number.isFinite(maxTemplatesPerCall) || maxTemplatesPerCall <= 0) {
+    return 1;
+  }
+
   return Math.max(1, Math.floor(maxTemplatesPerCall));
+}
+
+function toBatchId(batchIndex: number): string {
+  return `batch-${String(batchIndex + 1).padStart(4, "0")}`;
 }
 
 export function planTemplateBatches<TTemplate extends TemplateBatchPlannerTemplate>(
   input: PlanTemplateBatchesInput<TTemplate>
 ): Array<TemplateBatch<TTemplate>> {
   const batchSize = toBatchSize(input.maxTemplatesPerCall);
-  const batchCount = Math.ceil(input.templates.length / batchSize);
   const batches: Array<TemplateBatch<TTemplate>> = [];
 
-  if (batchCount === 0) {
-    return batches;
-  }
-
-  const baseBatchSize = Math.floor(input.templates.length / batchCount);
-  const largerBatchCount = input.templates.length % batchCount;
-  let startIndex = 0;
-
-  for (let batchIndex = 0; batchIndex < batchCount; batchIndex += 1) {
-    const currentBatchSize = baseBatchSize + (batchIndex < largerBatchCount ? 1 : 0);
-    const endIndex = startIndex + currentBatchSize;
+  for (let startIndex = 0; startIndex < input.templates.length; startIndex += batchSize) {
+    const batchIndex = batches.length;
+    const endIndex = startIndex + batchSize;
     batches.push({
+      batchId: toBatchId(batchIndex),
+      batchIndex,
       templates: input.templates.slice(startIndex, endIndex),
-      splitReason: batchIndex === batchCount - 1 ? "complete" : "maxTemplatesPerCall"
+      splitReason: endIndex >= input.templates.length ? "complete" : "maxTemplatesPerCall"
     });
-    startIndex = endIndex;
   }
 
   return batches;

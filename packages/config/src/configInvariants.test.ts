@@ -308,6 +308,16 @@ describe("config invariants", () => {
     expectInvariantViolation(divergedCompatibilityField, /must match template batching/i);
   });
 
+  it.each([0, -1])(
+    "requires template batch failure retry interval to be positive: %s",
+    (failureRetryIntervalMs) => {
+      const config = getDefaultConfig();
+      config.extractionRuleDefaults.templateBatching.failureRetryIntervalMs = failureRetryIntervalMs;
+
+      expectInvariantViolation(config, /template batching failure retry interval/i);
+    }
+  );
+
   it("requires template prompt profile defaults to be configured", () => {
     const missingDefaults = getDefaultConfig();
     delete (missingDefaults as unknown as Record<string, unknown>).templatePromptProfileDefaults;

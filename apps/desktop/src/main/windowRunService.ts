@@ -10,10 +10,11 @@ import {
   type TemplatePromptProfile
 } from "@novel-extractor/extraction/templatePromptProfile";
 import {
-  createJobRuntime,
+  createEventBus,
   type FeeAmount,
   type JobLlmClient,
   type JobRunInput,
+  type JobRuntimeEvent,
   type JobRuntime,
   type JobRuntimeResult,
   type JobRuntimeState,
@@ -23,6 +24,7 @@ import {
 import {
   createProviderRegistry,
   OpenAiCompatibleClient,
+  OpenAiCompatibleRequestError,
   toToolDefinition,
   type ChatCompletionMessage,
   type ChatCompletionRequestToolCall,
@@ -61,6 +63,17 @@ import {
 import { classifyLlmFailure } from "./llmFailureClassification";
 import { planTemplateBatches } from "./templateBatchPlanner";
 import {
+  runTemplateBatchPipelines,
+  TemplateBatchPipelineAbortError,
+  type TemplateBatchPipelineProcessResult
+} from "./templateBatchPipelineCoordinator";
+import {
+  toTemplateBatchCoverageRelativePath,
+  toTemplateBatchLogSegments,
+  toTemplateBatchTaskInfo
+} from "./templateBatchArtifacts";
+import {
+  createTaskTextLogger,
   replaceWindowTextReferencesForTaskLog,
   serializeModelRequestForTaskLog,
   type TaskTextLogger
@@ -82,8 +95,11 @@ interface WindowRunJobInput {
   input: {
     modelId: string;
     modelSelectionMode?: "explicit" | "auto";
+    singleRunChapterCount?: number;
+    overlapChapterCount?: number;
     providerConfigId: string;
     skipAlreadyExtracted: boolean;
+    templateBatchSize: number;
     templateIds: string[];
   };
 }
@@ -111,6 +127,7 @@ export interface WindowRunServiceOptions {
   registerReport(input: { path: string; report: ReportAsset }): Promise<void> | void;
   taskLogger?: TaskTextLogger;
   enabledToolNames?: readonly string[];
+  templateBatchFailureRetryIntervalMs?: number;
 }
 
 export interface WindowRunService {
@@ -207,7 +224,9 @@ type WindowCoveragePlan = {
 };
 
 type WindowRunJobContext = {
-  coverageIndex: ReportCoverageIndexStore;
+  globalCoverageIndex: ReportCoverageIndexStore;
+  batchCoverageIndex?: ReportCoverageIndexStore;
+  batchCoverageRelativePath?: string;
   rulesSemanticHashByTemplateId: Map<string, string>;
   coverageSummary: {
     skippedWindowCount: number;
@@ -218,6 +237,34 @@ type WindowRunJobContext = {
   };
   coveragePlanByWindowId: Map<string, WindowCoveragePlan>;
 };
+
+type BatchWindowRunJobContext = Omit<WindowRunJobContext, "batchCoverageIndex" | "batchCoverageRelativePath"> & {
+  batchCoverageIndex: ReportCoverageIndexStore;
+  batchCoverageRelativePath: string;
+};
+
+interface TemplateBatchRuntimeBatch {
+  batchId: string;
+  batchIndex: number;
+  templates: TemplateDto[];
+  splitReason: string;
+}
+
+interface ParallelTemplateBatchRuntimeState {
+  jobId: string;
+  status: JobRuntimeState["status"];
+  totalTemplateTargetCount: number;
+  completedTemplateTargetCount: number;
+  skippedTemplateTargetCount: number;
+  executedTemplateTargetCount: number;
+  executedWindowElapsedMs: number;
+  usage: TokenUsage;
+  fee: FeeAmount | null;
+  failureReason?: string;
+  pauseRequested: boolean;
+  cancelRequested: boolean;
+  deleteRequested: boolean;
+}
 
 interface RuntimeChatClient {
   chatCompletion(input: {
@@ -2462,6 +2509,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
     chatClient: RuntimeChatClient;
     job: WindowRunJobInput;
     manifestWindow: RuntimeWindowManifestWindow;
+    taskLogger?: TaskTextLogger;
     totalWindowCount: number;
     toolLoopRoundReasonCounts: Map<ToolLoopRoundReason, number>;
     windowText: string;
@@ -2470,7 +2518,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
     await fs.mkdir(reportsRoot, { recursive: true });
 
     let secrets = await getReportRedactionSecrets(input.chatClient.currentCandidate().providerConfigId);
-    options.taskLogger?.setSecrets(secrets);
+    input.taskLogger?.setSecrets(secrets);
     const allowedOutputFileNames = new Set(input.artifacts.templates.map((template) => template.fileName));
     const outcomeTracker = createBatchOutcomeTracker(
       input.artifacts.templates.map((template) => ({
@@ -2561,7 +2609,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
     };
 
     try {
-      await options.taskLogger?.append(["上下文", "窗口"], {
+      await input.taskLogger?.append(["上下文", "窗口"], {
         正在处理: `窗口 ${input.manifestWindow.index + 1}/${input.totalWindowCount}`,
         窗口序号: `${input.manifestWindow.index + 1}/${input.totalWindowCount}`,
         窗口文件: input.manifestWindow.textPath,
@@ -2606,9 +2654,9 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
 
         const requestCandidate = input.chatClient.currentCandidate();
         secrets = await getReportRedactionSecrets(requestCandidate.providerConfigId);
-        options.taskLogger?.setSecrets(secrets);
+        input.taskLogger?.setSecrets(secrets);
 
-        await options.taskLogger?.append(
+        await input.taskLogger?.append(
           ["大模型请求", "Prompt"],
           serializeModelRequestForTaskLog({
             value: {
@@ -2628,7 +2676,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
           tools: toolDefinitions,
           onRequestPrepared: async (snapshot) => {
             const preparedCandidate = input.chatClient.currentCandidate();
-            await options.taskLogger?.append(
+            await input.taskLogger?.append(
               ["大模型请求", "ProviderBody"],
               serializeModelRequestForTaskLog({
                 value: {
@@ -2650,7 +2698,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         const usageDelta = mapUsage(completion.normalizedUsage);
         usage = addUsage(usage, usageDelta);
 
-        await options.taskLogger?.append(["大模型返回"], {
+        await input.taskLogger?.append(["大模型返回"], {
           轮次: currentRoundIndex,
           正文: redactSecrets(completion.content, secrets),
           工具调用: redactJsonValue(completion.toolCalls, secrets),
@@ -2673,7 +2721,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
                 ? undefined
                 : "missing_template_outcome";
             incrementToolLoopRoundReason(input.toolLoopRoundReasonCounts, retryReason);
-            await options.taskLogger?.append(["上下文", "重试"], {
+            await input.taskLogger?.append(["上下文", "重试"], {
               原因: correctionMessage,
               ...toToolLoopRoundReasonLogFields(retryReason)
             });
@@ -2692,7 +2740,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             continue;
           }
 
-          await options.taskLogger?.append(["上下文", "批次结果"], {
+          await input.taskLogger?.append(["上下文", "批次结果"], {
             窗口: `${input.manifestWindow.index + 1}/${input.totalWindowCount}`,
             批次: `${input.batchIndex + 1}/${input.batchTotal}`,
             处理结果: outcomeTracker.outcomes()
@@ -2754,7 +2802,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         });
 
         for (const toolCall of toolCalls) {
-          await options.taskLogger?.append(["工具调用", toolCall.name], {
+          await input.taskLogger?.append(["工具调用", toolCall.name], {
             轮次: currentRoundIndex,
             工具调用ID: toolCall.id,
             模型原始输入: toolCall.replayArguments,
@@ -2948,7 +2996,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
           }
 
           const visibleToolResult = projectToolResultForModel(toolCall.name, toolResult);
-          await options.taskLogger?.append(["工具返回", toolCall.name], {
+          await input.taskLogger?.append(["工具返回", toolCall.name], {
             轮次: currentRoundIndex,
             工具调用ID: toolCall.id,
             实际执行输入: redactJsonValue(toolCall.executionArguments, secrets),
@@ -3023,7 +3071,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
           const correctionMessage = createBatchOutcomeCorrectionMessage(outcomeTracker);
           const retryReason: ToolLoopRoundReason = "missing_template_outcome";
           incrementToolLoopRoundReason(input.toolLoopRoundReasonCounts, retryReason);
-          await options.taskLogger?.append(["上下文", "重试"], {
+          await input.taskLogger?.append(["上下文", "重试"], {
             原因: correctionMessage,
             ...toToolLoopRoundReasonLogFields(retryReason)
           });
@@ -3032,7 +3080,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
       }
     } catch (error) {
       caughtWindowError = error;
-      await options.taskLogger?.append(["错误", "窗口"], {
+      await input.taskLogger?.append(["错误", "窗口"], {
         ...(currentRoundIndex ? { 轮次: currentRoundIndex } : {}),
         错误: toSafeErrorMessage(error, secrets),
         Token使用: usage
@@ -3042,13 +3090,18 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
       await cleanupBashSandboxAfterWindow({
         bashJobManager,
         bashSandbox,
-        taskLogger: options.taskLogger,
+        taskLogger: input.taskLogger,
         windowError: caughtWindowError
       });
     }
   }
 
-  async function createRuntimeChatClient(job: WindowRunJobInput): Promise<RuntimeChatClient> {
+  async function createRuntimeChatClient(input: {
+    batchId?: string;
+    job: WindowRunJobInput;
+    taskLogger?: TaskTextLogger;
+  }): Promise<RuntimeChatClient> {
+    const { job } = input;
     const providerConfigs = await options.providerStore.listProviderConfigs();
     const registry = createProviderRegistry({
       presets: getProviderPresets(),
@@ -3124,7 +3177,8 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             currentCandidate = fallbackPlan.advance() ?? previousCandidate;
             client = createClientForCandidate(currentCandidate);
             switchCount += 1;
-            await options.taskLogger?.append(["上下文", "模型切换"], {
+            await input.taskLogger?.append(["上下文", "模型切换"], {
+              ...(input.batchId ? { 批次ID: input.batchId } : {}),
               原因: classification.reason,
               从: formatModelCandidate(previousCandidate),
               到: formatModelCandidate(currentCandidate)
@@ -3162,7 +3216,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
     job: WindowRunJobInput;
     totalWindowCount: number;
   }): Promise<WindowRunJobContext> {
-    const coverageIndex = await loadReportCoverageIndex({
+    const globalCoverageIndex = await loadReportCoverageIndex({
       projectRoot: input.artifacts.project.rootPath,
       relativePath: COVERAGE_INDEX_DEFAULTS.relativePath,
       corruptionStrategy: COVERAGE_INDEX_DEFAULTS.corruptionStrategy
@@ -3184,7 +3238,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         rulesSemanticHashByTemplateId
       });
       const skippedCoverageTargets = input.job.input.skipAlreadyExtracted
-        ? coverageTargets.filter(({ target }) => coverageIndex.isCovered(target))
+        ? coverageTargets.filter(({ target }) => globalCoverageIndex.isCovered(target))
         : [];
       const skippedOutputFileNames = new Set(
         skippedCoverageTargets.map(({ template }) => template.fileName)
@@ -3208,7 +3262,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
     }
 
     return {
-      coverageIndex,
+      globalCoverageIndex,
       rulesSemanticHashByTemplateId,
       coverageSummary: {
         skippedWindowCount,
@@ -3218,6 +3272,492 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         pendingWindowLabels
       },
       coveragePlanByWindowId
+    };
+  }
+
+  async function createBatchWindowRunJobContext(input: {
+    artifacts: WindowRunArtifacts;
+    batchCoverageRelativePath: string;
+    globalCoverageIndex: ReportCoverageIndexStore;
+    job: WindowRunJobInput;
+    rulesSemanticHashByTemplateId: Map<string, string>;
+    totalWindowCount: number;
+  }): Promise<BatchWindowRunJobContext> {
+    const batchCoverageIndex = await loadReportCoverageIndex({
+      projectRoot: input.artifacts.project.rootPath,
+      relativePath: input.batchCoverageRelativePath,
+      corruptionStrategy: COVERAGE_INDEX_DEFAULTS.corruptionStrategy
+    });
+    const coveragePlanByWindowId = new Map<string, WindowCoveragePlan>();
+    let skippedWindowCount = 0;
+    let skippedTemplateTargetCount = 0;
+    let processedTemplateTargetCount = 0;
+    const pendingWindowLabels: string[] = [];
+
+    for (const manifestWindow of input.artifacts.runtimeWindowManifest.windows) {
+      const coverageTargets = createWindowCoverageTargets({
+        artifacts: input.artifacts,
+        manifestWindow,
+        rulesSemanticHashByTemplateId: input.rulesSemanticHashByTemplateId
+      });
+      const skippedCoverageTargets = input.job.input.skipAlreadyExtracted
+        ? coverageTargets.filter(({ target }) => input.globalCoverageIndex.isCovered(target))
+        : [];
+      const skippedOutputFileNames = new Set(skippedCoverageTargets.map(({ template }) => template.fileName));
+      const templatesToProcess = input.artifacts.templates.filter(
+        (template) => !skippedOutputFileNames.has(template.fileName)
+      );
+
+      coveragePlanByWindowId.set(manifestWindow.windowId, {
+        skippedCoverageTargets,
+        templatesToProcess
+      });
+      skippedTemplateTargetCount += skippedCoverageTargets.length;
+      processedTemplateTargetCount += templatesToProcess.length;
+
+      if (templatesToProcess.length === 0) {
+        skippedWindowCount += 1;
+      } else {
+        pendingWindowLabels.push(createWindowLabel(manifestWindow, input.totalWindowCount));
+      }
+    }
+
+    return {
+      globalCoverageIndex: input.globalCoverageIndex,
+      batchCoverageIndex,
+      batchCoverageRelativePath: input.batchCoverageRelativePath,
+      rulesSemanticHashByTemplateId: input.rulesSemanticHashByTemplateId,
+      coverageSummary: {
+        skippedWindowCount,
+        processedWindowCount: input.totalWindowCount - skippedWindowCount,
+        skippedTemplateTargetCount,
+        processedTemplateTargetCount,
+        pendingWindowLabels
+      },
+      coveragePlanByWindowId
+    };
+  }
+
+  function requireBatchValue<TKey, TValue>(
+    map: ReadonlyMap<TKey, TValue>,
+    key: TKey,
+    label: string
+  ): TValue {
+    const value = map.get(key);
+    if (value === undefined) {
+      throw new Error(`Missing ${label} for batch ${String(key)}`);
+    }
+    return value;
+  }
+
+  function createBatchLoggerWithTestMirror(batchLogger: TaskTextLogger): TaskTextLogger {
+    const mirrorLogger = options.taskLogger;
+    if (!mirrorLogger || (typeof mirrorLogger.absolutePath === "string" && mirrorLogger.absolutePath.length > 0)) {
+      return batchLogger;
+    }
+
+    return {
+      absolutePath: batchLogger.absolutePath,
+      relativePath: batchLogger.relativePath,
+      simpleAbsolutePath: batchLogger.simpleAbsolutePath,
+      simpleRelativePath: batchLogger.simpleRelativePath,
+      async append(tags, value) {
+        await batchLogger.append(tags, value);
+        await mirrorLogger.append(tags, value);
+      },
+      setSecrets(secrets) {
+        batchLogger.setSecrets(secrets);
+        mirrorLogger.setSecrets(secrets);
+      }
+    };
+  }
+
+  async function recordBatchCoverageOutcome(input: {
+    artifacts: WindowRunArtifacts;
+    batchContext: BatchWindowRunJobContext;
+    batchLogger: TaskTextLogger;
+    manifestWindow: RuntimeWindowManifestWindow;
+    outcome: BatchOutcome;
+  }): Promise<boolean> {
+    if (input.outcome.status !== "written" && input.outcome.status !== "no_update") {
+      return false;
+    }
+
+    const template = input.artifacts.templates.find((candidate) => candidate.fileName === input.outcome.outputFileName);
+    if (!template) {
+      return false;
+    }
+    const rulesSemanticHash = input.batchContext.rulesSemanticHashByTemplateId.get(template.id);
+    if (!rulesSemanticHash) {
+      throw new Error(`Missing rules semantic hash for template ${template.id}`);
+    }
+
+    const record = {
+      ...createCoverageTarget({
+        artifacts: input.artifacts,
+        manifestWindow: input.manifestWindow,
+        rulesSemanticHash,
+        template
+      }),
+      status: input.outcome.status,
+      updatedAt: options.clock.now()
+    };
+    input.batchContext.globalCoverageIndex.recordCovered(record);
+    input.batchContext.batchCoverageIndex.recordCovered(record);
+    await input.batchLogger.append(["上下文", "覆盖索引记录"], {
+      全局索引路径: COVERAGE_INDEX_DEFAULTS.relativePath,
+      批次索引路径: input.batchContext.batchCoverageRelativePath,
+      输出文件: input.outcome.outputFileName,
+      状态: input.outcome.status
+    });
+    return true;
+  }
+
+  function createParallelTemplateBatchRuntimeFacade(input: {
+    job: WindowRunJobInput;
+    runPipelines(): Promise<void>;
+    totalTemplateTargetCount: number;
+  }): {
+    beginWindow(): void;
+    endWindow(): void;
+    runtime: JobRuntime;
+    sleep(ms: number): Promise<"elapsed" | "woken">;
+    waitForRunPermission(): Promise<void>;
+    shouldAbort(): TemplateBatchPipelineAbortError | null;
+    recordProgress(progress: TemplateBatchPipelineProcessResult): Promise<void>;
+    rememberFatalStop(error: unknown): void;
+    wakeControlWaiters(): void;
+  } {
+    const eventBus = createEventBus<JobRuntimeEvent>();
+    let state: ParallelTemplateBatchRuntimeState | undefined;
+    let activeJobId: string | null = null;
+    let fatalAbortError: TemplateBatchPipelineAbortError | null = null;
+    let activeWindowCount = 0;
+    const controlWaiters = new Set<() => void>();
+    let resolveSettled!: () => void;
+    const settled = new Promise<void>((resolve) => {
+      resolveSettled = resolve;
+    });
+    let didResolveSettled = false;
+
+    function markSettled(): void {
+      if (!didResolveSettled) {
+        didResolveSettled = true;
+        resolveSettled();
+      }
+    }
+
+    function toRuntimeState(source: ParallelTemplateBatchRuntimeState): JobRuntimeState {
+      return {
+        jobId: source.jobId,
+        status: source.status,
+        completedWindowCount: source.completedTemplateTargetCount,
+        totalWindowCount: source.totalTemplateTargetCount,
+        skippedWindowCount: source.skippedTemplateTargetCount,
+        executedWindowCount: source.executedTemplateTargetCount,
+        executedWindowElapsedMs: source.executedWindowElapsedMs,
+        usage: { ...source.usage },
+        fee: source.fee ? { ...source.fee } : null,
+        failureReason: source.failureReason
+      };
+    }
+
+    async function emit(type: JobRuntimeEvent["type"], payload: Record<string, unknown>): Promise<void> {
+      await eventBus.publish({
+        type,
+        payload,
+        createdAt: options.clock.now()
+      } as JobRuntimeEvent);
+    }
+
+    async function saveState(): Promise<void> {
+      if (!state) {
+        return;
+      }
+      await options.onRuntimeState(toRuntimeState(state));
+    }
+
+    function cloneCurrentState(): JobRuntimeState | undefined {
+      return state ? toRuntimeState(state) : undefined;
+    }
+
+    function wakeControlWaiters(): void {
+      const waiters = [...controlWaiters];
+      controlWaiters.clear();
+      for (const wake of waiters) {
+        wake();
+      }
+    }
+
+    function shouldAbort(): TemplateBatchPipelineAbortError | null {
+      if (fatalAbortError) {
+        return fatalAbortError;
+      }
+      if (state?.deleteRequested) {
+        return new TemplateBatchPipelineAbortError("delete requested", "deleted");
+      }
+      if (state?.cancelRequested) {
+        return new TemplateBatchPipelineAbortError("cancel requested", "cancelled");
+      }
+      return null;
+    }
+
+    function rememberFatalStop(error: unknown): void {
+      fatalAbortError ??= new TemplateBatchPipelineAbortError(toSafeErrorMessage(error), "fatal_config");
+      wakeControlWaiters();
+    }
+
+    async function sleep(ms: number): Promise<"elapsed" | "woken"> {
+      if (shouldAbort() || state?.pauseRequested) {
+        return "woken";
+      }
+
+      return new Promise<"elapsed" | "woken">((resolve) => {
+        let settled = false;
+        const timer = setTimeout(() => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          controlWaiters.delete(wake);
+          resolve("elapsed");
+        }, ms);
+        const wake = () => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          clearTimeout(timer);
+          controlWaiters.delete(wake);
+          resolve("woken");
+        };
+        controlWaiters.add(wake);
+      });
+    }
+
+    async function waitForRunPermission(): Promise<void> {
+      if (!state) {
+        return;
+      }
+      if (shouldAbort()) {
+        return;
+      }
+
+      while (state.pauseRequested && activeWindowCount > 0 && !shouldAbort()) {
+        await new Promise<void>((resolve) => {
+          const wake = () => {
+            controlWaiters.delete(wake);
+            resolve();
+          };
+          controlWaiters.add(wake);
+        });
+      }
+
+      if (shouldAbort()) {
+        return;
+      }
+
+      if (state.pauseRequested) {
+        state.status = "paused";
+        state.pauseRequested = false;
+        await saveState();
+        await emit("job.paused", {
+          jobId: input.job.id,
+          completedWindowCount: state.completedTemplateTargetCount
+        });
+      }
+
+      while (state.status === "paused" && !shouldAbort()) {
+        await new Promise<void>((resolve) => {
+          const wake = () => {
+            controlWaiters.delete(wake);
+            resolve();
+          };
+          controlWaiters.add(wake);
+        });
+      }
+    }
+
+    async function finishTerminal(status: "completed" | "cancelled" | "deleted" | "failed", message?: string): Promise<void> {
+      if (!state) {
+        return;
+      }
+      state.status = status;
+      state.failureReason = message;
+      await saveState();
+      if (status === "completed") {
+        await emit("job.completed", {
+          jobId: input.job.id,
+          completedWindowCount: state.completedTemplateTargetCount,
+          usage: { ...state.usage },
+          fee: state.fee ? { ...state.fee } : null
+        });
+      } else if (status === "cancelled") {
+        await emit("job.cancelled", {
+          jobId: input.job.id,
+          completedWindowCount: state.completedTemplateTargetCount
+        });
+      } else if (status === "deleted") {
+        await emit("job.deleted", { jobId: input.job.id });
+      } else {
+        await emit("job.failed", { jobId: input.job.id, message: message ?? "Job failed" });
+      }
+      activeJobId = null;
+    }
+
+    const runtime: JobRuntime = {
+      events: eventBus,
+      async startJob(runtimeInput) {
+        if (activeJobId !== null) {
+          return { ok: false, error: { code: "job_already_running" } };
+        }
+
+        state = {
+          jobId: input.job.id,
+          status: "running",
+          totalTemplateTargetCount: input.totalTemplateTargetCount,
+          completedTemplateTargetCount: 0,
+          skippedTemplateTargetCount: 0,
+          executedTemplateTargetCount: 0,
+          executedWindowElapsedMs: 0,
+          usage: { ...EMPTY_USAGE },
+          fee: null,
+          pauseRequested: false,
+          cancelRequested: false,
+          deleteRequested: false
+        };
+        activeJobId = input.job.id;
+
+        try {
+          await saveState();
+          await emit("job.started", {
+            jobId: input.job.id,
+            bookId: runtimeInput.bookId,
+            modelId: runtimeInput.modelId,
+            templateIds: runtimeInput.templateIds,
+            totalWindowCount: input.totalTemplateTargetCount
+          });
+          await input.runPipelines();
+          await finishTerminal("completed");
+          return { ok: true, state: cloneCurrentState()! };
+        } catch (error) {
+          if (error instanceof TemplateBatchPipelineAbortError) {
+            if (error.code === "cancelled") {
+              await finishTerminal("cancelled");
+              return { ok: true, state: cloneCurrentState()! };
+            }
+            if (error.code === "deleted") {
+              await finishTerminal("deleted");
+              return { ok: true, state: cloneCurrentState()! };
+            }
+            const message = error.message || "Job failed";
+            await finishTerminal("failed", message);
+            return { ok: false, error: { code: "job_failed", message } };
+          }
+
+          const message = error instanceof Error ? error.message : "Job failed";
+          fatalAbortError ??= new TemplateBatchPipelineAbortError(message, "fatal_config");
+          wakeControlWaiters();
+          await finishTerminal("failed", message);
+          return { ok: false, error: { code: "job_failed", message } };
+        } finally {
+          markSettled();
+        }
+      },
+      async pauseJob(jobId) {
+        if (!state || state.jobId !== jobId) {
+          return { ok: false, error: { code: "job_not_found" } };
+        }
+        if (state.status !== "running") {
+          return { ok: false, error: { code: "invalid_job_state", currentStatus: state.status } };
+        }
+        state.status = "pause_requested";
+        state.pauseRequested = true;
+        await saveState();
+        await emit("job.pause.requested", { jobId });
+        wakeControlWaiters();
+        return { ok: true };
+      },
+      async resumeJob(jobId) {
+        if (!state || state.jobId !== jobId) {
+          return { ok: false, error: { code: "job_not_found" } };
+        }
+        if (state.status !== "paused") {
+          return { ok: false, error: { code: "invalid_job_state", currentStatus: state.status } };
+        }
+        state.status = "running";
+        await saveState();
+        await emit("job.resume.requested", { jobId });
+        wakeControlWaiters();
+        return { ok: true };
+      },
+      async cancelJob(jobId) {
+        if (!state || state.jobId !== jobId) {
+          return { ok: false, error: { code: "job_not_found" } };
+        }
+        if (state.status !== "running" && state.status !== "pause_requested" && state.status !== "paused") {
+          return { ok: false, error: { code: "invalid_job_state", currentStatus: state.status } };
+        }
+        state.cancelRequested = true;
+        await emit("job.cancel.requested", { jobId });
+        wakeControlWaiters();
+        return { ok: true };
+      },
+      async deleteJob(jobId) {
+        if (!state || state.jobId !== jobId) {
+          return { ok: false, error: { code: "job_not_found" } };
+        }
+        if (state.status !== "running" && state.status !== "pause_requested" && state.status !== "paused") {
+          return { ok: false, error: { code: "invalid_job_state", currentStatus: state.status } };
+        }
+        state.deleteRequested = true;
+        wakeControlWaiters();
+        if (activeWindowCount === 0) {
+          await settled;
+        }
+        return { ok: true };
+      },
+      getJobState(jobId) {
+        if (!state || state.jobId !== jobId) {
+          return undefined;
+        }
+        return cloneCurrentState();
+      }
+    };
+
+    return {
+      beginWindow() {
+        activeWindowCount += 1;
+      },
+      endWindow() {
+        activeWindowCount = Math.max(0, activeWindowCount - 1);
+        wakeControlWaiters();
+      },
+      runtime,
+      sleep,
+      waitForRunPermission,
+      shouldAbort,
+      async recordProgress(progress) {
+        if (!state) {
+          return;
+        }
+        state.completedTemplateTargetCount += progress.completedTemplateTargetCount;
+        state.skippedTemplateTargetCount += progress.skippedTemplateTargetCount;
+        state.executedTemplateTargetCount += progress.executedTemplateTargetCount;
+        state.usage = addUsage(state.usage, progress.usage);
+        await saveState();
+        await emit("job.window.completed", {
+          jobId: input.job.id,
+          completedTemplateTargetCount: progress.completedTemplateTargetCount,
+          skippedTemplateTargetCount: progress.skippedTemplateTargetCount,
+          executedTemplateTargetCount: progress.executedTemplateTargetCount,
+          usage: progress.usage,
+          fee: NO_TOOL_FEE,
+          skipped: progress.executedTemplateTargetCount === 0
+        });
+      },
+      rememberFatalStop,
+      wakeControlWaiters
     };
   }
 
@@ -3269,10 +3809,10 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
           }
 
           const windowText = await readWindowText(input.artifacts.project, manifestWindow);
-          const templateBatching = DEFAULT_CONFIG.extractionRuleDefaults.templateBatching;
+          const maxTemplatesPerCall = input.job.input.templateBatchSize;
           const templateBatches = planTemplateBatches({
             templates: coveragePlan.templatesToProcess,
-            maxTemplatesPerCall: templateBatching.maxTemplatesPerCall
+            maxTemplatesPerCall
           });
           const templatesByOutputFileName = new Map(
             coveragePlan.templatesToProcess.map((template) => [template.fileName, template])
@@ -3288,11 +3828,12 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
                 templates: templateBatch.templates
               },
               batchIndex: templateBatchIndex,
-              batchMaxTemplatesPerCall: templateBatching.maxTemplatesPerCall,
+              batchMaxTemplatesPerCall: maxTemplatesPerCall,
               batchTotal: templateBatches.length,
               chatClient: input.chatClient,
               job: input.job,
               manifestWindow,
+              taskLogger: options.taskLogger,
               totalWindowCount: input.totalWindowCount,
               toolLoopRoundReasonCounts,
               windowText
@@ -3316,7 +3857,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
                 throw new Error(`Missing rules semantic hash for template ${template.id}`);
               }
 
-              input.context.coverageIndex.recordCovered({
+              input.context.globalCoverageIndex.recordCovered({
                 ...createCoverageTarget({
                   artifacts: input.artifacts,
                   manifestWindow,
@@ -3332,7 +3873,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
 
           await appendToolLoopRoundReasonSummary();
           if (coverageRecordCount > 0) {
-            await input.context.coverageIndex.save();
+            await input.context.globalCoverageIndex.save();
             await options.taskLogger?.append(["上下文", "覆盖索引更新"], {
               索引路径: COVERAGE_INDEX_DEFAULTS.relativePath,
               窗口: `${manifestWindow.index + 1}/${input.totalWindowCount}`,
@@ -3360,59 +3901,289 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
     };
   }
 
+  async function runManifestWindowTemplateBatch(input: {
+    artifacts: WindowRunArtifacts;
+    batch: TemplateBatchRuntimeBatch;
+    batchContext: BatchWindowRunJobContext;
+    batchLogger: TaskTextLogger;
+    batchTotal: number;
+    chatClient: RuntimeChatClient;
+    job: WindowRunJobInput;
+    manifestWindow: RuntimeWindowManifestWindow;
+    totalWindowCount: number;
+  }): Promise<TemplateBatchPipelineProcessResult> {
+    let secrets: string[] = [];
+    const toolLoopRoundReasonCounts = new Map<ToolLoopRoundReason, number>();
+    let wroteToolLoopRoundReasonSummary = false;
+
+    const appendToolLoopRoundReasonSummary = async (): Promise<void> => {
+      if (wroteToolLoopRoundReasonSummary) {
+        return;
+      }
+      await input.batchLogger.append(["上下文", "多轮原因汇总"], {
+        批次ID: input.batch.batchId,
+        窗口: `${input.manifestWindow.index + 1}/${input.totalWindowCount}`,
+        原因计数: toToolLoopReasonCountRecord(toolLoopRoundReasonCounts)
+      });
+      wroteToolLoopRoundReasonSummary = true;
+    };
+
+    try {
+      secrets = await getReportRedactionSecrets(input.chatClient.currentCandidate().providerConfigId);
+      const coveragePlan = input.batchContext.coveragePlanByWindowId.get(input.manifestWindow.windowId);
+      if (!coveragePlan) {
+        throw new Error(`Missing coverage plan for window ${input.manifestWindow.windowId}`);
+      }
+
+      if (coveragePlan.templatesToProcess.length === 0) {
+        await input.batchLogger.append(["上下文", "覆盖索引跳过窗口"], {
+          批次ID: input.batch.batchId,
+          窗口: `${input.manifestWindow.index + 1}/${input.totalWindowCount}`,
+          窗口文件: input.manifestWindow.fileName
+        });
+        await appendToolLoopRoundReasonSummary();
+        return {
+          completedTemplateTargetCount: input.batch.templates.length,
+          skippedTemplateTargetCount: input.batch.templates.length,
+          executedTemplateTargetCount: 0,
+          usage: { ...EMPTY_USAGE }
+        };
+      }
+
+      const windowText = await readWindowText(input.artifacts.project, input.manifestWindow);
+      const templatesByOutputFileName = new Map(
+        coveragePlan.templatesToProcess.map((template) => [template.fileName, template])
+      );
+      const result = await executeWindowToolLoop({
+        artifacts: {
+          ...input.artifacts,
+          templates: coveragePlan.templatesToProcess
+        },
+        batchIndex: input.batch.batchIndex,
+        batchMaxTemplatesPerCall: input.job.input.templateBatchSize,
+        batchTotal: input.batchTotal,
+        chatClient: input.chatClient,
+        job: input.job,
+        manifestWindow: input.manifestWindow,
+        taskLogger: input.batchLogger,
+        totalWindowCount: input.totalWindowCount,
+        toolLoopRoundReasonCounts,
+        windowText
+      });
+      let coverageRecordCount = 0;
+
+      for (const outcome of result.outcomes) {
+        if (!templatesByOutputFileName.has(outcome.outputFileName)) {
+          continue;
+        }
+        if (
+          await recordBatchCoverageOutcome({
+            artifacts: input.artifacts,
+            batchContext: input.batchContext,
+            batchLogger: input.batchLogger,
+            manifestWindow: input.manifestWindow,
+            outcome
+          })
+        ) {
+          coverageRecordCount += 1;
+        }
+      }
+
+      await appendToolLoopRoundReasonSummary();
+      if (coverageRecordCount > 0) {
+        await input.batchContext.globalCoverageIndex.save();
+        await input.batchContext.batchCoverageIndex.save();
+        await input.batchLogger.append(["上下文", "覆盖索引更新"], {
+          批次ID: input.batch.batchId,
+          全局索引路径: COVERAGE_INDEX_DEFAULTS.relativePath,
+          批次索引路径: input.batchContext.batchCoverageRelativePath,
+          窗口: `${input.manifestWindow.index + 1}/${input.totalWindowCount}`,
+          新增或更新记录数: coverageRecordCount
+        });
+      }
+
+      return {
+        completedTemplateTargetCount: input.batch.templates.length,
+        skippedTemplateTargetCount: input.batch.templates.length - coveragePlan.templatesToProcess.length,
+        executedTemplateTargetCount: coveragePlan.templatesToProcess.length,
+        usage: result.usage
+      };
+    } catch (error) {
+      try {
+        await appendToolLoopRoundReasonSummary();
+      } catch {
+        // Preserve the original window failure; summary logging is diagnostic only on failure paths.
+      }
+      if (error instanceof TemplateBatchPipelineAbortError || error instanceof OpenAiCompatibleRequestError) {
+        throw error;
+      }
+      throw new Error(
+        `窗口 ${input.manifestWindow.index + 1}/${input.totalWindowCount}（${input.manifestWindow.fileName}），批次 ${input.batch.batchId} 执行失败：${toSafeErrorMessage(error, secrets)}`
+      );
+    }
+  }
+
   return {
     async runJobWindows({ artifacts, job }) {
       const reportArtifacts: WindowRunArtifacts = {
         ...artifacts,
         templates: artifacts.templates.map(toFormalReportTemplate)
       };
-      const chatClient = await createRuntimeChatClient(job);
-      const runtimeInput = createRuntimeInput({
-        artifacts: reportArtifacts,
-        job,
-        candidate: chatClient.currentCandidate()
-      });
+      const templateBatches = planTemplateBatches({
+        templates: reportArtifacts.templates,
+        maxTemplatesPerCall: job.input.templateBatchSize
+      }) as TemplateBatchRuntimeBatch[];
       const context = await createWindowRunJobContext({
         artifacts: reportArtifacts,
         job,
-        totalWindowCount: runtimeInput.windows.length
+        totalWindowCount: reportArtifacts.runtimeWindowManifest.windows.length
       });
       await options.taskLogger?.append(["上下文", "覆盖索引预检"], {
         索引路径: COVERAGE_INDEX_DEFAULTS.relativePath,
         跳过已提取: job.input.skipAlreadyExtracted,
-        窗口总数: runtimeInput.windows.length,
+        窗口总数: reportArtifacts.runtimeWindowManifest.windows.length,
         已覆盖窗口数: context.coverageSummary.skippedWindowCount,
         待处理窗口数: context.coverageSummary.processedWindowCount,
         已覆盖模板目标数: context.coverageSummary.skippedTemplateTargetCount,
         待处理模板目标数: context.coverageSummary.processedTemplateTargetCount,
         待处理窗口: context.coverageSummary.pendingWindowLabels
       });
-      const runtime = createJobRuntime({
-        clock: options.clock,
-        llm: createLlmAdapter({
-          artifacts: reportArtifacts,
-          chatClient,
-          context,
+
+      const batchArtifactsById = new Map<string, WindowRunArtifacts>();
+      const batchLoggerById = new Map<string, TaskTextLogger>();
+      const batchContextById = new Map<string, BatchWindowRunJobContext>();
+      const batchChatClientById = new Map<string, RuntimeChatClient>();
+
+      for (const batch of templateBatches) {
+        const batchArtifacts: WindowRunArtifacts = {
+          ...reportArtifacts,
+          templates: batch.templates
+        };
+        const batchLogger = createBatchLoggerWithTestMirror(await createTaskTextLogger({
+          clock: options.clock,
+          jobId: job.id,
+          projectRoot: reportArtifacts.project.rootPath,
+          taskInfo: toTemplateBatchTaskInfo(job.id, batch.batchId),
+          logDirectorySegments: toTemplateBatchLogSegments(job.id, batch.batchId),
+          baseFileNamePrefix: batch.batchId
+        }));
+        const batchCoverageRelativePath = toTemplateBatchCoverageRelativePath(job.id, batch.batchId);
+        const batchContext = await createBatchWindowRunJobContext({
+          artifacts: batchArtifacts,
+          batchCoverageRelativePath,
+          globalCoverageIndex: context.globalCoverageIndex,
           job,
-          totalWindowCount: runtimeInput.windows.length
-        }),
-        repository: {
-          async saveState(state) {
-            await options.onRuntimeState(state);
-          }
-        },
-        tools: {
-          async execute() {
-            throw new Error("窗口 tool loop 已在 LLM adapter 内执行，runtime tools.execute 不应被调用");
-          }
+          rulesSemanticHashByTemplateId: context.rulesSemanticHashByTemplateId,
+          totalWindowCount: reportArtifacts.runtimeWindowManifest.windows.length
+        });
+        const batchChatClient = await createRuntimeChatClient({
+          batchId: batch.batchId,
+          job,
+          taskLogger: batchLogger
+        });
+
+        batchArtifactsById.set(batch.batchId, batchArtifacts);
+        batchLoggerById.set(batch.batchId, batchLogger);
+        batchContextById.set(batch.batchId, batchContext);
+        batchChatClientById.set(batch.batchId, batchChatClient);
+      }
+
+      const firstBatch = templateBatches[0];
+      const firstChatClient = firstBatch
+        ? requireBatchValue(batchChatClientById, firstBatch.batchId, "chat client")
+        : await createRuntimeChatClient({ job, taskLogger: options.taskLogger });
+      const runtimeInput = createRuntimeInput({
+        artifacts: reportArtifacts,
+        job,
+        candidate: firstChatClient.currentCandidate()
+      });
+      const pipelineWindows = runtimeInput.windows.map((window) => ({
+        ...window,
+        windowId: window.id
+      }));
+      const retryIntervalMs =
+        options.templateBatchFailureRetryIntervalMs ??
+        DEFAULT_CONFIG.extractionRuleDefaults.templateBatching.failureRetryIntervalMs;
+      let runtimeControls: ReturnType<typeof createParallelTemplateBatchRuntimeFacade>;
+      runtimeControls = createParallelTemplateBatchRuntimeFacade({
+        job,
+        totalTemplateTargetCount: runtimeInput.windows.length * reportArtifacts.templates.length,
+        async runPipelines() {
+          await runTemplateBatchPipelines({
+            batches: templateBatches,
+            windows: pipelineWindows,
+            retryIntervalMs,
+            sleep: runtimeControls.sleep,
+            onFatalStop: runtimeControls.rememberFatalStop,
+            waitForRunPermission: runtimeControls.waitForRunPermission,
+            shouldAbort: runtimeControls.shouldAbort,
+            async processWindow({ batch, window, windowIndex }) {
+              const manifestWindow = getWindowMetadata(window);
+              const batchArtifacts = requireBatchValue(batchArtifactsById, batch.batchId, "artifacts");
+              const batchLogger = requireBatchValue(batchLoggerById, batch.batchId, "logger");
+              const batchContext = requireBatchValue(batchContextById, batch.batchId, "context");
+              const batchChatClient = requireBatchValue(batchChatClientById, batch.batchId, "chat client");
+
+              runtimeControls.beginWindow();
+              try {
+                return await runManifestWindowTemplateBatch({
+                  artifacts: batchArtifacts,
+                  batch,
+                  batchContext,
+                  batchLogger,
+                  batchTotal: templateBatches.length,
+                  chatClient: batchChatClient,
+                  job,
+                  manifestWindow,
+                  totalWindowCount: runtimeInput.windows.length
+                });
+              } catch (error) {
+                if (error instanceof TemplateBatchPipelineAbortError) {
+                  throw error;
+                }
+                if (error instanceof OpenAiCompatibleRequestError) {
+                  throw error;
+                }
+                runtimeControls.wakeControlWaiters();
+                throw new TemplateBatchPipelineAbortError(toSafeErrorMessage(error), "fatal_config");
+              } finally {
+                runtimeControls.endWindow();
+              }
+            },
+            async onProgress({ completedTemplateTargetCount, skippedTemplateTargetCount, executedTemplateTargetCount, usage }) {
+              await runtimeControls.recordProgress({
+                completedTemplateTargetCount,
+                skippedTemplateTargetCount,
+                executedTemplateTargetCount,
+                usage
+              });
+            },
+            async onBatchFailure({ batch, window, windowIndex, error, nextRetryDelayMs }) {
+              const batchLogger = requireBatchValue(batchLoggerById, batch.batchId, "logger");
+              await batchLogger.append(["错误", "批次重试"], {
+                批次ID: batch.batchId,
+                窗口ID: window.windowId,
+                窗口序号: windowIndex + 1,
+                错误: toSafeErrorMessage(error),
+                下次重试延迟毫秒: nextRetryDelayMs
+              });
+              await options.taskLogger?.append(["错误", "批次重试"], {
+                批次ID: batch.batchId,
+                窗口ID: window.windowId,
+                窗口序号: windowIndex + 1,
+                错误: toSafeErrorMessage(error),
+                下次重试延迟毫秒: nextRetryDelayMs
+              });
+            }
+          });
         }
       });
 
-      await options.onRuntimeCreated?.({ jobId: job.id, runtime });
+      await options.onRuntimeCreated?.({ jobId: job.id, runtime: runtimeControls.runtime });
       try {
-        return await runtime.startJob(runtimeInput);
+        return await runtimeControls.runtime.startJob(runtimeInput);
       } finally {
-        await options.onRuntimeSettled?.({ jobId: job.id, runtime });
+        await options.onRuntimeSettled?.({ jobId: job.id, runtime: runtimeControls.runtime });
       }
     }
   };

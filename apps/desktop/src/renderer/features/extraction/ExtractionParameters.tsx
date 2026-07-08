@@ -167,6 +167,20 @@ export function ExtractionParameters({
                 value={renderNumberValue(formState.overlapChapterCount)}
               />
             </label>
+            <label className="provider-form__field">
+              <span>单批次模板数</span>
+              <input
+                min={1}
+                onChange={(event) => {
+                  onFormChange({
+                    ...formState,
+                    templateBatchSize: updateNumber(event.currentTarget.value)
+                  });
+                }}
+                type="number"
+                value={renderNumberValue(formState.templateBatchSize)}
+              />
+            </label>
           </div>
         </fieldset>
 

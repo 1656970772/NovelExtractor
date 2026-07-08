@@ -104,6 +104,24 @@ describe("task text logger", () => {
     expect(second.simpleRelativePath).toBe("runs/job-1/logs/20260630-153012-001.simple.txt");
   });
 
+  it("can allocate logs under custom batch directories", async () => {
+    const logger = await createTaskTextLogger({
+      clock: createSequenceClock(["2026-06-30T15:30:12.000Z"]),
+      jobId: "job-1",
+      projectRoot: tempRoot,
+      taskInfo: "批次日志",
+      logDirectorySegments: ["runs", "job-1", "logs", "batches", "batch-0001"],
+      baseFileNamePrefix: "batch-0001"
+    });
+
+    expect(logger.relativePath).toBe(
+      "runs/job-1/logs/batches/batch-0001/batch-0001-20260630-153012.txt"
+    );
+    expect(logger.simpleRelativePath).toBe(
+      "runs/job-1/logs/batches/batch-0001/batch-0001-20260630-153012.simple.txt"
+    );
+  });
+
   it("logs model requests with provider-native tool schemas instead of flattened tool tables", async () => {
     const windowText = "这里是很长很长的窗口原文。\n第二行仍然属于窗口原文。";
     const messages: ChatCompletionMessage[] = [

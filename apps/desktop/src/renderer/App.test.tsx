@@ -362,6 +362,8 @@ describe("desktop workbench shell", () => {
     expect(screen.getByRole("checkbox", { name: "跳过已提取章节" })).toBeChecked();
     await user.clear(screen.getByRole("spinbutton", { name: "重叠章节数" }));
     await user.type(screen.getByRole("spinbutton", { name: "重叠章节数" }), "0");
+    await user.clear(screen.getByRole("spinbutton", { name: "单批次模板数" }));
+    await user.type(screen.getByRole("spinbutton", { name: "单批次模板数" }), "2");
     await user.click(screen.getByRole("checkbox", { name: "跳过已提取章节" }));
     await user.click(screen.getByRole("button", { name: "创建任务" }));
 
@@ -375,6 +377,7 @@ describe("desktop workbench shell", () => {
         singleRunChapterCount: 4,
         extractionChapterCount: 12,
         overlapChapterCount: 0,
+        templateBatchSize: 2,
         skipAlreadyExtracted: false
       });
     });

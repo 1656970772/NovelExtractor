@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { getDefaultConfig } from "@novel-extractor/config";
 import type { Book, ReportAsset } from "@novel-extractor/domain";
 import type { JobStatus } from "@novel-extractor/domain/job";
 import type { BookUploadResultDto, CreateJobDto } from "../shared/ipcTypes";
@@ -174,6 +175,7 @@ function isCreateJobDto(value: unknown): value is CreateJobDto {
     typeof value.singleRunChapterCount === "number" &&
     typeof value.extractionChapterCount === "number" &&
     typeof value.overlapChapterCount === "number" &&
+    (value.templateBatchSize === undefined || typeof value.templateBatchSize === "number") &&
     typeof value.skipAlreadyExtracted === "boolean"
   );
 }
@@ -259,10 +261,17 @@ function normalizeJobInput(input: CreateJobDto): CreateJobDto {
       : "explicit";
   const autoRetryOnFailure =
     typeof input.autoRetryOnFailure === "boolean" ? input.autoRetryOnFailure : false;
+  const defaultTemplateBatchSize =
+    getDefaultConfig().extractionRuleDefaults.templateBatching.maxTemplatesPerCall;
+  const templateBatchSize =
+    Number.isSafeInteger(input.templateBatchSize) && input.templateBatchSize > 0
+      ? input.templateBatchSize
+      : defaultTemplateBatchSize;
 
   if (
     modelSelectionMode === input.modelSelectionMode &&
-    autoRetryOnFailure === input.autoRetryOnFailure
+    autoRetryOnFailure === input.autoRetryOnFailure &&
+    templateBatchSize === input.templateBatchSize
   ) {
     return input;
   }
@@ -270,7 +279,8 @@ function normalizeJobInput(input: CreateJobDto): CreateJobDto {
   return {
     ...input,
     modelSelectionMode,
-    autoRetryOnFailure
+    autoRetryOnFailure,
+    templateBatchSize
   };
 }
 
@@ -304,7 +314,8 @@ function normalizeState(value: unknown): { changed: boolean; state: ProjectRunti
         return (
           job.status !== sourceJob?.status ||
           job.input.modelSelectionMode !== sourceJob.input.modelSelectionMode ||
-          job.input.autoRetryOnFailure !== sourceJob.input.autoRetryOnFailure
+          job.input.autoRetryOnFailure !== sourceJob.input.autoRetryOnFailure ||
+          job.input.templateBatchSize !== sourceJob.input.templateBatchSize
         );
       }) ||
       Object.prototype.hasOwnProperty.call(value, "chaptersByBookId"),

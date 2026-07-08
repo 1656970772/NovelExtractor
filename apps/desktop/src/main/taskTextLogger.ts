@@ -33,6 +33,8 @@ interface CreateTaskTextLoggerInput {
   appVersion?: string;
   taskInfo: string;
   buildInfo?: BuildInfo;
+  logDirectorySegments?: readonly string[];
+  baseFileNamePrefix?: string;
 }
 
 export interface ModelRequestTaskLogValue {
@@ -106,32 +108,52 @@ function deriveSimpleLogPath(allocated: {
   };
 }
 
+async function tryAllocateLogPath(input: {
+  absolutePath: string;
+  relativePath: string;
+}): Promise<{ absolutePath: string; relativePath: string } | null> {
+  try {
+    const handle = await fs.open(input.absolutePath, "wx");
+    await handle.close();
+    return input;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      await fs.mkdir(path.dirname(input.absolutePath), { recursive: true });
+      try {
+        const handle = await fs.open(input.absolutePath, "wx");
+        await handle.close();
+        return input;
+      } catch (retryError) {
+        const retryCode = (retryError as NodeJS.ErrnoException).code;
+        if (retryCode === "EEXIST") {
+          return null;
+        }
+        throw retryError;
+      }
+    }
+    if (code === "EEXIST") {
+      return null;
+    }
+    throw error;
+  }
+}
+
 async function allocateLogPath(input: {
   baseFileName: string;
   jobId: string;
   projectRoot: string;
+  logDirectorySegments?: readonly string[];
 }): Promise<{ absolutePath: string; relativePath: string }> {
+  const directorySegments = input.logDirectorySegments ?? ["runs", input.jobId, "logs"];
   for (let index = 0; index < 1000; index += 1) {
     const suffix = index === 0 ? "" : `-${String(index).padStart(3, "0")}`;
     const fileName = `${input.baseFileName}${suffix}.txt`;
-    const relativePath = toProjectRelativePath("runs", input.jobId, "logs", fileName);
-    const absolutePath = path.join(input.projectRoot, "runs", input.jobId, "logs", fileName);
-
-    try {
-      const handle = await fs.open(absolutePath, "wx");
-      await handle.close();
-      return { absolutePath, relativePath };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-        const handle = await fs.open(absolutePath, "wx");
-        await handle.close();
-        return { absolutePath, relativePath };
-      }
-
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-        throw error;
-      }
+    const relativePath = toProjectRelativePath(...directorySegments, fileName);
+    const absolutePath = path.join(input.projectRoot, ...directorySegments, fileName);
+    const allocated = await tryAllocateLogPath({ absolutePath, relativePath });
+    if (allocated) {
+      return allocated;
     }
   }
 
@@ -481,10 +503,14 @@ export async function appendTaskTextLogEntry(input: AppendTaskTextLogEntryInput)
 export async function createTaskTextLogger(input: CreateTaskTextLoggerInput): Promise<TaskTextLogger> {
   const clock = input.clock ?? systemClock;
   const createdAt = clock.now();
+  const timestampFileName = toFileTimestamp(createdAt);
+  const baseFileName =
+    input.baseFileNamePrefix === undefined ? timestampFileName : `${input.baseFileNamePrefix}-${timestampFileName}`;
   const allocated = await allocateLogPath({
-    baseFileName: toFileTimestamp(createdAt),
+    baseFileName,
     jobId: input.jobId,
-    projectRoot: input.projectRoot
+    projectRoot: input.projectRoot,
+    logDirectorySegments: input.logDirectorySegments
   });
   const simpleAllocated = deriveSimpleLogPath(allocated);
   await fs.writeFile(simpleAllocated.absolutePath, "", { encoding: "utf8", flag: "wx" });

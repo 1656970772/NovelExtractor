@@ -642,6 +642,10 @@ export function assertValidConfigInvariants(config: NovelExtractorConfig): void 
     templateBatching.promptBudgetChars as number,
     "template batching prompt budget chars"
   );
+  assertPositiveInteger(
+    templateBatching.failureRetryIntervalMs as number,
+    "template batching failure retry interval"
+  );
   if (!Array.isArray(templateBatching.nonMergeableTemplateTags)) {
     throw new ConfigInvariantError("template batching non-mergeable template tags must be an array.");
   }

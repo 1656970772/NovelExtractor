@@ -102,6 +102,7 @@ export interface TemplateBatchingDefaults {
   maxTemplatesPerCall: number;
   promptBudgetChars: number;
   nonMergeableTemplateTags: string[];
+  failureRetryIntervalMs: number;
 }
 
 export interface ExtractionRuleDefaults {

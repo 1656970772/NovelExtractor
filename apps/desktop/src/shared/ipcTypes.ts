@@ -196,6 +196,7 @@ export interface CreateJobDto {
   singleRunChapterCount: number;
   extractionChapterCount: number;
   overlapChapterCount: number;
+  templateBatchSize: number;
   skipAlreadyExtracted: boolean;
   autoRetryOnFailure?: boolean;
 }

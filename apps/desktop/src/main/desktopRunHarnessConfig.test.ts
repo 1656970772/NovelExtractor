@@ -20,7 +20,8 @@ describe("desktop real-run harness config", () => {
     expect(config.windowParams).toEqual({
       singleRunChapterCount: 5,
       extractionChapterCount: 81,
-      overlapChapterCount: 1
+      overlapChapterCount: 1,
+      templateBatchSize: 1
     });
     expect(REAL_RUN_TEMPLATE_FILES).toEqual([
       "NPC性格与代表事件模板.md",
@@ -67,7 +68,8 @@ describe("desktop real-run harness config", () => {
     expect(config.windowParams).toEqual({
       singleRunChapterCount: 5,
       extractionChapterCount: 13,
-      overlapChapterCount: 1
+      overlapChapterCount: 1,
+      templateBatchSize: 1
     });
     expect(
       createExpectedWindowPlanSummary(
@@ -175,6 +177,7 @@ describe("desktop real-run harness config", () => {
       singleRunChapterCount: 5,
       extractionChapterCount: 13,
       overlapChapterCount: 1,
+      templateBatchSize: 1,
       skipAlreadyExtracted: false
     });
   });

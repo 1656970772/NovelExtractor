@@ -85,9 +85,9 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
     }
   ],
   extractionParameterDefaults: {
-    singleRunChapterCount: 3,
-    extractionChapterCount: 9,
-    overlapChapterCount: 1
+    singleRunChapterCount: 10,
+    extractionChapterCount: 10,
+    overlapChapterCount: 0
   },
   extractionRuleDefaults: {
     routeFailurePolicy: {
@@ -117,11 +117,12 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
     },
     templateGroupFallbackStrategy: "by-output-file",
     templateBatching: {
-      maxTemplatesPerCall: 4,
+      maxTemplatesPerCall: 1,
       promptBudgetChars: 48000,
-      nonMergeableTemplateTags: []
+      nonMergeableTemplateTags: [],
+      failureRetryIntervalMs: 60000
     },
-    maxFullTemplatesPerCall: 4
+    maxFullTemplatesPerCall: 1
   },
   rawWindowReportDefaults: {
     fileNamePrefix: "raw-window",

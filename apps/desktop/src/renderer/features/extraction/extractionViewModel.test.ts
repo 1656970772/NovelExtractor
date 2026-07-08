@@ -1,3 +1,4 @@
+import { getDefaultConfig } from "@novel-extractor/config";
 import { describe, expect, it } from "vitest";
 import type { BookUploadResultDto, JobDto } from "../../../shared/ipcTypes";
 import {
@@ -80,15 +81,22 @@ describe("extractionViewModel", () => {
     expect(state.singleRunChapterCount).toBe(2);
     expect(state.extractionChapterCount).toBe(8);
     expect(state.overlapChapterCount).toBe(1);
+    expect(state.templateBatchSize).toBe(
+      getDefaultConfig().extractionRuleDefaults.templateBatching.maxTemplatesPerCall
+    );
     expect(state.skipAlreadyExtracted).toBe(true);
   });
 
   it("uses configured extraction parameter defaults when none are passed", () => {
+    const defaults = getDefaultConfig().extractionParameterDefaults;
+    const defaultTemplateBatchSize =
+      getDefaultConfig().extractionRuleDefaults.templateBatching.maxTemplatesPerCall;
     const state = createExtractionFormState({ books: [book], providerOptions });
 
-    expect(state.singleRunChapterCount).toBe(3);
-    expect(state.extractionChapterCount).toBe(9);
-    expect(state.overlapChapterCount).toBe(1);
+    expect(state.singleRunChapterCount).toBe(defaults.singleRunChapterCount);
+    expect(state.extractionChapterCount).toBe(defaults.extractionChapterCount);
+    expect(state.overlapChapterCount).toBe(defaults.overlapChapterCount);
+    expect(state.templateBatchSize).toBe(defaultTemplateBatchSize);
     expect(state.skipAlreadyExtracted).toBe(true);
   });
 
@@ -155,6 +163,7 @@ describe("extractionViewModel", () => {
         singleRunChapterCount: 4,
         extractionChapterCount: 12,
         overlapChapterCount: 0,
+        templateBatchSize: 1,
         skipAlreadyExtracted: false
       },
       { providerOptions }
@@ -169,6 +178,7 @@ describe("extractionViewModel", () => {
       singleRunChapterCount: 4,
       extractionChapterCount: 12,
       overlapChapterCount: 0,
+      templateBatchSize: 1,
       skipAlreadyExtracted: false
     });
   });
@@ -184,6 +194,7 @@ describe("extractionViewModel", () => {
         singleRunChapterCount: 4,
         extractionChapterCount: 12,
         overlapChapterCount: 0,
+        templateBatchSize: 1,
         skipAlreadyExtracted: false
       },
       { providerOptions }
@@ -198,8 +209,45 @@ describe("extractionViewModel", () => {
       singleRunChapterCount: 4,
       extractionChapterCount: 12,
       overlapChapterCount: 0,
+      templateBatchSize: 1,
       skipAlreadyExtracted: false
     });
+  });
+
+  it("includes configured template batch size in the create-job payload", () => {
+    const state = createExtractionFormState({
+      books: [book],
+      providerOptions,
+      templates: [
+        {
+          id: "pill-analysis",
+          scope: "global",
+          name: "丹药分析模板",
+          fileName: "丹药分析.md",
+          body: "提取丹药信息。",
+          createdAt: "2026-06-27T00:00:00.000Z",
+          updatedAt: "2026-06-27T00:00:00.000Z"
+        }
+      ],
+      defaults: {
+        singleRunChapterCount: 10,
+        extractionChapterCount: 10,
+        overlapChapterCount: 0
+      }
+    });
+
+    const dto = buildCreateJobDto(
+      {
+        ...state,
+        modelProviderOptionId: deepSeekProviderOption.id,
+        modelModelId: "model-a",
+        modelSelectionMode: "explicit",
+        templateBatchSize: 2
+      },
+      { providerOptions }
+    );
+
+    expect(dto.templateBatchSize).toBe(2);
   });
 
   it("normalizes cross-field extraction parameters when building a CreateJobDto", () => {
@@ -213,6 +261,7 @@ describe("extractionViewModel", () => {
         singleRunChapterCount: 3,
         extractionChapterCount: 9,
         overlapChapterCount: 3,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       },
       { providerOptions }
@@ -227,6 +276,7 @@ describe("extractionViewModel", () => {
         singleRunChapterCount: 5,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       },
       { providerOptions }

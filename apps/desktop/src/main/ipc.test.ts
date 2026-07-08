@@ -298,6 +298,7 @@ describe("desktop IPC contract", () => {
       singleRunChapterCount: number;
       extractionChapterCount: number;
       overlapChapterCount: number;
+      templateBatchSize: number;
       skipAlreadyExtracted: boolean;
       modelSelectionMode?: JobModelSelectionMode;
       autoRetryOnFailure?: boolean;

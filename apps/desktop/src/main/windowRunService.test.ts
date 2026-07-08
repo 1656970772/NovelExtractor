@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ApiKeyRef, ProviderConfig } from "@novel-extractor/domain";
+import type { JobRuntime } from "@novel-extractor/jobs";
 import { reasonixToolOrder } from "@novel-extractor/tools";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMemoryCredentialStore } from "./credentials";
@@ -14,6 +15,14 @@ import {
 
 const scratchDirs: string[] = [];
 const legacyDesktopToolNames = [...reasonixToolOrder, "mark_no_update"];
+
+function createDeferred<T = void>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
 
 afterEach(async () => {
   while (scratchDirs.length > 0) {
@@ -173,25 +182,61 @@ describe("window run coverage context", () => {
     });
   }, 20000);
 
-  it("does not switch providers for a switchable LLM failure in explicit mode", async () => {
-    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-explicit-no-switch-"));
+  it("keeps auto fallback state independent for each parallel template batch", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-auto-model-batch-isolation-"));
     scratchDirs.push(projectRoot);
     await writeSingleWindowText(projectRoot);
     const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
-    const minimaxKeyRef = credentialStore.saveApiKey({
-      providerConfigId: "minimax-provider",
-      apiKey: "sk-minimax"
+    const providerAKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-a",
+      apiKey: "sk-provider-a"
     });
-    const deepSeekKeyRef = credentialStore.saveApiKey({
-      providerConfigId: "deepseek-provider",
-      apiKey: "sk-deepseek"
+    const providerBKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-b",
+      apiKey: "sk-provider-b"
     });
-    const fetch = vi.fn(async () =>
-      new Response(JSON.stringify({ error: { message: "rate limit exceeded" } }), {
-        headers: { "Content-Type": "application/json" },
-        status: 429
+    const providers = [
+      createProviderConfig(providerAKeyRef, {
+        id: "provider-a",
+        baseUrl: "https://provider-a.local/v1",
+        modelId: "model-a",
+        displayName: "Provider A"
+      }),
+      createProviderConfig(providerBKeyRef, {
+        id: "provider-b",
+        baseUrl: "https://provider-b.local/v1",
+        modelId: "model-b",
+        displayName: "Provider B"
       })
-    );
+    ];
+    const templates = [
+      createTemplate({ id: "template-1", name: "报告一", fileName: "报告一.md" }),
+      createTemplate({ id: "template-2", name: "报告二", fileName: "报告二.md" })
+    ];
+    const requestRecords: Array<{ templateId: string; url: string; model: unknown }> = [];
+    const failedInitialProviderTemplates = new Set<string>();
+    const append = vi.fn(async () => {});
+    const onModelCandidateChanged = vi.fn();
+    const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const userPrompt = messagesOf(body).find((message) => message.role === "user")?.content as string | undefined;
+      const templateId = userPrompt?.includes("报告二.md") ? "template-2" : "template-1";
+      const record = { templateId, url: String(url), model: body.model };
+      requestRecords.push(record);
+
+      if (record.url === "https://provider-a.local/v1/chat/completions" && !failedInitialProviderTemplates.has(templateId)) {
+        failedInitialProviderTemplates.add(templateId);
+        return new Response(JSON.stringify({ error: { message: "rate limit exceeded" } }), {
+          headers: { "Content-Type": "application/json" },
+          status: 429
+        });
+      }
+
+      return new Response(JSON.stringify(createChatCompletionResponse({ content: "NO_UPDATE" })), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      });
+    });
 
     const service = createWindowRunService({
       clock: { now: () => "2026-07-01T00:00:00.000Z" },
@@ -199,38 +244,128 @@ describe("window run coverage context", () => {
       fetch,
       findExistingReport: () => undefined,
       idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onModelCandidateChanged,
       onRuntimeState: async () => {},
-      providerStore: createProviderStore([
-        createProviderConfig(minimaxKeyRef, {
-          id: "minimax-provider",
-          baseUrl: "https://minimax.local/v1",
-          modelId: "minimax-chat"
-        }),
-        createProviderConfig(deepSeekKeyRef, {
-          id: "deepseek-provider",
-          baseUrl: "https://deepseek.local/v1",
-          modelId: "deepseek-chat"
-        })
-      ]),
+      providerStore: createProviderStore(providers),
       registerReport: () => {},
-      taskLogger: { append: vi.fn(async () => {}), setSecrets: vi.fn() } as any
+      taskLogger: { append, setSecrets: vi.fn() } as any
     });
 
     const result = await service.runJobWindows({
-      artifacts: createWindowArtifacts({
-        projectRoot,
-        templates: [createTemplate({ id: "template-1", name: "人物", fileName: "人物.md" })]
-      }),
+      artifacts: createWindowArtifacts({ projectRoot, templates }),
       job: createWindowRunJob({
-        modelId: "minimax-chat",
-        modelSelectionMode: "explicit",
-        providerConfigId: "minimax-provider",
-        templateIds: ["template-1"]
+        modelId: "model-a",
+        modelSelectionMode: "auto",
+        providerConfigId: "provider-a",
+        templateBatchSize: 1,
+        templateIds: templates.map((template) => template.id)
       })
     });
 
-    expect(result.ok).toBe(false);
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(result.ok).toBe(true);
+    // If a future refactor shares RuntimeChatClient across batches, template-2's first request starts on provider B.
+    for (const template of templates) {
+      const records = requestRecords.filter((record) => record.templateId === template.id);
+      expect(records.map((record) => ({ url: record.url, model: record.model }))).toEqual([
+        { url: "https://provider-a.local/v1/chat/completions", model: "model-a" },
+        { url: "https://provider-b.local/v1/chat/completions", model: "model-b" }
+      ]);
+    }
+    expect(onModelCandidateChanged).toHaveBeenCalledTimes(2);
+    expect(append).toHaveBeenCalledWith(
+      ["上下文", "模型切换"],
+      expect.objectContaining({ 批次ID: "batch-0001" })
+    );
+    expect(append).toHaveBeenCalledWith(
+      ["上下文", "模型切换"],
+      expect.objectContaining({ 批次ID: "batch-0002" })
+    );
+  }, 20000);
+
+  it("retries the same provider and window for a switchable LLM failure in explicit mode", async () => {
+    vi.useFakeTimers();
+    try {
+      const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-explicit-no-switch-"));
+      scratchDirs.push(projectRoot);
+      await writeSingleWindowText(projectRoot);
+      const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+      const minimaxKeyRef = credentialStore.saveApiKey({
+        providerConfigId: "minimax-provider",
+        apiKey: "sk-minimax"
+      });
+      const deepSeekKeyRef = credentialStore.saveApiKey({
+        providerConfigId: "deepseek-provider",
+        apiKey: "sk-deepseek"
+      });
+      const requestUrls: string[] = [];
+      const requestBodies: Record<string, unknown>[] = [];
+      const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+        requestUrls.push(String(url));
+        requestBodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+        if (requestUrls.length === 1) {
+          return new Response(JSON.stringify({ error: { message: "rate limit exceeded" } }), {
+            headers: { "Content-Type": "application/json" },
+            status: 429
+          });
+        }
+        return new Response(JSON.stringify(createChatCompletionResponse({ content: "NO_UPDATE" })), {
+          headers: { "Content-Type": "application/json" },
+          status: 200
+        });
+      });
+
+      const service = createWindowRunService({
+        clock: { now: () => "2026-07-01T00:00:00.000Z" },
+        credentialStore,
+        fetch,
+        findExistingReport: () => undefined,
+        idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+        onRuntimeState: async () => {},
+        providerStore: createProviderStore([
+          createProviderConfig(minimaxKeyRef, {
+            id: "minimax-provider",
+            baseUrl: "https://minimax.local/v1",
+            modelId: "minimax-chat"
+          }),
+          createProviderConfig(deepSeekKeyRef, {
+            id: "deepseek-provider",
+            baseUrl: "https://deepseek.local/v1",
+            modelId: "deepseek-chat"
+          })
+        ]),
+        registerReport: () => {},
+        taskLogger: { append: vi.fn(async () => {}), setSecrets: vi.fn() } as any
+      });
+
+      const runPromise = service.runJobWindows({
+        artifacts: createWindowArtifacts({
+          projectRoot,
+          templates: [createTemplate({ id: "template-1", name: "人物", fileName: "人物.md" })]
+        }),
+        job: createWindowRunJob({
+          modelId: "minimax-chat",
+          modelSelectionMode: "explicit",
+          providerConfigId: "minimax-provider",
+          templateIds: ["template-1"]
+        })
+      });
+
+      await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(runPromise).resolves.toMatchObject({ ok: true });
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(requestUrls).toEqual([
+        "https://minimax.local/v1/chat/completions",
+        "https://minimax.local/v1/chat/completions"
+      ]);
+      expect(messagesOf(requestBodies[1]).find((message) => message.role === "user")?.content).toBe(
+        messagesOf(requestBodies[0]).find((message) => message.role === "user")?.content
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   }, 20000);
 
   it("cycles auto fallback candidates instead of excluding failed providers permanently", async () => {
@@ -547,6 +682,7 @@ describe("window run report inventory", () => {
         ]
       }),
       job: createWindowRunJob({
+        templateBatchSize: 4,
         templateIds: ["template-1", "template-2", "template-3", "template-4"]
       })
     });
@@ -634,7 +770,7 @@ describe("window run report inventory", () => {
           createTemplate({ id: "template-2", name: "世界观", fileName: "世界观.md" })
         ]
       }),
-      job: createWindowRunJob({ templateIds: ["template-1", "template-2"] })
+      job: createWindowRunJob({ templateBatchSize: 2, templateIds: ["template-1", "template-2"] })
     });
 
     const firstPrompt = messagesOf(requestBodies[0]).find((message) => message.role === "user")?.content;
@@ -673,8 +809,11 @@ describe("window run report inventory", () => {
     const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
       requestBodies.push(body);
+      const messages = messagesOf(body);
+      const userPrompt = messages.find((message) => message.role === "user")?.content as string | undefined;
+      const hasToolMessage = messages.some((message) => message.role === "tool");
 
-      if (requestBodies.length === 1) {
+      if (!hasToolMessage && typeof userPrompt === "string" && userPrompt.includes("报告一.md")) {
         return new Response(
           JSON.stringify(createChatCompletionResponse({
             toolCalls: templates.slice(0, 3).map((template) =>
@@ -688,7 +827,7 @@ describe("window run report inventory", () => {
         );
       }
 
-      if (requestBodies.length === 3) {
+      if (!hasToolMessage && typeof userPrompt === "string" && userPrompt.includes("报告四.md")) {
         return new Response(
           JSON.stringify(createChatCompletionResponse({
             toolCalls: templates.slice(3).map((template) =>
@@ -726,12 +865,15 @@ describe("window run report inventory", () => {
 
     await service.runJobWindows({
       artifacts: createWindowArtifacts({ projectRoot, templates }),
-      job: createWindowRunJob({ templateIds: templates.map((template) => template.id) })
+      job: createWindowRunJob({ templateBatchSize: 3, templateIds: templates.map((template) => template.id) })
     });
 
     expect(requestBodies).toHaveLength(4);
-    const firstPrompt = messagesOf(requestBodies[0]).find((message) => message.role === "user")?.content;
-    const secondBatchPrompt = messagesOf(requestBodies[2]).find((message) => message.role === "user")?.content;
+    const promptTexts = requestBodies
+      .map((body) => messagesOf(body).find((message) => message.role === "user")?.content)
+      .filter((content): content is string => typeof content === "string");
+    const firstPrompt = promptTexts.find((content) => content.includes("报告一.md"));
+    const secondBatchPrompt = promptTexts.find((content) => content.includes("报告四.md"));
     expect(firstPrompt).toContain("报告一.md");
     expect(firstPrompt).toContain("报告三.md");
     expect(firstPrompt).not.toContain("报告四.md");
@@ -739,6 +881,755 @@ describe("window run report inventory", () => {
     expect(secondBatchPrompt).toContain("报告四.md");
     expect(secondBatchPrompt).toContain("报告五.md");
     expect(secondBatchPrompt).not.toContain("报告一.md");
+  }, 20000);
+});
+
+describe("window run parallel template batches", () => {
+  it("lets an unblocked batch enter window 2 while another batch is still finishing window 1", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-parallel-batches-"));
+    scratchDirs.push(projectRoot);
+    await fs.mkdir(path.join(projectRoot, "runs", "job-1", "windows"), { recursive: true });
+    await fs.writeFile(path.join(projectRoot, "runs", "job-1", "windows", "window-0001.txt"), "第一章\n\n韩立出场。", "utf8");
+    await fs.writeFile(path.join(projectRoot, "runs", "job-1", "windows", "window-0002.txt"), "第二章\n\n韩立继续前进。", "utf8");
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+    const templates = [
+      createTemplate({ id: "template-1", name: "报告一", fileName: "报告一.md" }),
+      createTemplate({ id: "template-2", name: "报告二", fileName: "报告二.md" })
+    ];
+    const delayedSecondBatchWindowOne = createDeferred<void>();
+    const startedPromptKeys: string[] = [];
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = messagesOf(body);
+      const userPrompt = messages.find((message) => message.role === "user")?.content as string | undefined;
+      const hasToolMessage = messages.some((message) => message.role === "tool");
+      if (!hasToolMessage && typeof userPrompt === "string" && userPrompt.includes("## 当前窗口文本")) {
+        const template = userPrompt.includes("报告二.md") ? templates[1] : templates[0];
+        const windowKey = userPrompt.includes("窗口序号：2/2") ? "window-2" : "window-1";
+        const key = `${template.fileName}:${windowKey}`;
+        startedPromptKeys.push(key);
+        if (key === "报告二.md:window-1") {
+          await delayedSecondBatchWindowOne.promise;
+        }
+        return new Response(
+          JSON.stringify(createChatCompletionResponse({
+            toolCalls: [
+              createToolCall(`call-no-update-${template.id}-${windowKey}`, "mark_no_update", {
+                path: template.fileName,
+                reason: `${template.name}在${windowKey}无新增。`
+              })
+            ]
+          })),
+          { headers: { "Content-Type": "application/json" }, status: 200 }
+        );
+      }
+
+      return new Response(JSON.stringify(createChatCompletionResponse({ content: "窗口完成。" })), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      });
+    });
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      fetch,
+      findExistingReport: () => undefined,
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeState: async () => {},
+      providerStore: createProviderStore(createProviderConfig(apiKeyRef)),
+      registerReport: () => {}
+    });
+
+    const runPromise = service.runJobWindows({
+      artifacts: createWindowArtifacts({ projectRoot, templates, windowCount: 2 }),
+      job: createWindowRunJob({ templateBatchSize: 1, templateIds: templates.map((template) => template.id) })
+    });
+    let assertionError: unknown;
+    try {
+      await vi.waitFor(() => expect(startedPromptKeys).toContain("报告一.md:window-2"));
+    } catch (error) {
+      assertionError = error;
+    } finally {
+      delayedSecondBatchWindowOne.resolve();
+      await runPromise.catch(() => undefined);
+    }
+
+    if (assertionError) {
+      throw assertionError;
+    }
+    expect(startedPromptKeys).toEqual(
+      expect.arrayContaining([
+        "报告一.md:window-1",
+        "报告二.md:window-1",
+        "报告一.md:window-2",
+        "报告二.md:window-2"
+      ])
+    );
+    expect(startedPromptKeys.indexOf("报告一.md:window-2")).toBeLessThan(
+      startedPromptKeys.indexOf("报告二.md:window-2")
+    );
+  }, 20000);
+
+  it("uses the service-level template batch retry interval for ordinary batch failures", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-batch-retry-"));
+    scratchDirs.push(projectRoot);
+    await writeSingleWindowText(projectRoot);
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+    const retryIntervalMs = 50;
+    let requestCount = 0;
+    let loggedRetryDelayMs: unknown;
+    const fetch = vi.fn(async () => {
+      requestCount += 1;
+      if (requestCount === 1) {
+        return new Response(JSON.stringify({ error: { message: "temporary provider failure" } }), {
+          headers: { "Content-Type": "application/json" },
+          status: 500
+        });
+      }
+      return new Response(JSON.stringify(createChatCompletionResponse({ content: "NO_UPDATE" })), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      });
+    });
+    const taskLogger = {
+      append: vi.fn(async (sections: string[], entry?: Record<string, unknown>) => {
+        if (sections.includes("批次重试")) {
+          loggedRetryDelayMs = entry?.下次重试延迟毫秒;
+        }
+      }),
+      setSecrets: vi.fn()
+    };
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      fetch,
+      findExistingReport: () => undefined,
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeState: async () => {},
+      providerStore: createProviderStore(createProviderConfig(apiKeyRef)),
+      registerReport: () => {},
+      taskLogger: taskLogger as any,
+      templateBatchFailureRetryIntervalMs: retryIntervalMs
+    });
+
+    const runPromise = service.runJobWindows({
+      artifacts: createWindowArtifacts({
+        projectRoot,
+        templates: [createTemplate({ id: "template-1", name: "人物", fileName: "人物.md" })]
+      }),
+      job: createWindowRunJob({ templateIds: ["template-1"] })
+    });
+
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(loggedRetryDelayMs).toBe(retryIntervalMs));
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2), { timeout: 1000 });
+    await expect(runPromise).resolves.toMatchObject({ ok: true });
+  }, 20000);
+
+  it("writes separate batch coverage indexes and batch log files while preserving the global coverage index", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-batch-artifacts-"));
+    scratchDirs.push(projectRoot);
+    await writeSingleWindowText(projectRoot);
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+    const templates = [
+      createTemplate({ id: "template-1", name: "报告一", fileName: "报告一.md" }),
+      createTemplate({ id: "template-2", name: "报告二", fileName: "报告二.md" })
+    ];
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = messagesOf(body);
+      const userPrompt = messages.find((message) => message.role === "user")?.content as string | undefined;
+      const hasToolMessage = messages.some((message) => message.role === "tool");
+      if (!hasToolMessage && typeof userPrompt === "string" && userPrompt.includes("## 当前窗口文本")) {
+        const template = userPrompt.includes("报告二.md") ? templates[1] : templates[0];
+        return new Response(
+          JSON.stringify(createChatCompletionResponse({
+            toolCalls: [
+              createToolCall(`call-no-update-${template.id}`, "mark_no_update", {
+                path: template.fileName,
+                reason: `${template.name}当前窗口无新增。`
+              })
+            ]
+          })),
+          { headers: { "Content-Type": "application/json" }, status: 200 }
+        );
+      }
+
+      return new Response(JSON.stringify(createChatCompletionResponse({ content: "窗口完成。" })), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      });
+    });
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      fetch,
+      findExistingReport: () => undefined,
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeState: async () => {},
+      providerStore: createProviderStore(createProviderConfig(apiKeyRef)),
+      registerReport: () => {}
+    });
+
+    await service.runJobWindows({
+      artifacts: createWindowArtifacts({ projectRoot, templates }),
+      job: createWindowRunJob({ templateBatchSize: 1, templateIds: templates.map((template) => template.id) })
+    });
+
+    const globalCoverageIndex = JSON.parse(
+      await fs.readFile(path.join(projectRoot, "metadata", "coverage", "coverage-index.json"), "utf8")
+    ) as { records?: Array<{ outputFileName?: unknown; templateId?: unknown }> };
+    expect(globalCoverageIndex.records?.map((record) => record.templateId)).toEqual(
+      expect.arrayContaining(["template-1", "template-2"])
+    );
+    expect(globalCoverageIndex.records?.map((record) => record.outputFileName)).toEqual(
+      expect.arrayContaining(["报告一.md", "报告二.md"])
+    );
+    await expect(
+      fs.readFile(path.join(projectRoot, "metadata", "coverage", "jobs", "job-1", "batch-0001", "coverage-index.json"), "utf8")
+    ).resolves.toContain("template-1");
+    await expect(
+      fs.readFile(path.join(projectRoot, "metadata", "coverage", "jobs", "job-1", "batch-0002", "coverage-index.json"), "utf8")
+    ).resolves.toContain("template-2");
+
+    const firstBatchLogDir = path.join(projectRoot, "runs", "job-1", "logs", "batches", "batch-0001");
+    const secondBatchLogDir = path.join(projectRoot, "runs", "job-1", "logs", "batches", "batch-0002");
+    await expect(fs.readdir(firstBatchLogDir)).resolves.toEqual(
+      expect.arrayContaining([expect.stringContaining("batch-0001")])
+    );
+    await expect(fs.readdir(secondBatchLogDir)).resolves.toEqual(
+      expect.arrayContaining([expect.stringContaining("batch-0002")])
+    );
+  }, 20000);
+});
+
+describe("window run Runtime facade controls", () => {
+  it("pauses at a completed batch window boundary and resumes without starting a new window while paused", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-pause-boundary-"));
+    scratchDirs.push(projectRoot);
+    await fs.mkdir(path.join(projectRoot, "runs", "job-1", "windows"), { recursive: true });
+    await fs.writeFile(path.join(projectRoot, "runs", "job-1", "windows", "window-0001.txt"), "第一章\n\n韩立出场。", "utf8");
+    await fs.writeFile(path.join(projectRoot, "runs", "job-1", "windows", "window-0002.txt"), "第二章\n\n韩立继续前进。", "utf8");
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+    const firstWindowCanFinish = createDeferred<void>();
+    const startedPrompts: string[] = [];
+    let runtime!: JobRuntime;
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = messagesOf(body);
+      const userPrompt = messages.find((message) => message.role === "user")?.content as string | undefined;
+      const hasToolMessage = messages.some((message) => message.role === "tool");
+      if (!hasToolMessage && typeof userPrompt === "string" && userPrompt.includes("## 当前窗口文本")) {
+        const windowLabel = userPrompt.includes("窗口序号：2/2") ? "window-2" : "window-1";
+        startedPrompts.push(windowLabel);
+        if (windowLabel === "window-1") {
+          await firstWindowCanFinish.promise;
+        }
+        return new Response(JSON.stringify(createChatCompletionResponse({ content: "NO_UPDATE" })), {
+          headers: { "Content-Type": "application/json" },
+          status: 200
+        });
+      }
+      return new Response(JSON.stringify(createChatCompletionResponse({ content: "NO_UPDATE" })), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      });
+    });
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      fetch,
+      findExistingReport: () => undefined,
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeCreated: ({ runtime: createdRuntime }) => {
+        runtime = createdRuntime;
+      },
+      onRuntimeState: async () => {},
+      providerStore: createProviderStore(createProviderConfig(apiKeyRef)),
+      registerReport: () => {}
+    });
+    const runPromise = service.runJobWindows({
+      artifacts: createWindowArtifacts({
+        projectRoot,
+        templates: [createTemplate({ id: "template-1", name: "人物", fileName: "人物.md" })],
+        windowCount: 2
+      }),
+      job: createWindowRunJob({ templateIds: ["template-1"] })
+    });
+
+    await vi.waitFor(() => expect(startedPrompts).toEqual(["window-1"]));
+    await expect(runtime.pauseJob("job-1")).resolves.toEqual({ ok: true });
+    firstWindowCanFinish.resolve();
+    await vi.waitFor(() => expect(runtime.getJobState("job-1")?.status).toBe("paused"));
+    expect(startedPrompts).toEqual(["window-1"]);
+
+    await expect(runtime.resumeJob("job-1")).resolves.toEqual({ ok: true });
+    await expect(runPromise).resolves.toMatchObject({ ok: true });
+    expect(startedPrompts).toEqual(["window-1", "window-2"]);
+  }, 20000);
+
+  it("defers delete terminal state until all parallel batch windows drain", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-delete-drain-"));
+    scratchDirs.push(projectRoot);
+    await writeSingleWindowText(projectRoot);
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+    const templates = [
+      createTemplate({ id: "template-1", name: "报告一", fileName: "报告一.md" }),
+      createTemplate({ id: "template-2", name: "报告二", fileName: "报告二.md" })
+    ];
+    const firstBatchStarted = createDeferred<void>();
+    const firstBatchCanFinish = createDeferred<void>();
+    const deleteRequestFinished = createDeferred<void>();
+    const runtimeStatuses: string[] = [];
+    const settledStatuses: string[] = [];
+    let runtime!: JobRuntime;
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = messagesOf(body);
+      const userPrompt = messages.find((message) => message.role === "user")?.content as string | undefined;
+      const hasToolMessage = messages.some((message) => message.role === "tool");
+      if (!hasToolMessage && typeof userPrompt === "string" && userPrompt.includes("## 当前窗口文本")) {
+        if (userPrompt.includes("报告一.md")) {
+          firstBatchStarted.resolve();
+          await firstBatchCanFinish.promise;
+        } else if (userPrompt.includes("报告二.md")) {
+          await firstBatchStarted.promise;
+          await expect(runtime.deleteJob("job-1")).resolves.toEqual({ ok: true });
+          deleteRequestFinished.resolve();
+        }
+      }
+
+      return new Response(JSON.stringify(createChatCompletionResponse({ content: "NO_UPDATE" })), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      });
+    });
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      fetch,
+      findExistingReport: () => undefined,
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeCreated: ({ runtime: createdRuntime }) => {
+        runtime = createdRuntime;
+      },
+      onRuntimeSettled: ({ jobId, runtime: settledRuntime }) => {
+        settledStatuses.push(settledRuntime.getJobState(jobId)?.status ?? "missing");
+      },
+      onRuntimeState: async (state) => {
+        runtimeStatuses.push(state.status);
+      },
+      providerStore: createProviderStore(createProviderConfig(apiKeyRef)),
+      registerReport: () => {}
+    });
+    const runPromise = service.runJobWindows({
+      artifacts: createWindowArtifacts({ projectRoot, templates }),
+      job: createWindowRunJob({ templateBatchSize: 1, templateIds: templates.map((template) => template.id) })
+    });
+
+    let assertionError: unknown;
+    await deleteRequestFinished.promise;
+    try {
+      expect(runtimeStatuses).not.toContain("deleted");
+      expect(settledStatuses).toEqual([]);
+    } catch (error) {
+      assertionError = error;
+    }
+    firstBatchCanFinish.resolve();
+    const result = await runPromise;
+    if (assertionError) {
+      throw assertionError;
+    }
+
+    expect(result).toMatchObject({ ok: true, state: { status: "deleted" } });
+    expect(runtimeStatuses.filter((status) => status === "deleted")).toHaveLength(1);
+    expect(settledStatuses).toEqual(["deleted"]);
+  }, 20000);
+
+  it.each([
+    {
+      action: "cancelJob" as const,
+      requestedEvent: "job.cancel.requested",
+      terminalEvent: "job.cancelled",
+      terminalStatus: "cancelled"
+    },
+    {
+      action: "deleteJob" as const,
+      requestedEvent: undefined,
+      terminalEvent: "job.deleted",
+      terminalStatus: "deleted"
+    }
+  ])("does not let $action during batch retry sleep be swallowed by retry", async (caseInput) => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), `novel-extractor-window-${caseInput.action}-retry-`));
+    scratchDirs.push(projectRoot);
+    await writeSingleWindowText(projectRoot);
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+    let runtime!: JobRuntime;
+    const eventTypes: string[] = [];
+    const fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ error: { message: "temporary provider failure" } }), {
+        headers: { "Content-Type": "application/json" },
+        status: 500
+      })
+    );
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      fetch,
+      findExistingReport: () => undefined,
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeCreated: ({ runtime: createdRuntime }) => {
+        runtime = createdRuntime;
+        runtime.events.subscribe((event) => {
+          eventTypes.push(event.type);
+        });
+      },
+      onRuntimeState: async () => {},
+      providerStore: createProviderStore(createProviderConfig(apiKeyRef)),
+      registerReport: () => {},
+      templateBatchFailureRetryIntervalMs: 60_000
+    });
+
+    const runPromise = service.runJobWindows({
+      artifacts: createWindowArtifacts({
+        projectRoot,
+        templates: [createTemplate({ id: "template-1", name: "人物", fileName: "人物.md" })]
+      }),
+      job: createWindowRunJob({ templateIds: ["template-1"] })
+    });
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+
+    await expect(runtime[caseInput.action]("job-1")).resolves.toEqual({ ok: true });
+    const result = await runPromise;
+
+    expect(result).toMatchObject({
+      ok: true,
+      state: { status: caseInput.terminalStatus }
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(eventTypes).toContain("job.started");
+    if (caseInput.requestedEvent) {
+      expect(eventTypes).toContain(caseInput.requestedEvent);
+    }
+    expect(eventTypes).toContain(caseInput.terminalEvent);
+  }, 20000);
+
+  it("waits for delete during batch retry sleep to settle before resolving deleteJob", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-delete-retry-settle-"));
+    scratchDirs.push(projectRoot);
+    await writeSingleWindowText(projectRoot);
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+    let runtime!: JobRuntime;
+    let deleteResolved = false;
+    const runtimeStatuses: string[] = [];
+    const allowDeletedStateSave = createDeferred<void>();
+    const fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ error: { message: "temporary provider failure" } }), {
+        headers: { "Content-Type": "application/json" },
+        status: 500
+      })
+    );
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      fetch,
+      findExistingReport: () => undefined,
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeCreated: ({ runtime: createdRuntime }) => {
+        runtime = createdRuntime;
+      },
+      onRuntimeState: async (state) => {
+        runtimeStatuses.push(state.status);
+        if (state.status === "deleted") {
+          await allowDeletedStateSave.promise;
+        }
+      },
+      providerStore: createProviderStore(createProviderConfig(apiKeyRef)),
+      registerReport: () => {},
+      templateBatchFailureRetryIntervalMs: 60_000
+    });
+
+    const runPromise = service.runJobWindows({
+      artifacts: createWindowArtifacts({
+        projectRoot,
+        templates: [createTemplate({ id: "template-1", name: "人物", fileName: "人物.md" })]
+      }),
+      job: createWindowRunJob({ templateIds: ["template-1"] })
+    });
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+
+    const deletePromise = runtime.deleteJob("job-1").then((result) => {
+      deleteResolved = true;
+      return result;
+    });
+    await vi.waitFor(() => expect(runtimeStatuses).toContain("deleted"));
+    expect(deleteResolved).toBe(false);
+
+    allowDeletedStateSave.resolve();
+    await expect(deletePromise).resolves.toEqual({ ok: true });
+    await expect(runPromise).resolves.toMatchObject({
+      ok: true,
+      state: { status: "deleted" }
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  }, 20000);
+
+  it("wakes batch retry sleep when another batch fails with fatal_config", async () => {
+    vi.useFakeTimers();
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-fatal-config-wake-"));
+    scratchDirs.push(projectRoot);
+    await writeSingleWindowText(projectRoot);
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+    const templates = [
+      createTemplate({ id: "template-1", name: "报告一", fileName: "报告一.md" }),
+      createTemplate({ id: "template-2", name: "报告二", fileName: "报告二.md" })
+    ];
+    const releaseFatalBatch = createDeferred<void>();
+    const retryLogAppendEntered = createDeferred<void>();
+    const retryLogAppendCanFinish = createDeferred<void>();
+    const runtimeStatuses: string[] = [];
+    const settledStatuses: string[] = [];
+    const runResults: unknown[] = [];
+    let firstBatchRetryLogCalls = 0;
+    const fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ error: { message: "temporary provider failure" } }), {
+        headers: { "Content-Type": "application/json" },
+        status: 500
+      })
+    );
+    const append = vi.fn(async (tags: readonly string[], value: unknown) => {
+      const record = value as { [key: string]: unknown };
+      if (
+        tags[0] === "上下文" &&
+        tags[1] === "窗口" &&
+        Array.isArray(record.模板) &&
+        record.模板.some((template) => (template as { 模板ID?: unknown }).模板ID === "template-2")
+      ) {
+        await releaseFatalBatch.promise;
+        throw new Error("task log failed");
+      }
+      if (tags[0] === "错误" && tags[1] === "批次重试" && record.批次ID === "batch-0001") {
+        firstBatchRetryLogCalls += 1;
+        if (firstBatchRetryLogCalls === 2) {
+          retryLogAppendEntered.resolve();
+          await retryLogAppendCanFinish.promise;
+        }
+      }
+    });
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      fetch,
+      findExistingReport: () => undefined,
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeSettled: ({ jobId, runtime: settledRuntime }) => {
+        settledStatuses.push(settledRuntime.getJobState(jobId)?.status ?? "missing");
+      },
+      onRuntimeState: async (state) => {
+        runtimeStatuses.push(state.status);
+      },
+      providerStore: createProviderStore(createProviderConfig(apiKeyRef)),
+      registerReport: () => {},
+      taskLogger: { append, setSecrets: vi.fn() } as any,
+      templateBatchFailureRetryIntervalMs: 60_000
+    });
+
+    const runPromise = service.runJobWindows({
+      artifacts: createWindowArtifacts({ projectRoot, templates }),
+      job: createWindowRunJob({ templateBatchSize: 1, templateIds: templates.map((template) => template.id) })
+    });
+    runPromise.then((result) => {
+      runResults.push(result);
+    });
+
+    let assertionError: unknown;
+    try {
+      await retryLogAppendEntered.promise;
+      retryLogAppendCanFinish.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(settledStatuses).toEqual([]);
+
+      releaseFatalBatch.resolve();
+      await vi.waitFor(() => expect(runResults).toHaveLength(1), { timeout: 1000 });
+
+      expect(runResults[0]).toMatchObject({
+        ok: false,
+        error: {
+          code: "job_failed",
+          message: expect.stringContaining("task log failed")
+        }
+      });
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(runtimeStatuses).toContain("failed");
+      expect(settledStatuses).toEqual(["failed"]);
+    } catch (error) {
+      assertionError = error;
+    } finally {
+      releaseFatalBatch.resolve();
+      retryLogAppendCanFinish.resolve();
+      await vi.advanceTimersByTimeAsync(60_000);
+      await runPromise.catch(() => undefined);
+      vi.useRealTimers();
+    }
+
+    if (assertionError) {
+      throw assertionError;
+    }
+  }, 20000);
+
+  it("wakes a paused batch gate when runtime progress persistence fails in another batch", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-progress-pause-wake-"));
+    scratchDirs.push(projectRoot);
+    await fs.mkdir(path.join(projectRoot, "runs", "job-1", "windows"), { recursive: true });
+    await fs.writeFile(path.join(projectRoot, "runs", "job-1", "windows", "window-0001.txt"), "第一章\n\n主角整理旧资料。", "utf8");
+    await fs.writeFile(path.join(projectRoot, "runs", "job-1", "windows", "window-0002.txt"), "第二章\n\n主角继续整理资料。", "utf8");
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+    const templates = [
+      createTemplate({ id: "template-1", name: "报告一", fileName: "报告一.md" }),
+      createTemplate({ id: "template-2", name: "报告二", fileName: "报告二.md" })
+    ];
+    const firstBatchWindowOneStarted = createDeferred<void>();
+    const secondBatchWindowOneStarted = createDeferred<void>();
+    const releaseFirstBatchWindowOne = createDeferred<void>();
+    const releaseSecondBatchWindowOne = createDeferred<void>();
+    const firstBatchProgressSaved = createDeferred<void>();
+    const pausedStateSaved = createDeferred<void>();
+    const progressStateSaveFailed = createDeferred<void>();
+    const runResults: unknown[] = [];
+    const runtimeStatuses: string[] = [];
+    let runtime: JobRuntime | undefined;
+    let progressStateFailureThrown = false;
+    const requestKeys: string[] = [];
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const userPrompt = messagesOf(body).find((message) => message.role === "user")?.content as string | undefined;
+      const batchKey = typeof userPrompt === "string" && userPrompt.includes("报告二.md") ? "batch-0002" : "batch-0001";
+      const windowKey = typeof userPrompt === "string" && userPrompt.includes("窗口序号：2/2") ? "window-2" : "window-1";
+      requestKeys.push(`${batchKey}:${windowKey}`);
+      if (batchKey === "batch-0001" && windowKey === "window-1") {
+        firstBatchWindowOneStarted.resolve();
+        await releaseFirstBatchWindowOne.promise;
+      } else if (batchKey === "batch-0002" && windowKey === "window-1") {
+        secondBatchWindowOneStarted.resolve();
+        await releaseSecondBatchWindowOne.promise;
+      }
+      return new Response(JSON.stringify(createChatCompletionResponse({ content: "NO_UPDATE" })), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      });
+    });
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      fetch,
+      findExistingReport: () => undefined,
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeCreated: ({ runtime: createdRuntime }) => {
+        runtime = createdRuntime;
+      },
+      onRuntimeState: async (state) => {
+        runtimeStatuses.push(state.status);
+        if (state.status === "pause_requested" && state.completedWindowCount === 1) {
+          firstBatchProgressSaved.resolve();
+        }
+        if (state.status === "paused") {
+          pausedStateSaved.resolve();
+        }
+        if (!progressStateFailureThrown && state.completedWindowCount > 1) {
+          await pausedStateSaved.promise;
+          progressStateFailureThrown = true;
+          progressStateSaveFailed.resolve();
+          throw new Error("progress save failed");
+        }
+      },
+      providerStore: createProviderStore(createProviderConfig(apiKeyRef)),
+      registerReport: () => {},
+      templateBatchFailureRetryIntervalMs: 60_000
+    });
+
+    const runPromise = service.runJobWindows({
+      artifacts: createWindowArtifacts({ projectRoot, templates, windowCount: 2 }),
+      job: createWindowRunJob({ templateBatchSize: 1, templateIds: templates.map((template) => template.id) })
+    });
+    runPromise.then((result) => {
+      runResults.push(result);
+    });
+
+    let assertionError: unknown;
+    try {
+      await firstBatchWindowOneStarted.promise;
+      await secondBatchWindowOneStarted.promise;
+      await expect(runtime?.pauseJob("job-1")).resolves.toEqual({ ok: true });
+      releaseFirstBatchWindowOne.resolve();
+      await firstBatchProgressSaved.promise;
+      releaseSecondBatchWindowOne.resolve();
+      await progressStateSaveFailed.promise;
+      await vi.waitFor(() => expect(runResults).toHaveLength(1), { timeout: 100 });
+
+      expect(runResults[0]).toMatchObject({
+        ok: false,
+        error: {
+          code: "job_failed",
+          message: expect.stringContaining("progress save failed")
+        }
+      });
+      expect(requestKeys).toHaveLength(2);
+      expect(requestKeys).toEqual(expect.arrayContaining(["batch-0001:window-1", "batch-0002:window-1"]));
+      expect(requestKeys).not.toContain("batch-0001:window-2");
+      expect(requestKeys).not.toContain("batch-0002:window-2");
+      expect(runtimeStatuses).toContain("failed");
+    } catch (error) {
+      assertionError = error;
+    } finally {
+      releaseFirstBatchWindowOne.resolve();
+      releaseSecondBatchWindowOne.resolve();
+      if (runResults.length === 0) {
+        await runtime?.cancelJob("job-1");
+      }
+      await runPromise.catch(() => undefined);
+    }
+
+    if (assertionError) {
+      throw assertionError;
+    }
   }, 20000);
 });
 
@@ -2099,6 +2990,7 @@ describe("window run Reasonix tool loop integration", () => {
           modelId: "mock-model",
           providerConfigId: "provider-1",
           skipAlreadyExtracted: false,
+          templateBatchSize: 1,
           templateIds: ["template-1"]
         }
       }
@@ -2334,6 +3226,7 @@ describe("window run Reasonix tool loop integration", () => {
           modelId: "mock-model",
           providerConfigId: "provider-1",
           skipAlreadyExtracted: false,
+          templateBatchSize: 1,
           templateIds: ["template-1"]
         }
       }
@@ -2979,7 +3872,7 @@ describe("window run Reasonix tool loop integration", () => {
           createTemplate({ id: "template-2", name: "地点", fileName: "地点.md" })
         ]
       }),
-      job: createWindowRunJob({ templateIds: ["template-1", "template-2"] })
+      job: createWindowRunJob({ templateBatchSize: 2, templateIds: ["template-1", "template-2"] })
     });
 
     expect(requestBodies).toHaveLength(6);
@@ -3134,6 +4027,7 @@ describe("window run Reasonix tool loop integration", () => {
           modelId: "mock-model",
           providerConfigId: "provider-1",
           skipAlreadyExtracted: false,
+          templateBatchSize: 1,
           templateIds: ["template-1"]
         }
       }
@@ -3314,6 +4208,7 @@ describe("window run Reasonix tool loop integration", () => {
           modelId: "mock-model",
           providerConfigId: "provider-1",
           skipAlreadyExtracted: false,
+          templateBatchSize: 1,
           templateIds: ["template-1"]
         }
       }
@@ -3506,6 +4401,7 @@ function createWindowRunJob(input: {
   modelSelectionMode?: "explicit" | "auto";
   providerConfigId?: string;
   skipAlreadyExtracted?: boolean;
+  templateBatchSize?: number;
   templateIds: string[];
 }) {
   return {
@@ -3516,6 +4412,7 @@ function createWindowRunJob(input: {
       providerConfigId: input.providerConfigId ?? "provider-1",
       ...(input.modelSelectionMode ? { modelSelectionMode: input.modelSelectionMode } : {}),
       skipAlreadyExtracted: input.skipAlreadyExtracted ?? false,
+      templateBatchSize: input.templateBatchSize ?? 1,
       templateIds: input.templateIds
     }
   };

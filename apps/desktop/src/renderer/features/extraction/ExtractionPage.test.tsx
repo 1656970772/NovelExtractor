@@ -165,6 +165,7 @@ describe("ExtractionPage", () => {
     expect(within(chapterGroup).getByRole("spinbutton", { name: "单次运行章节数" })).toBeEnabled();
     expect(within(chapterGroup).getByRole("spinbutton", { name: "提取章节窗口" })).toBeEnabled();
     expect(within(chapterGroup).getByRole("spinbutton", { name: "重叠章节数" })).toBeEnabled();
+    expect(within(chapterGroup).getByRole("spinbutton", { name: "单批次模板数" })).toBeEnabled();
     expect(within(duplicateFilterGroup).getByRole("checkbox", { name: "跳过已提取章节" })).toBeEnabled();
     expect(within(modelGroup).getByLabelText("模型服务")).toBeEnabled();
   });
@@ -286,6 +287,8 @@ describe("ExtractionPage", () => {
     expect(screen.getByRole("checkbox", { name: "跳过已提取章节" })).toBeChecked();
     await user.clear(screen.getByRole("spinbutton", { name: "重叠章节数" }));
     await user.type(screen.getByRole("spinbutton", { name: "重叠章节数" }), "0");
+    await user.clear(screen.getByRole("spinbutton", { name: "单批次模板数" }));
+    await user.type(screen.getByRole("spinbutton", { name: "单批次模板数" }), "2");
     await user.click(screen.getByRole("checkbox", { name: "跳过已提取章节" }));
     await user.selectOptions(screen.getByLabelText("模型服务"), "provider-1");
     await user.selectOptions(screen.getByLabelText("子模型"), "model-a");
@@ -300,6 +303,7 @@ describe("ExtractionPage", () => {
       singleRunChapterCount: 4,
       extractionChapterCount: 12,
       overlapChapterCount: 0,
+      templateBatchSize: 2,
       skipAlreadyExtracted: false
     });
   });
@@ -1031,6 +1035,13 @@ describe("ExtractionPage", () => {
         singleRunChapterCount: 3,
         extractionChapterCount: 9,
         overlapChapterCount: 1
+      }),
+      getDefaultConfig: () => ({
+        extractionRuleDefaults: {
+          templateBatching: {
+            maxTemplatesPerCall: 1
+          }
+        }
       })
     }));
     const { ExtractionPage: ConfiguredExtractionPage } = await import("./ExtractionPage");

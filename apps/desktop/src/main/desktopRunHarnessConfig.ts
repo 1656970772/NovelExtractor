@@ -10,6 +10,7 @@ export interface DesktopRunHarnessWindowParams {
   singleRunChapterCount: number;
   extractionChapterCount: number;
   overlapChapterCount: number;
+  templateBatchSize: number;
 }
 
 export interface DesktopRunHarnessConfig {
@@ -59,7 +60,8 @@ export const REAL_RUN_TEMPLATE_FILES = [
 export const REAL_RUN_WINDOW_PARAMS: DesktopRunHarnessWindowParams = {
   singleRunChapterCount: 5,
   extractionChapterCount: 81,
-  overlapChapterCount: 1
+  overlapChapterCount: 1,
+  templateBatchSize: 1
 };
 
 const DEFAULT_PROJECT_NAME_PREFIX = "desktop-run-harness-凡人修仙传-20窗口";

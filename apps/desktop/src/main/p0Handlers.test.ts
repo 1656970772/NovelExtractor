@@ -172,6 +172,17 @@ function createChatCompletionResponse(input: {
   };
 }
 
+function createFatalUnsafeWriteResponse(): Record<string, unknown> {
+  return createChatCompletionResponse({
+    toolCalls: [
+      createToolCall("call-auto-retry-fatal-write", "write_file", {
+        path: "C:\\outside\\auto-retry.md",
+        content: "# 自动续跑\n\n不安全路径应让任务进入 failed。"
+      })
+    ]
+  });
+}
+
 function createCredentialFixture(apiKey: string): {
   credentialStore: MemoryCredentialStore;
   apiKeyRef: ApiKeyRef;
@@ -425,6 +436,43 @@ describe("P0 desktop IPC handlers", () => {
     return waitForJobTerminal(contract, handlers, jobId, projectId);
   }
 
+  async function readBatchLogTexts(
+    jobId: string,
+    batchId = "batch-0001",
+    projectId = "project-a"
+  ): Promise<{
+    fullLogPath: string;
+    fullText: string;
+    simpleLogPath: string;
+    simpleText: string;
+  }> {
+    const batchLogDirectory = path.join(
+      tempRoot,
+      "projects",
+      projectId,
+      "runs",
+      jobId,
+      "logs",
+      "batches",
+      batchId
+    );
+    const entries = (await fs.readdir(batchLogDirectory)).sort();
+    const fullFileName = entries.find(
+      (entry) => entry.startsWith(`${batchId}-`) && entry.endsWith(".txt") && !entry.endsWith(".simple.txt")
+    );
+    expect(fullFileName).toBeDefined();
+    const simpleFileName = fullFileName?.replace(/\.txt$/u, ".simple.txt") ?? "";
+    expect(entries).toContain(simpleFileName);
+    const fullLogPath = path.join(batchLogDirectory, fullFileName ?? "");
+    const simpleLogPath = path.join(batchLogDirectory, simpleFileName);
+    return {
+      fullLogPath,
+      fullText: await fs.readFile(fullLogPath, "utf8"),
+      simpleLogPath,
+      simpleText: await fs.readFile(simpleLogPath, "utf8")
+    };
+  }
+
   it("freezes the total time estimate when a runtime state pauses", () => {
     const buildPatch = (p0HandlersModule as {
       toJobPatchFromRuntimeState?: (
@@ -440,7 +488,7 @@ describe("P0 desktop IPC handlers", () => {
       id: "job-1",
       bookId: "book-1",
       status: "running",
-      progressText: "进度：1/4",
+      progressText: "进度：1/4 模板窗口",
       tokenText: "Token 100 / 缓存命中率 75.00%",
       createdAt: "2026-07-02T10:00:00.000Z",
       updatedAt: "2026-07-02T10:02:00.000Z",
@@ -452,6 +500,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 3,
         extractionChapterCount: 9,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       },
       timing: {
@@ -507,7 +556,7 @@ describe("P0 desktop IPC handlers", () => {
       id: "job-1",
       bookId: "book-1",
       status: "running",
-      progressText: "进度：1/4",
+      progressText: "进度：1/4 模板窗口",
       tokenText: "Token 100 / 缓存命中率 75.00%",
       createdAt: "2026-07-02T10:00:00.000Z",
       updatedAt: "2026-07-02T10:02:00.000Z",
@@ -519,6 +568,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 3,
         extractionChapterCount: 9,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       },
       timing: {
@@ -572,7 +622,7 @@ describe("P0 desktop IPC handlers", () => {
       id: "job-1",
       bookId: "book-1",
       status: "running",
-      progressText: "进度：1/4",
+      progressText: "进度：1/4 模板窗口",
       tokenText: "Token 100 / 缓存命中率 75.00%",
       createdAt: "2026-07-02T10:00:00.000Z",
       updatedAt: "2026-07-02T10:01:00.000Z",
@@ -584,6 +634,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 3,
         extractionChapterCount: 9,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       },
       progress: {
@@ -643,7 +694,7 @@ describe("P0 desktop IPC handlers", () => {
       id: "job-1",
       bookId: "book-1",
       status: "running",
-      progressText: "进度：0/10",
+      progressText: "进度：0/10 模板窗口",
       tokenText: "Token 0 / 缓存命中率 0.00%",
       createdAt: "2026-07-02T10:00:00.000Z",
       updatedAt: "2026-07-02T10:00:00.000Z",
@@ -655,6 +706,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 3,
         extractionChapterCount: 30,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       },
       timing: {
@@ -723,7 +775,7 @@ describe("P0 desktop IPC handlers", () => {
       id: "job-1",
       bookId: "book-1",
       status: "running",
-      progressText: "进度：0/10",
+      progressText: "进度：0/10 模板窗口",
       tokenText: "Token 0 / 缓存命中率 0.00%",
       createdAt: "2026-07-02T10:00:00.000Z",
       updatedAt: "2026-07-02T10:00:00.000Z",
@@ -735,6 +787,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 3,
         extractionChapterCount: 30,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       },
       progress: {
@@ -810,7 +863,7 @@ describe("P0 desktop IPC handlers", () => {
       id: "job-1",
       bookId: "book-1",
       status: "running",
-      progressText: "进度：5/10",
+      progressText: "进度：5/10 模板窗口",
       tokenText: "Token 0 / 缓存命中率 0.00%",
       createdAt: "2026-07-02T10:00:00.000Z",
       updatedAt: "2026-07-02T10:00:00.000Z",
@@ -822,6 +875,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 3,
         extractionChapterCount: 30,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       },
       progress: {
@@ -917,7 +971,7 @@ describe("P0 desktop IPC handlers", () => {
       id: "job-1",
       bookId: "book-1",
       status: "running",
-      progressText: "进度：5/6",
+      progressText: "进度：5/6 模板窗口",
       tokenText: "Token 100 / 缓存命中率 75.00%",
       createdAt: "2026-07-02T01:00:00.000Z",
       updatedAt: "2026-07-02T01:06:00.000Z",
@@ -929,6 +983,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 3,
         extractionChapterCount: 18,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       },
       timing: {
@@ -985,7 +1040,7 @@ describe("P0 desktop IPC handlers", () => {
       id: "job-1",
       bookId: "book-1",
       status: "running",
-      progressText: "进度：0/6",
+      progressText: "进度：0/6 模板窗口",
       tokenText: "Token 0 / 缓存命中率 0.00%",
       createdAt: "2026-07-02T10:00:00.000Z",
       updatedAt: "2026-07-02T10:02:00.000Z",
@@ -997,6 +1052,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 3,
         extractionChapterCount: 18,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       },
       timing: {
@@ -1034,6 +1090,313 @@ describe("P0 desktop IPC handlers", () => {
     expect(patch.timing?.estimateFrozenAt).toBeUndefined();
   });
 
+  it("uses template-window target count when creating a job", async () => {
+    const contract = createIpcContract();
+    const handlers = createHandlers();
+    const novelPath = await writeTempNovel(tempRoot, "百章模板窗口小说.txt", 100);
+    const book = await contract.invoke(handlers, "books:uploadTxt", {
+      projectId: "project-a",
+      filePath: novelPath,
+      displayName: "百章模板窗口小说.txt"
+    });
+    const templateIds: string[] = [];
+
+    for (let index = 0; index < 37; index += 1) {
+      const template = await contract.invoke(handlers, "templates:save", {
+        projectId: "project-a",
+        scope: "project",
+        name: `模板窗口创建模板 ${index + 1}`,
+        fileName: `模板窗口创建-${index + 1}.md`,
+        body: `记录模板窗口创建 ${index + 1}。`
+      });
+      templateIds.push(template.id);
+    }
+
+    const job = await contract.invoke(handlers, "jobs:create", {
+      bookId: book.bookId,
+      templateIds,
+      providerConfigId: "provider-1",
+      modelId: "mock-model",
+      singleRunChapterCount: 10,
+      extractionChapterCount: 100,
+      overlapChapterCount: 0,
+      templateBatchSize: 37,
+      skipAlreadyExtracted: true
+    });
+
+    expect(job).toMatchObject({
+      progressText: "进度：0/370 模板窗口",
+      progress: {
+        completedWindowCount: 0,
+        totalWindowCount: 370
+      }
+    });
+  });
+
+  it("keeps template-window progress while a started job is waiting for the first runtime response", async () => {
+    const firstWindowResponse = createDeferred<{
+      body?: unknown;
+      responseContent?: string;
+      status?: number;
+      totalTokens?: number;
+      usage?: unknown;
+    }>();
+    const mockServer = await startMockOpenAiServer({
+      expectedApiKey: "sk-template-window-start",
+      respond: ({ requestIndex }) => {
+        if (requestIndex === 0) {
+          return firstWindowResponse.promise;
+        }
+
+        return {
+          body: createChatCompletionResponse({
+            content: "NO_UPDATE"
+          })
+        };
+      }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-template-window-start");
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: mockServer.baseUrl
+        })
+      )
+    });
+    const novelPath = await writeTempNovel(tempRoot, "启动模板窗口小说.txt", 100);
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: novelPath,
+        displayName: "启动模板窗口小说.txt"
+      });
+      const templateIds: string[] = [];
+
+      for (let index = 0; index < 37; index += 1) {
+        const template = await contract.invoke(handlers, "templates:save", {
+          projectId: "project-a",
+          scope: "project",
+          name: `启动模板窗口模板 ${index + 1}`,
+          fileName: `启动模板窗口-${index + 1}.md`,
+          body: `记录启动模板窗口 ${index + 1}。`
+        });
+        templateIds.push(template.id);
+      }
+
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds,
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 10,
+        extractionChapterCount: 100,
+        overlapChapterCount: 0,
+        templateBatchSize: 37,
+        skipAlreadyExtracted: true
+      });
+
+      await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      await vi.waitFor(() => expect(mockServer.requests).toHaveLength(1));
+
+      const runtime = await contract.invoke(handlers, "projectRuntime:get", { projectId: "project-a" });
+      expect(runtime.jobs.find((runtimeJob) => runtimeJob.id === job.id)).toMatchObject({
+        status: "running",
+        progressText: "进度：0/370 模板窗口",
+        progress: {
+          totalWindowCount: 370
+        }
+      });
+
+      firstWindowResponse.resolve({
+        body: createChatCompletionResponse({
+          content: "NO_UPDATE"
+        })
+      });
+      const completedJob = await waitForJobTerminal(contract, handlers, job.id);
+      expect(completedJob.status).toBe("completed");
+    } finally {
+      firstWindowResponse.resolve({
+        body: createChatCompletionResponse({
+          content: "NO_UPDATE"
+        })
+      });
+      await mockServer.close();
+    }
+  }, 20000);
+
+  it("formats runtime progress patches as template windows", () => {
+    const buildPatch = (p0HandlersModule as {
+      toJobPatchFromRuntimeState?: (
+        state: JobRuntimeState,
+        previousJob: ProjectRuntimeJobRecord,
+        clock: { now(): string }
+      ) => Partial<ProjectRuntimeJobRecord>;
+    }).toJobPatchFromRuntimeState;
+    if (!buildPatch) {
+      throw new Error("toJobPatchFromRuntimeState helper is not exported");
+    }
+    const previousJob = {
+      id: "job-1",
+      bookId: "book-1",
+      status: "running",
+      progressText: "进度：0/370 模板窗口",
+      tokenText: "Token 0 / 缓存命中率 0.00%",
+      createdAt: "2026-07-02T10:00:00.000Z",
+      updatedAt: "2026-07-02T10:00:00.000Z",
+      input: {
+        bookId: "book-1",
+        templateIds: ["template-1", "template-2"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 10,
+        extractionChapterCount: 100,
+        overlapChapterCount: 0,
+        templateBatchSize: 37,
+        skipAlreadyExtracted: true
+      },
+      progress: {
+        completedWindowCount: 0,
+        totalWindowCount: 370,
+        skippedWindowCount: 0,
+        executedWindowCount: 0
+      },
+      timing: {
+        startedAt: "2026-07-02T10:00:00.000Z",
+        initialWindowEstimateMs: 165000,
+        effectiveTotalWindowCount: 370,
+        estimatedTotalMs: 61050000
+      }
+    } as ProjectRuntimeJobRecord;
+    const runtimeState: JobRuntimeState = {
+      jobId: "job-1",
+      status: "running",
+      completedWindowCount: 2,
+      totalWindowCount: 370,
+      skippedWindowCount: 0,
+      executedWindowCount: 2,
+      executedWindowElapsedMs: 300000,
+      usage: {
+        inputTokens: 160,
+        outputTokens: 40,
+        totalTokens: 200,
+        cacheHitTokens: 120,
+        cacheMissTokens: 40
+      },
+      fee: null
+    };
+
+    const patch = buildPatch(runtimeState, previousJob, {
+      now: () => "2026-07-02T10:05:00.000Z"
+    });
+
+    expect(patch).toMatchObject({
+      progressText: "进度：2/370 模板窗口",
+      progress: {
+        completedWindowCount: 2,
+        totalWindowCount: 370,
+        skippedWindowCount: 0,
+        executedWindowCount: 2
+      }
+    });
+  });
+
+  it("deletes a running active runtime through the runtime registry", async () => {
+    const firstWindowResponse = createDeferred<{
+      body?: unknown;
+      responseContent?: string;
+      status?: number;
+      totalTokens?: number;
+      usage?: unknown;
+    }>();
+    const mockServer = await startMockOpenAiServer({
+      expectedApiKey: "sk-delete-running",
+      respond: ({ requestIndex }) => {
+        if (requestIndex === 0) {
+          return firstWindowResponse.promise;
+        }
+
+        return {
+          body: createChatCompletionResponse({
+            content: "NO_UPDATE"
+          })
+        };
+      }
+    });
+    const contract = createIpcContract();
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-delete-running");
+    const handlers = createHandlers({
+      credentialStore,
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: mockServer.baseUrl
+        })
+      )
+    });
+
+    try {
+      const book = await contract.invoke(handlers, "books:uploadTxt", {
+        projectId: "project-a",
+        filePath: await writeTempNovel(tempRoot, "删除运行中小说.txt", 4),
+        displayName: "删除运行中小说.txt"
+      });
+      const template = await contract.invoke(handlers, "templates:save", {
+        projectId: "project-a",
+        scope: "project",
+        name: "删除运行中模板",
+        fileName: "删除运行中.md",
+        body: "记录删除运行中的结果。"
+      });
+      const job = await contract.invoke(handlers, "jobs:create", {
+        bookId: book.bookId,
+        templateIds: [template.id],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 2,
+        extractionChapterCount: 4,
+        overlapChapterCount: 0,
+        templateBatchSize: 1,
+        skipAlreadyExtracted: true
+      });
+
+      await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+      await vi.waitFor(() => expect(mockServer.requests).toHaveLength(1));
+      await vi.waitFor(
+        async () => {
+          const runtime = await contract.invoke(handlers, "projectRuntime:get", { projectId: "project-a" });
+          expect(runtime.jobs.find((runtimeJob) => runtimeJob.id === job.id)?.status).toBe("running");
+        },
+        { timeout: 15_000 }
+      );
+
+      await expect(contract.invoke(handlers, "jobs:delete", { jobId: job.id, confirm: true })).resolves.toBeUndefined();
+      const runtimeAfterDelete = await contract.invoke(handlers, "projectRuntime:get", { projectId: "project-a" });
+      expect(runtimeAfterDelete.jobs.find((runtimeJob) => runtimeJob.id === job.id)).toBeUndefined();
+
+      firstWindowResponse.resolve({
+        body: createChatCompletionResponse({
+          content: "NO_UPDATE"
+        })
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(mockServer.requests).toHaveLength(1);
+      const runtimeAfterRuntimeSettled = await contract.invoke(handlers, "projectRuntime:get", { projectId: "project-a" });
+      expect(runtimeAfterRuntimeSettled.jobs.find((runtimeJob) => runtimeJob.id === job.id)).toBeUndefined();
+    } finally {
+      firstWindowResponse.resolve({
+        body: createChatCompletionResponse({
+          content: "NO_UPDATE"
+        })
+      });
+      await mockServer.close();
+    }
+  });
+
   it("rejects jobs whose selected templates share the same output file name", async () => {
     const contract = createIpcContract();
     const handlers = createHandlers();
@@ -1066,6 +1429,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       })
     ).rejects.toThrow(/重复\.md.*甲模板.*乙模板/u);
@@ -1096,6 +1460,7 @@ describe("P0 desktop IPC handlers", () => {
       singleRunChapterCount: 2,
       extractionChapterCount: 3,
       overlapChapterCount: 1,
+      templateBatchSize: 1,
       skipAlreadyExtracted: true
     });
 
@@ -1175,6 +1540,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: false
       });
 
@@ -1202,7 +1568,7 @@ describe("P0 desktop IPC handlers", () => {
     }
   });
 
-  it("automatically retries a failed job after the configured interval when enabled at creation", async () => {
+  it("retries a transient template batch provider failure after the configured batch interval", async () => {
     const mockServer = await startMockOpenAiServer({
       expectedApiKey: "sk-auto-retry-create",
       respond: ({ requestIndex }) =>
@@ -1219,7 +1585,8 @@ describe("P0 desktop IPC handlers", () => {
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-auto-retry-create");
     const handlers = createHandlers({
       credentialStore,
-      failureRetryIntervalMs: 5,
+      failureRetryIntervalMs: 60_000,
+      templateBatchFailureRetryIntervalMs: 5,
       providerStore: createProviderStore(
         createProviderConfig({
           apiKeyRef,
@@ -1250,6 +1617,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: false
       });
 
@@ -1267,8 +1635,11 @@ describe("P0 desktop IPC handlers", () => {
       );
 
       const retryLog = await contract.invoke(handlers, "jobs:readLog", { jobId: job.id });
-      expect(retryLog.content).toContain("自动续跑触发");
-      expect(retryLog.content).toContain("自动续跑已进入运行或排队，停止本轮定时重试");
+      const batchLog = await readBatchLogTexts(job.id);
+      expect(retryLog.content).not.toContain("自动续跑触发");
+      expect(batchLog.fullText).toContain("[错误][批次重试]");
+      expect(batchLog.fullText).toContain("temporary provider failure");
+      expect(batchLog.fullText).toContain("下次重试延迟毫秒: 5");
       expect(mockServer.requests).toHaveLength(3);
     } finally {
       await mockServer.close();
@@ -1281,8 +1652,7 @@ describe("P0 desktop IPC handlers", () => {
       respond: ({ requestIndex }) =>
         requestIndex === 0
           ? {
-              body: { error: { message: "temporary provider failure" } },
-              status: 500
+              body: createFatalUnsafeWriteResponse()
             }
           : {
               body: createChatCompletionResponse({ content: "NO_UPDATE" })
@@ -1322,6 +1692,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: false
       });
       const failedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
@@ -1351,8 +1722,7 @@ describe("P0 desktop IPC handlers", () => {
     const mockServer = await startMockOpenAiServer({
       expectedApiKey: "sk-auto-retry-cancel",
       respond: () => ({
-        body: { error: { message: "temporary provider failure" } },
-        status: 500
+        body: createFatalUnsafeWriteResponse()
       })
     });
     const contract = createIpcContract();
@@ -1389,6 +1759,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: false
       });
       const failedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
@@ -1419,8 +1790,7 @@ describe("P0 desktop IPC handlers", () => {
       respond: ({ requestIndex }) => {
         if (requestIndex === 0) {
           return {
-            body: { error: { message: "temporary provider failure" } },
-            status: 500
+            body: createFatalUnsafeWriteResponse()
           };
         }
         if (requestIndex === 1) {
@@ -1466,6 +1836,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 99,
         extractionChapterCount: 99,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       };
       const retryJob = await contract.invoke(handlers, "jobs:create", {
@@ -1523,12 +1894,29 @@ describe("P0 desktop IPC handlers", () => {
   }, 20000);
 
   it("uses compressed template prompt profiles while keeping full template bodies in rule snapshots", async () => {
+    let profileReportPath = "压缩验证.md";
+    let createdJobId = "";
     const mockServer = await startMockOpenAiServer({
-      respond: () => ({
-        body: createChatCompletionResponse({
-          content: "NO_UPDATE"
-        })
-      })
+      respond: ({ requestIndex }) => {
+        if (requestIndex === 0) {
+          return {
+            body: createChatCompletionResponse({
+              toolCalls: [
+                createToolCall("call-profile-write", "write_file", {
+                  path: profileReportPath,
+                  content: "# 压缩验证\n\n压缩模板 prompt profile 检查。"
+                })
+              ]
+            })
+          };
+        }
+
+        return {
+          body: createChatCompletionResponse({
+            content: "窗口完成。"
+          })
+        };
+      }
     });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-profile-mock");
@@ -1578,6 +1966,7 @@ describe("P0 desktop IPC handlers", () => {
           "待补充：{{条目名称}}"
         ].join("\n")
       });
+      profileReportPath = template.fileName;
       const job = await contract.invoke(handlers, "jobs:create", {
         bookId: book.bookId,
         templateIds: [template.id],
@@ -1586,17 +1975,23 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
+      createdJobId = job.id;
 
-      await startJobAndWaitForTerminal(contract, handlers, job.id);
+      await expect(contract.invoke(handlers, "jobs:start", { jobId: job.id })).resolves.toMatchObject({
+        id: job.id,
+        status: "running"
+      });
+      await vi.waitFor(() => expect(mockServer.requests.length).toBeGreaterThanOrEqual(1));
 
       const firstRequest = mockServer.requests[0].body as { messages?: Array<{ content?: string; role?: string }> };
       const userPrompt = firstRequest.messages?.find((message) => message.role === "user")?.content ?? "";
       const profileSection =
         userPrompt.split("## 选中模板 Prompt Profile\n")[1]?.split("\n\n## 当前窗口文本")[0] ?? "";
       expect(profileSection).toContain("templateId:");
-      expect(profileSection).toContain("outputFileName: 压缩验证.md");
+      expect(profileSection).toContain(`outputFileName: ${template.fileName}`);
       expect(profileSection).toContain("templateHash:");
       expect(profileSection).toContain("条目名称");
       expect(profileSection).toContain("禁止使用后续章节");
@@ -1614,6 +2009,9 @@ describe("P0 desktop IPC handlers", () => {
       expect(rulesSnapshot).toContain("参考范围：全书后续情节");
       expect(rulesSnapshot).toContain("{{条目名称}}");
     } finally {
+      if (createdJobId) {
+        await contract.invoke(handlers, "jobs:delete", { jobId: createdJobId, confirm: true }).catch(() => undefined);
+      }
       await mockServer.close();
     }
   });
@@ -1654,6 +2052,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 3,
         extractionChapterCount: 9,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       };
 
@@ -1667,7 +2066,7 @@ describe("P0 desktop IPC handlers", () => {
         const completedSecondJob = await startJobAndWaitForTerminal(contract, handlers, secondJob.id);
         expect(completedSecondJob).toMatchObject({
           status: "completed",
-          progressText: "进度：4/4"
+          progressText: "进度：4/4 模板窗口"
         });
         expect(mockServer.requests).toHaveLength(4);
         const coverageIndexReadCount = readFileSpy.mock.calls.filter(([filePath]) =>
@@ -1688,11 +2087,16 @@ describe("P0 desktop IPC handlers", () => {
           "utf8"
         );
         expect(secondJobLog.content).toContain("覆盖索引预检：4 个窗口，4 个已覆盖，0 个待处理");
-        expect(secondJobLog.content).toContain("窗口 1/4（window-0001.txt）已经提取过，跳过");
-        expect(secondJobLog.content).toContain("窗口 4/4（window-0004.txt）已经提取过，跳过");
         expect(secondJobLog.content.match(/覆盖索引预检：/gu)).toHaveLength(1);
-        expect(secondJobLog.content.match(/已经提取过，跳过/gu)).toHaveLength(4);
-        expect(simpleLogText).toContain("窗口 1/4 多轮原因：无");
+        expect(secondJobLog.content).not.toContain("已经提取过，跳过");
+        expect(simpleLogText).toContain("覆盖索引预检：4 个窗口，4 个已覆盖，0 个待处理");
+
+        const batchLog = await readBatchLogTexts(secondJob.id);
+        expect(batchLog.simpleText).toContain("窗口 1/4（window-0001.txt）已经提取过，跳过");
+        expect(batchLog.simpleText).toContain("窗口 4/4（window-0004.txt）已经提取过，跳过");
+        expect(batchLog.simpleText.match(/已经提取过，跳过/gu)).toHaveLength(4);
+        expect(batchLog.simpleText).toContain("窗口 1/4 多轮原因：无");
+        expect(batchLog.fullText).toContain("[上下文][覆盖索引跳过窗口]");
       } finally {
         readFileSpy.mockRestore();
       }
@@ -1735,6 +2139,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 3,
         extractionChapterCount: 9,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: false
       });
 
@@ -1767,7 +2172,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(resumedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：4/4"
+        progressText: "进度：4/4 模板窗口"
       });
       expect(mockServer.requests).toHaveLength(4);
     } finally {
@@ -1824,6 +2229,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 4,
         overlapChapterCount: 0,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -1856,7 +2262,7 @@ describe("P0 desktop IPC handlers", () => {
       );
       expect(pausedJob).toMatchObject({
         id: job.id,
-        progressText: "进度：1/2",
+        progressText: "进度：1/2 模板窗口",
         allowedActions: ["resume", "restart", "delete"]
       });
       expect(mockServer.requests).toHaveLength(1);
@@ -1874,7 +2280,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：2/2"
+        progressText: "进度：2/2 模板窗口"
       });
       expect(mockServer.requests).toHaveLength(2);
     } finally {
@@ -1903,6 +2309,7 @@ describe("P0 desktop IPC handlers", () => {
       singleRunChapterCount: 2,
       extractionChapterCount: 2,
       overlapChapterCount: 1,
+      templateBatchSize: 1,
       skipAlreadyExtracted: true
     });
 
@@ -1924,7 +2331,7 @@ describe("P0 desktop IPC handlers", () => {
         id: job.id,
         bookId: book.bookId,
         status: "created",
-        progressText: "进度：0/1"
+        progressText: "进度：0/1 模板窗口"
       })
     ]);
   });
@@ -1952,6 +2359,7 @@ describe("P0 desktop IPC handlers", () => {
       singleRunChapterCount: 2,
       extractionChapterCount: 2,
       overlapChapterCount: 1,
+      templateBatchSize: 1,
       skipAlreadyExtracted: true
     });
 
@@ -2009,6 +2417,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
       const runtimePath = path.join(tempRoot, "projects", "project-a", "state", "project-runtime.json");
@@ -2035,7 +2444,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(resumedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：1/1"
+        progressText: "进度：1/1 模板窗口"
       });
       expect(mockServer.requests).toHaveLength(1);
     } finally {
@@ -2081,6 +2490,7 @@ describe("P0 desktop IPC handlers", () => {
           singleRunChapterCount: 2,
           extractionChapterCount: 2,
           overlapChapterCount: 1,
+          templateBatchSize: 1,
           skipAlreadyExtracted: true
         })
       );
@@ -2152,6 +2562,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       })
     );
@@ -2164,7 +2575,7 @@ describe("P0 desktop IPC handlers", () => {
         ? {
             ...storedJob,
             status: "failed",
-            progressText: "进度：1/2",
+            progressText: "进度：1/2 模板窗口",
             failureReason: "mock failure",
             progress: {
               completedWindowCount: 1,
@@ -2214,6 +2625,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 3,
         extractionChapterCount: 9,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       })
     );
@@ -2226,7 +2638,7 @@ describe("P0 desktop IPC handlers", () => {
         ? {
             ...storedJob,
             status: "failed",
-            progressText: "进度：4/4",
+            progressText: "进度：4/4 模板窗口",
             failureReason: "mock failure after all windows completed",
             progress: {
               completedWindowCount: 4,
@@ -2275,6 +2687,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 1,
         extractionChapterCount: 10,
         overlapChapterCount: 0,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       })
     );
@@ -2287,7 +2700,7 @@ describe("P0 desktop IPC handlers", () => {
         ? {
             ...storedJob,
             status: "completed",
-            progressText: "进度：10/10",
+            progressText: "进度：10/10 模板窗口",
             progress: {
               completedWindowCount: 10,
               totalWindowCount: 10,
@@ -2340,6 +2753,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 1,
         extractionChapterCount: 10,
         overlapChapterCount: 0,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       })
     );
@@ -2352,7 +2766,7 @@ describe("P0 desktop IPC handlers", () => {
         ? {
             ...storedJob,
             status: "completed",
-            progressText: "进度：10/10",
+            progressText: "进度：10/10 模板窗口",
             progress: {
               completedWindowCount: 10,
               totalWindowCount: 10,
@@ -2405,6 +2819,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 1,
         extractionChapterCount: 6,
         overlapChapterCount: 0,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       })
     );
@@ -2417,7 +2832,7 @@ describe("P0 desktop IPC handlers", () => {
         ? {
             ...storedJob,
             status: "completed",
-            progressText: "进度：6/6",
+            progressText: "进度：6/6 模板窗口",
             progress: {
               completedWindowCount: 6,
               totalWindowCount: 6
@@ -2480,6 +2895,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
       await startJobAndWaitForTerminal(contract, handlers, job.id);
@@ -2590,6 +3006,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: false
       });
 
@@ -2614,6 +3031,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 2,
         skipAlreadyExtracted: true
       });
 
@@ -2757,7 +3175,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: jobWithTwoTemplates.id,
         status: "completed",
-        progressText: "进度：2/2",
+        progressText: "进度：4/4 模板窗口",
         tokenText: "Token 111 / 缓存命中率 0.00%",
         allowedActions: ["delete"]
       });
@@ -2872,6 +3290,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
       createdJobId = job.id;
@@ -2889,7 +3308,9 @@ describe("P0 desktop IPC handlers", () => {
         "utf8"
       );
       const readLog = await contract.invoke(handlers, "jobs:readLog", { jobId: job.id });
-      const metrics = parseRunLogMetrics(`${logText}\n${simpleLogText}`);
+      const batchLog = await readBatchLogTexts(job.id);
+      const combinedLogText = `${logText}\n${simpleLogText}\n${batchLog.fullText}\n${batchLog.simpleText}`;
+      const metrics = parseRunLogMetrics(combinedLogText);
 
       expect(readLog).toEqual({
         jobId: job.id,
@@ -2897,9 +3318,10 @@ describe("P0 desktop IPC handlers", () => {
         content: simpleLogText
       });
       expect(simpleLogText).toContain("开始任务：凡人修仙传.txt");
-      expect(simpleLogText).toContain("请求模型：窗口 1/1，第 1 轮");
-      expect(simpleLogText).toContain("读取文件：window-0001.txt");
-      expect(simpleLogText).toContain("窗口 1/1 多轮原因：无");
+      expect(simpleLogText).toContain("覆盖索引预检：1 个窗口，0 个已覆盖，1 个待处理");
+      expect(batchLog.simpleText).toContain("请求模型：窗口 1/1，第 1 轮");
+      expect(batchLog.simpleText).toContain("读取文件：window-0001.txt");
+      expect(batchLog.simpleText).toContain("窗口 1/1 多轮原因：无");
       expect(simpleLogText).not.toContain("[大模型请求][Prompt]");
       expect(simpleLogText).not.toContain("role: system");
       expect(logText.split("\n")[0]).toContain("[2026-06-27 00:00:00][构建信息]");
@@ -2907,13 +3329,15 @@ describe("P0 desktop IPC handlers", () => {
       expect(logText).toContain("Build Commit:");
       expect(logText).toContain("Build Time:");
       expect(logText).toContain("[2026-06-27 00:00:00][任务信息] 任务");
-      expect(logText).toContain("[大模型请求][Prompt]");
-      expect(logText).toContain("role: system");
-      expect(logText).toContain("role: user");
-      expect(logText).toContain("[窗口原文见 window-0001.txt]");
+      expect(logText).not.toContain("[大模型请求][Prompt]");
+      expect(batchLog.fullText).toContain("[大模型请求][Prompt]");
+      expect(batchLog.fullText).toContain("role: system");
+      expect(batchLog.fullText).toContain("role: user");
+      expect(batchLog.fullText).toContain("[窗口原文见 window-0001.txt]");
       expect(logText).not.toContain("韩立在青石坊市遇见一瓶凝气丹");
-      const firstPromptLogBlock = logText.split("[大模型请求][Prompt]")[1]?.split("[大模型请求][ProviderBody]")[0] ?? "";
-      const firstProviderBodyLogBlock = logText.split("[大模型请求][ProviderBody]")[1] ?? "";
+      const firstPromptLogBlock =
+        batchLog.fullText.split("[大模型请求][Prompt]")[1]?.split("[大模型请求][ProviderBody]")[0] ?? "";
+      const firstProviderBodyLogBlock = batchLog.fullText.split("[大模型请求][ProviderBody]")[1] ?? "";
       expect(firstPromptLogBlock).not.toContain("tools:");
       expect(firstPromptLogBlock).not.toContain("name: grep");
       expect(firstProviderBodyLogBlock).toContain("providerBody:");
@@ -2923,18 +3347,18 @@ describe("P0 desktop IPC handlers", () => {
       expect(firstProviderBodyLogBlock).toContain("name: grep");
       expect(firstProviderBodyLogBlock).toContain("parameters:");
       expect(firstProviderBodyLogBlock).toContain("报告是否存在已由宿主清单提供");
-      expect(logText).toContain("窗口序号：1/1");
-      expect(logText).toContain("[大模型返回]");
-      expect(logText).toContain("准备查询窗口文本 ***");
-      expect(logText).toContain("call-read-window");
-      expect(logText).toContain("[工具调用][read_file]");
-      expect(logText).toContain("path: runs/");
-      expect(logText).toContain("[工具返回][read_file]");
-      expect(logText).toContain("[上下文][窗口]");
-      expect(logText).toContain("[上下文][多轮原因汇总]");
-      expect(logText).toContain("章节范围");
-      expect(logText).not.toContain(apiKey);
-      expect(logText.trim()).not.toMatch(/^\{.*\}$/su);
+      expect(batchLog.fullText).toContain("窗口序号：1/1");
+      expect(batchLog.fullText).toContain("[大模型返回]");
+      expect(batchLog.fullText).toContain("准备查询窗口文本 ***");
+      expect(batchLog.fullText).toContain("call-read-window");
+      expect(batchLog.fullText).toContain("[工具调用][read_file]");
+      expect(batchLog.fullText).toContain("path: runs/");
+      expect(batchLog.fullText).toContain("[工具返回][read_file]");
+      expect(batchLog.fullText).toContain("[上下文][窗口]");
+      expect(batchLog.fullText).toContain("[上下文][多轮原因汇总]");
+      expect(batchLog.fullText).toContain("章节范围");
+      expect(combinedLogText).not.toContain(apiKey);
+      expect(batchLog.fullText.trim()).not.toMatch(/^\{.*\}$/su);
       expect(metrics).toMatchObject({
         modelRequestCount: 3,
         recoverableRetryCount: 0,
@@ -2953,7 +3377,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(metrics.toolCallCountByName.ls ?? 0).toBe(0);
       expect(metrics.toolCallCountByName.bash ?? 0).toBe(0);
       expect(metrics.windowTextReferenceCount).toBeGreaterThanOrEqual(metrics.modelRequestCount);
-      expect(metrics.fullLogBytes).toBe(Buffer.byteLength(`${logText}\n${simpleLogText}`, "utf8"));
+      expect(metrics.fullLogBytes).toBe(Buffer.byteLength(combinedLogText, "utf8"));
       expect(JSON.stringify(mockServer.requests[0].body)).toContain("韩立在青石坊市遇见一瓶凝气丹");
       expect(JSON.stringify(mockServer.requests[0].body)).toContain("报告是否存在已由宿主清单提供");
 
@@ -2981,6 +3405,7 @@ describe("P0 desktop IPC handlers", () => {
       singleRunChapterCount: 2,
       extractionChapterCount: 2,
       overlapChapterCount: 1,
+      templateBatchSize: 1,
       skipAlreadyExtracted: true
     });
 
@@ -3008,6 +3433,7 @@ describe("P0 desktop IPC handlers", () => {
       singleRunChapterCount: 2,
       extractionChapterCount: 2,
       overlapChapterCount: 1,
+      templateBatchSize: 1,
       skipAlreadyExtracted: true
     });
 
@@ -3091,6 +3517,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -3102,7 +3529,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：2/2"
+        progressText: "进度：2/2 模板窗口"
       });
       expect(reports).toHaveLength(1);
       expect(reports[0]).toMatchObject({
@@ -3182,6 +3609,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 3,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -3204,7 +3632,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：1/1"
+        progressText: "进度：1/1 模板窗口"
       });
       expect(mockServer.requests).toHaveLength(3);
       expect(reports).toHaveLength(1);
@@ -3320,6 +3748,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -3343,7 +3772,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：2/2"
+        progressText: "进度：2/2 模板窗口"
       });
       expect(mockServer.requests).toHaveLength(5);
       expect(reports).toHaveLength(1);
@@ -3458,6 +3887,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -3484,7 +3914,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：2/2"
+        progressText: "进度：2/2 模板窗口"
       });
       expect(completedJob?.failureReason).toBeUndefined();
       expect(reports).toHaveLength(1);
@@ -3612,6 +4042,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -3637,7 +4068,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：2/2"
+        progressText: "进度：2/2 模板窗口"
       });
       expect(reportMarkdown).toContain("## 一、七玄门");
       expect(reportMarkdown).toContain("## 二、野狼帮");
@@ -3802,6 +4233,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -3831,7 +4263,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：2/2"
+        progressText: "进度：2/2 模板窗口"
       });
       expect(reportMarkdown).toBe(finalReportBody);
     } finally {
@@ -3935,6 +4367,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -3957,7 +4390,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：2/2"
+        progressText: "进度：2/2 模板窗口"
       });
       expect(mockServer.requests).toHaveLength(5);
       expect(grepReplayBody).toContain(`assets/books/${uploadedBookId}/reports/${reportFileName}`);
@@ -4079,6 +4512,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -4104,7 +4538,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：2/2"
+        progressText: "进度：2/2 模板窗口"
       });
       expect(reportMarkdown).toContain("## 一、七玄门");
       expect(reportMarkdown).toContain("## 二、野狼帮");
@@ -4216,6 +4650,7 @@ describe("P0 desktop IPC handlers", () => {
           singleRunChapterCount: 2,
           extractionChapterCount: 3,
           overlapChapterCount: 1,
+          templateBatchSize: 1,
           skipAlreadyExtracted: true
         });
 
@@ -4240,7 +4675,7 @@ describe("P0 desktop IPC handlers", () => {
         expect(completedJob).toMatchObject({
           id: job.id,
           status: "completed",
-          progressText: "进度：2/2"
+          progressText: "进度：2/2 模板窗口"
         });
         expect(completedJob?.failureReason).toBeUndefined();
         expect(reports).toHaveLength(1);
@@ -4327,6 +4762,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -4336,7 +4772,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：1/1"
+        progressText: "进度：1/1 模板窗口"
       });
       expect(reports).toHaveLength(1);
 
@@ -4428,6 +4864,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -4441,7 +4878,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：1/1"
+        progressText: "进度：1/1 模板窗口"
       });
       expect(completedJob?.failureReason).toBeUndefined();
       expect(reports).toHaveLength(1);
@@ -4531,6 +4968,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -4542,7 +4980,8 @@ describe("P0 desktop IPC handlers", () => {
         path.join(projectRoot, (completedJob.logFilePath ?? "").replace(/\.txt$/u, ".simple.txt")),
         "utf8"
       );
-      const metrics = parseRunLogMetrics(`${logText}\n${simpleLogText}`);
+      const batchLog = await readBatchLogTexts(job.id);
+      const metrics = parseRunLogMetrics(`${logText}\n${simpleLogText}\n${batchLog.fullText}\n${batchLog.simpleText}`);
 
       expect(mockServer.requests).toHaveLength(3);
       expect(unknownToolReplayBody).toContain("UNKNOWN_TOOL");
@@ -4556,7 +4995,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：1/1"
+        progressText: "进度：1/1 模板窗口"
       });
       expect(completedJob?.failureReason).toBeUndefined();
       expect(reports).toHaveLength(1);
@@ -4678,6 +5117,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -4688,23 +5128,26 @@ describe("P0 desktop IPC handlers", () => {
         path.join(projectRoot, (completedJob.logFilePath ?? "").replace(/\.txt$/u, ".simple.txt")),
         "utf8"
       );
+      const batchLog = await readBatchLogTexts(job.id);
 
       expect(mockServer.requests).toHaveLength(4);
       expect(completedJob.status).toBe("completed");
-      expect(logText).toContain("继续原因：报告查找方式被拒绝");
-      expect(logText).toContain("继续原因：工具参数或路径无效");
-      expect(logText).toContain("继续原因：报告锚点未命中");
-      expect(logText).toContain("report_discovery_rejected");
-      expect(logText).toContain("tool_arguments_invalid");
-      expect(logText).toContain("edit_anchor_failed");
-      expect(logText).toContain("窗口 1/1");
-      expect(logText).toContain("[上下文][多轮原因汇总]");
-      expect(simpleLogText).toContain("继续原因：报告查找方式被拒绝");
-      expect(simpleLogText).toContain("继续原因：工具参数或路径无效");
-      expect(simpleLogText).toContain("继续原因：报告锚点未命中");
-      expect(simpleLogText).toContain(
+      expect(logText).toContain("[上下文][覆盖索引预检]");
+      expect(batchLog.fullText).toContain("继续原因：报告查找方式被拒绝");
+      expect(batchLog.fullText).toContain("继续原因：工具参数或路径无效");
+      expect(batchLog.fullText).toContain("继续原因：报告锚点未命中");
+      expect(batchLog.fullText).toContain("report_discovery_rejected");
+      expect(batchLog.fullText).toContain("tool_arguments_invalid");
+      expect(batchLog.fullText).toContain("edit_anchor_failed");
+      expect(batchLog.fullText).toContain("窗口 1/1");
+      expect(batchLog.fullText).toContain("[上下文][多轮原因汇总]");
+      expect(batchLog.simpleText).toContain("继续原因：报告查找方式被拒绝");
+      expect(batchLog.simpleText).toContain("继续原因：工具参数或路径无效");
+      expect(batchLog.simpleText).toContain("继续原因：报告锚点未命中");
+      expect(batchLog.simpleText).toContain(
         "窗口 1/1 多轮原因：报告查找方式被拒绝 1 次，报告锚点未命中 1 次，工具参数或路径无效 1 次"
       );
+      expect(simpleLogText).toContain("覆盖索引预检：");
     } finally {
       await mockServer.close();
     }
@@ -4783,6 +5226,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
       createdJobId = job.id;
@@ -4803,6 +5247,7 @@ describe("P0 desktop IPC handlers", () => {
       );
       const projectRoot = path.join(tempRoot, "projects", "project-a");
       const logText = await fs.readFile(path.join(projectRoot, completedJob.logFilePath ?? ""), "utf8");
+      const batchLog = await readBatchLogTexts(job.id);
 
       expect(mockServer.requests).toHaveLength(3);
       expect(readToolReplayBody).toContain("UNSAFE_PATH");
@@ -4810,23 +5255,24 @@ describe("P0 desktop IPC handlers", () => {
       expect(readToolReplayBody).toContain("reports");
       expect(readToolReplayBody).not.toContain(leakPayload);
       expect(readToolReplayBody).not.toContain("/logs/");
-      expect(logText).toContain("[工具调用][grep]");
-      expect(logText).toContain("[工具调用][ls]");
-      expect(logText).toContain("[工具调用][glob]");
-      expect(logText).toContain("call-grep-run-root");
-      expect(logText).toContain("call-ls-run-root");
-      expect(logText).toContain("call-glob-run-root");
-      expect(logText).toContain("[工具返回][grep]");
-      expect(logText).toContain("[工具返回][ls]");
-      expect(logText).toContain("[工具返回][glob]");
-      expect(logText).toContain("UNSAFE_PATH");
-      expect(logText).toContain("读工具路径不在当前窗口允许范围内。");
-      expect(logText).not.toContain(leakPayload);
+      expect(logText).toContain("[上下文][覆盖索引预检]");
+      expect(batchLog.fullText).toContain("[工具调用][grep]");
+      expect(batchLog.fullText).toContain("[工具调用][ls]");
+      expect(batchLog.fullText).toContain("[工具调用][glob]");
+      expect(batchLog.fullText).toContain("call-grep-run-root");
+      expect(batchLog.fullText).toContain("call-ls-run-root");
+      expect(batchLog.fullText).toContain("call-glob-run-root");
+      expect(batchLog.fullText).toContain("[工具返回][grep]");
+      expect(batchLog.fullText).toContain("[工具返回][ls]");
+      expect(batchLog.fullText).toContain("[工具返回][glob]");
+      expect(batchLog.fullText).toContain("UNSAFE_PATH");
+      expect(batchLog.fullText).toContain("读工具路径不在当前窗口允许范围内。");
+      expect(`${logText}\n${batchLog.fullText}`).not.toContain(leakPayload);
       expect(existsSync(path.join(projectRoot, "runs", job.id, "tool-loop-traces"))).toBe(false);
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：1/1"
+        progressText: "进度：1/1 模板窗口"
       });
       expect(completedJob?.failureReason).toBeUndefined();
       expect(reportMarkdown).toBe(recoveredReport);
@@ -4854,12 +5300,13 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 3,
         extractionChapterCount: 9,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       })
     );
 
     expect(job).toMatchObject({
-      progressText: "进度：0/4",
+      progressText: "进度：0/4 模板窗口",
       progress: {
         completedWindowCount: 0,
         totalWindowCount: 4,
@@ -4917,6 +5364,7 @@ describe("P0 desktop IPC handlers", () => {
           singleRunChapterCount: 3,
           extractionChapterCount: 9,
           overlapChapterCount: 1,
+          templateBatchSize: 1,
           skipAlreadyExtracted: true
         })
       );
@@ -4925,7 +5373,7 @@ describe("P0 desktop IPC handlers", () => {
 
       expect(completedJob).toMatchObject({
         status: "completed",
-        progressText: "进度：4/4",
+        progressText: "进度：4/4 模板窗口",
         tokenText: "Token 400 / 缓存命中率 75.00%",
         progress: {
           completedWindowCount: 4,
@@ -4955,7 +5403,7 @@ describe("P0 desktop IPC handlers", () => {
           expect.objectContaining({
             id: job.id,
             status: "running",
-            progressText: "进度：1/4",
+            progressText: "进度：1/4 模板窗口",
             tokenText: "Token 100 / 缓存命中率 75.00%",
             logFilePath: expect.stringContaining("runs/job-"),
             progress: {
@@ -4976,7 +5424,7 @@ describe("P0 desktop IPC handlers", () => {
           expect.objectContaining({
             id: job.id,
             status: "completed",
-            progressText: "进度：4/4",
+            progressText: "进度：4/4 模板窗口",
             tokenText: "Token 400 / 缓存命中率 75.00%",
             progress: {
               completedWindowCount: 4,
@@ -5044,6 +5492,7 @@ describe("P0 desktop IPC handlers", () => {
           singleRunChapterCount: 3,
           extractionChapterCount: 9,
           overlapChapterCount: 1,
+          templateBatchSize: 1,
           skipAlreadyExtracted: true
         })
       );
@@ -5055,7 +5504,7 @@ describe("P0 desktop IPC handlers", () => {
         (pushedJob) => pushedJob.id === job.id && pushedJob.status === "running"
       );
       expect(initialRunningJob).toMatchObject({
-        progressText: "正在准备运行窗口",
+        progressText: "进度：0/4 模板窗口",
         progress: {
           completedWindowCount: 0,
           totalWindowCount: 4,
@@ -5109,6 +5558,7 @@ describe("P0 desktop IPC handlers", () => {
           singleRunChapterCount: 3,
           extractionChapterCount: 9,
           overlapChapterCount: 1,
+          templateBatchSize: 1,
           skipAlreadyExtracted: true
         })
       );
@@ -5121,7 +5571,7 @@ describe("P0 desktop IPC handlers", () => {
           ? {
               ...storedJob,
               status: "failed",
-              progressText: "进度：4/4",
+              progressText: "进度：4/4 模板窗口",
               failureReason: "mock failure after completing all windows",
               progress: {
                 completedWindowCount: 4,
@@ -5157,7 +5607,7 @@ describe("P0 desktop IPC handlers", () => {
         (pushedJob) => pushedJob.id === job.id && pushedJob.status === "running"
       );
       expect(initialRunningJob).toMatchObject({
-        progressText: "正在准备运行窗口",
+        progressText: "进度：0/4 模板窗口",
         progress: {
           completedWindowCount: 0,
           totalWindowCount: 4,
@@ -5239,6 +5689,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
       createdJobId = job.id;
@@ -5266,7 +5717,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：1/1"
+        progressText: "进度：1/1 模板窗口"
       });
       expect(completedJob?.failureReason).toBeUndefined();
       expect(reportMarkdown).toBe(recoveredReport);
@@ -5338,6 +5789,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
       createdJobId = job.id;
@@ -5364,7 +5816,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：2/2"
+        progressText: "进度：2/2 模板窗口"
       });
       expect(completedJob?.failureReason).toBeUndefined();
       expect(reportMarkdown).toBe(recoveredReport);
@@ -5459,6 +5911,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -5466,7 +5919,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：2/2"
+        progressText: "进度：2/2 模板窗口"
       });
       expect(completedJob?.failureReason).toBeUndefined();
 
@@ -5600,6 +6053,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -5736,6 +6190,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 3,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: false
       });
 
@@ -5846,6 +6301,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 3,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: false
       });
 
@@ -5934,6 +6390,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -5947,7 +6404,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：1/1"
+        progressText: "进度：1/1 模板窗口"
       });
       expect(completedJob?.failureReason).toBeUndefined();
       expect(reports).toHaveLength(1);
@@ -6010,6 +6467,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -6022,7 +6480,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：1/1"
+        progressText: "进度：1/1 模板窗口"
       });
       expect(completedJob?.failureReason).toBeUndefined();
       expect(reports).toHaveLength(1);
@@ -6112,6 +6570,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -6126,7 +6585,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：1/1"
+        progressText: "进度：1/1 模板窗口"
       });
       expect(completedJob?.failureReason).toBeUndefined();
       expect(reports).toHaveLength(1);
@@ -6215,6 +6674,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -6229,7 +6689,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：1/1"
+        progressText: "进度：1/1 模板窗口"
       });
       expect(completedJob?.failureReason).toBeUndefined();
       expect(reports).toHaveLength(1);
@@ -6327,6 +6787,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -6337,23 +6798,25 @@ describe("P0 desktop IPC handlers", () => {
         path.join(projectRoot, (completedJob.logFilePath ?? "").replace(/\.txt$/u, ".simple.txt")),
         "utf8"
       );
-      const metrics = parseRunLogMetrics(`${logText}\n${simpleLogText}`);
+      const batchLog = await readBatchLogTexts(job.id);
+      const metrics = parseRunLogMetrics(`${logText}\n${simpleLogText}\n${batchLog.fullText}\n${batchLog.simpleText}`);
 
-      expect(logText).toContain("[上下文][窗口]");
-      expect(logText).toContain("窗口 1/1");
-      expect(logText).toContain(`runs/${job.id}/windows/window-0001.txt`);
-      expect(logText).toContain("[大模型返回]");
-      expect(logText).toContain("准备写入。");
-      expect(logText).toContain("[工具调用][write_file]");
-      expect(logText).toContain("call-write-array-path-trace");
-      expect(logText).toContain("path:");
-      expect(logText).toContain("- 丹药分析.md");
-      expect(logText).toContain("[工具返回][write_file]");
-      expect(logText).toContain("invalid args:");
-      expect(logText).toContain("$.path 必须是字符串");
-      expect(logText).toContain("正确格式示例");
-      expect(logText).toContain("完整报告正文".repeat(20));
-      expect(logText).not.toContain(apiKey);
+      expect(logText).toContain("[上下文][覆盖索引预检]");
+      expect(batchLog.fullText).toContain("[上下文][窗口]");
+      expect(batchLog.fullText).toContain("窗口 1/1");
+      expect(batchLog.fullText).toContain(`runs/${job.id}/windows/window-0001.txt`);
+      expect(batchLog.fullText).toContain("[大模型返回]");
+      expect(batchLog.fullText).toContain("准备写入。");
+      expect(batchLog.fullText).toContain("[工具调用][write_file]");
+      expect(batchLog.fullText).toContain("call-write-array-path-trace");
+      expect(batchLog.fullText).toContain("path:");
+      expect(batchLog.fullText).toContain("- 丹药分析.md");
+      expect(batchLog.fullText).toContain("[工具返回][write_file]");
+      expect(batchLog.fullText).toContain("invalid args:");
+      expect(batchLog.fullText).toContain("$.path 必须是字符串");
+      expect(batchLog.fullText).toContain("正确格式示例");
+      expect(batchLog.fullText).toContain("完整报告正文".repeat(20));
+      expect(`${logText}\n${batchLog.fullText}`).not.toContain(apiKey);
       expect(existsSync(path.join(projectRoot, "runs", job.id, "tool-loop-traces"))).toBe(false);
       expect(metrics.recoverableRetryCount).toBe(1);
       expect(metrics.invalidArgumentsCount).toBeGreaterThanOrEqual(1);
@@ -6416,6 +6879,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -6427,7 +6891,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(failedJob).toMatchObject({
         id: job.id,
         status: "failed",
-        progressText: "进度：0/1",
+        progressText: "进度：0/1 模板窗口",
         allowedActions: ["resume", "restart", "delete"]
       });
       expect(failedJob?.failureReason).toContain("write_file");
@@ -6487,6 +6951,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -6498,7 +6963,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(failedJob).toMatchObject({
         id: job.id,
         status: "failed",
-        progressText: "进度：0/2",
+        progressText: "进度：0/2 模板窗口",
         allowedActions: ["resume", "restart", "delete"]
       });
       expect(failedJob?.failureReason).toContain("窗口 1/2");
@@ -6546,6 +7011,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -6562,7 +7028,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：1/1"
+        progressText: "进度：1/1 模板窗口"
       });
       expect(completedJob.failureReason).toBeUndefined();
       expect(reports).toEqual([]);
@@ -6636,6 +7102,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -6663,7 +7130,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：1/1"
+        progressText: "进度：1/1 模板窗口"
       });
       expect(reportMarkdown).toBe(recoveredReport);
     } finally {
@@ -6730,6 +7197,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 3,
         extractionChapterCount: 3,
         overlapChapterCount: 0,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -6830,6 +7298,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 2,
         skipAlreadyExtracted: true
       });
 
@@ -6847,7 +7316,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：1/1"
+        progressText: "进度：2/2 模板窗口"
       });
       expect(requireJobDto(completedJob).failureReason).toBeUndefined();
       expect(reports.map((report) => report.fileName)).toEqual([firstReportName]);
@@ -6903,6 +7372,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -6915,7 +7385,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：1/1"
+        progressText: "进度：1/1 模板窗口"
       });
       expect(requireJobDto(completedJob).failureReason).toBeUndefined();
       expect(reports).toEqual([]);
@@ -7001,6 +7471,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -7086,6 +7557,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
       const projectRoot = path.join(tempRoot, "projects", "project-a");
@@ -7180,6 +7652,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
       const projectRoot = path.join(tempRoot, "projects", "project-a");
@@ -7269,6 +7742,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
       const projectRoot = path.join(tempRoot, "projects", "project-a");
@@ -7358,6 +7832,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
       const projectRoot = path.join(tempRoot, "projects", "project-a");
@@ -7444,6 +7919,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
       const projectRoot = path.join(tempRoot, "projects", "project-a");
@@ -7539,6 +8015,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
       const projectRoot = path.join(tempRoot, "projects", "project-a");
@@ -7638,6 +8115,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
       const projectRoot = path.join(tempRoot, "projects", "project-a");
@@ -7744,6 +8222,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
       const projectRoot = path.join(tempRoot, "projects", "project-a");
@@ -7840,6 +8319,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -7929,6 +8409,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -7999,6 +8480,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -8022,7 +8504,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：1/1"
+        progressText: "进度：1/1 模板窗口"
       });
       expect(requireJobDto(completedJob).failureReason).toBeUndefined();
       expect(reports).toHaveLength(1);
@@ -8113,6 +8595,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 4,
         skipAlreadyExtracted: true
       });
 
@@ -8126,15 +8609,17 @@ describe("P0 desktop IPC handlers", () => {
         path.join(projectRoot, (completedJobDto.logFilePath ?? "").replace(/\.txt$/u, ".simple.txt")),
         "utf8"
       );
-      const metrics = parseRunLogMetrics(`${logText}\n${simpleLogText}`);
+      const batchLog = await readBatchLogTexts(job.id);
+      const metrics = parseRunLogMetrics(`${logText}\n${simpleLogText}\n${batchLog.fullText}\n${batchLog.simpleText}`);
 
       expect(mockServer.requests).toHaveLength(2);
       for (const template of templates) {
         expect(requestBodies[0]).toContain(template.name);
       }
       expect(requestBodies[1]).toContain("mark_no_update");
-      expect(logText).toContain("按模板数量分批：每批最多 4 个模板");
-      expect(logText).toContain("批次: 1/1");
+      expect(logText).toContain("[上下文][覆盖索引预检]");
+      expect(batchLog.fullText).toContain("按模板数量分批：每批最多 4 个模板");
+      expect(batchLog.fullText).toContain("批次: 1/1");
       expect(simpleLogText.match(/覆盖索引预检：/gu)).toHaveLength(1);
       expect(metrics).toMatchObject({
         modelRequestCount: 2,
@@ -8157,7 +8642,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：1/1"
+        progressText: "进度：4/4 模板窗口"
       });
       expect(reports.map((report) => report.fileName)).toEqual([templates[0].outputFileName]);
       expect(await fs.readFile(
@@ -8282,6 +8767,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -8308,7 +8794,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：2/2"
+        progressText: "进度：2/2 模板窗口"
       });
       expect(requireJobDto(completedJob).failureReason).toBeUndefined();
       expect(reports).toHaveLength(1);
@@ -8416,6 +8902,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -8438,7 +8925,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：2/2"
+        progressText: "进度：2/2 模板窗口"
       });
       expect(requireJobDto(completedJob).failureReason).toBeUndefined();
       expect(reportMarkdown).toBe(recoveredReport);
@@ -8523,6 +9010,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -8579,6 +9067,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -8676,6 +9165,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -8758,6 +9248,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -8778,7 +9269,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：1/1"
+        progressText: "进度：1/1 模板窗口"
       });
       expect(reports).toHaveLength(1);
       expect(reports[0]).toMatchObject({ fileName: "丹药分析.md" });
@@ -8866,6 +9357,7 @@ describe("P0 desktop IPC handlers", () => {
           singleRunChapterCount: 2,
           extractionChapterCount: 3,
           overlapChapterCount: 1,
+          templateBatchSize: 1,
           skipAlreadyExtracted: true
         });
 
@@ -8889,7 +9381,7 @@ describe("P0 desktop IPC handlers", () => {
         expect(failedJob).toMatchObject({
           id: job.id,
           status: "failed",
-          progressText: "进度：1/2",
+          progressText: "进度：1/2 模板窗口",
           allowedActions: ["resume", "restart", "delete"]
         });
         expect(failedJob?.failureReason).toContain("read_file");
@@ -8952,6 +9444,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -9031,6 +9524,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -9102,6 +9596,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -9177,6 +9672,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -9297,6 +9793,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 3,
         extractionChapterCount: 41,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -9327,7 +9824,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：20/20",
+        progressText: "进度：20/20 模板窗口",
         tokenText: `Token ${expectedRequestCount * 37} / 缓存命中率 0.00%`
       });
       expect(reportsByFileName).toHaveLength(1);
@@ -9362,8 +9859,7 @@ describe("P0 desktop IPC handlers", () => {
 
         if (requestIndex === 2) {
           return {
-            status: 500,
-            body: { error: "mock second window failure" }
+            body: createFatalUnsafeWriteResponse()
           };
         }
 
@@ -9400,6 +9896,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 4,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -9410,11 +9907,11 @@ describe("P0 desktop IPC handlers", () => {
       expect(failedJob).toMatchObject({
         id: job.id,
         status: "failed",
-        progressText: "进度：1/3",
+        progressText: "进度：1/3 模板窗口",
         allowedActions: ["resume", "restart", "delete"]
       });
       expect(failedJob?.failureReason).toContain("窗口 2");
-      expect(failedJob?.failureReason).toContain("HTTP 500");
+      expect(failedJob?.failureReason).toContain("write_file");
       expect(reports).toHaveLength(1);
       expect(reports[0]).toMatchObject({
         fileName: "丹药分析.md",
@@ -9527,6 +10024,7 @@ describe("P0 desktop IPC handlers", () => {
       singleRunChapterCount: 2,
       extractionChapterCount: 2,
       overlapChapterCount: 1,
+      templateBatchSize: 1,
       skipAlreadyExtracted: true
     });
 
@@ -9619,6 +10117,7 @@ describe("P0 desktop IPC handlers", () => {
       singleRunChapterCount: 2,
       extractionChapterCount: 2,
       overlapChapterCount: 1,
+      templateBatchSize: 1,
       skipAlreadyExtracted: true
     });
 
@@ -9679,14 +10178,19 @@ describe("P0 desktop IPC handlers", () => {
       singleRunChapterCount: 2,
       extractionChapterCount: 3,
       overlapChapterCount: 1,
+      templateBatchSize: 1,
       skipAlreadyExtracted: true
     };
     const { overlapChapterCount: _overlapChapterCount, ...missingOverlap } = validPayload;
+    const { templateBatchSize: _templateBatchSize, ...missingTemplateBatchSize } = validPayload;
     const { skipAlreadyExtracted: _skipAlreadyExtracted, ...missingSkip } = validPayload;
 
     await expect(
       contract.invoke(handlers, "jobs:create", missingOverlap as unknown as CreateJobDto)
     ).rejects.toThrow(/重叠章节数/);
+    await expect(
+      contract.invoke(handlers, "jobs:create", missingTemplateBatchSize as unknown as CreateJobDto)
+    ).rejects.toThrow(/单批次模板数/);
     await expect(
       contract.invoke(handlers, "jobs:create", missingSkip as unknown as CreateJobDto)
     ).rejects.toThrow(/跳过已提取/);
@@ -9724,6 +10228,7 @@ describe("P0 desktop IPC handlers", () => {
       singleRunChapterCount: 3,
       extractionChapterCount: 3,
       overlapChapterCount: 0,
+      templateBatchSize: 1,
       skipAlreadyExtracted: true
     });
 
@@ -9746,6 +10251,7 @@ describe("P0 desktop IPC handlers", () => {
       singleRunChapterCount: 2,
       extractionChapterCount: 3,
       overlapChapterCount: 1,
+      templateBatchSize: 1,
       skipAlreadyExtracted: true
     };
 
@@ -9809,6 +10315,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -9883,6 +10390,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -9948,6 +10456,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -10020,6 +10529,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -10122,6 +10632,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -10149,7 +10660,7 @@ describe("P0 desktop IPC handlers", () => {
       expect(completedJob).toMatchObject({
         id: job.id,
         status: "completed",
-        progressText: "进度：1/1"
+        progressText: "进度：1/1 模板窗口"
       });
       expect(completedJob?.failureReason).toBeUndefined();
       expect(reports).toHaveLength(1);
@@ -10240,6 +10751,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -10352,6 +10864,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 2,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -10438,6 +10951,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -10491,6 +11005,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: false
       });
 
@@ -10549,6 +11064,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       };
       const jobA = await contract.invoke(handlers, "jobs:create", {
@@ -10585,7 +11101,7 @@ describe("P0 desktop IPC handlers", () => {
     }
   });
 
-  it("marks jobs failed when the configured provider base URL is unreachable", async () => {
+  it("keeps jobs running and logs batch retries when the configured provider base URL is unreachable", async () => {
     const mockServer = await startMockOpenAiServer();
     const unreachableBaseUrl = mockServer.baseUrl;
     await mockServer.close();
@@ -10593,6 +11109,7 @@ describe("P0 desktop IPC handlers", () => {
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
     const handlers = createHandlers({
       credentialStore,
+      templateBatchFailureRetryIntervalMs: 60_000,
       providerStore: createProviderStore(
         createProviderConfig({
           apiKeyRef,
@@ -10614,26 +11131,32 @@ describe("P0 desktop IPC handlers", () => {
       singleRunChapterCount: 2,
       extractionChapterCount: 3,
       overlapChapterCount: 1,
+      templateBatchSize: 1,
       skipAlreadyExtracted: true
     });
 
-    const failedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
-    if (!failedJob) {
-      throw new Error("jobs:start returned no failed job dto");
-    }
-
-    expect(failedJob).toMatchObject({
+    await expect(contract.invoke(handlers, "jobs:start", { jobId: job.id })).resolves.toMatchObject({
       id: job.id,
-      status: "failed",
-      allowedActions: ["resume", "restart", "delete"],
+      status: "running",
       timing: {
-        startedAt: fixedNow,
-        completedAt: fixedNow
+        startedAt: fixedNow
       }
     });
-    expect(failedJob.failureReason).toBeTruthy();
-    expect(JSON.stringify(failedJob)).not.toContain("sk-p0-mock");
+    await vi.waitFor(async () => {
+      const batchLog = await readBatchLogTexts(job.id);
+      expect(batchLog.fullText.match(/\[错误\]\[批次重试\]/gu)?.length ?? 0).toBeGreaterThanOrEqual(1);
+      expect(batchLog.fullText).toContain("下次重试延迟毫秒: 60000");
+    });
+    const runtime = await contract.invoke(handlers, "projectRuntime:get", { projectId: "project-a" });
+    const runningJob = requireJobDto(runtime.jobs.find((runtimeJob) => runtimeJob.id === job.id));
+
+    expect(runningJob).toMatchObject({
+      id: job.id,
+      status: "running"
+    });
+    expect(JSON.stringify(runningJob)).not.toContain("sk-p0-mock");
     await expect(contract.invoke(handlers, "books:listReports", { bookId: book.bookId })).resolves.toEqual([]);
+    await contract.invoke(handlers, "jobs:delete", { jobId: job.id, confirm: true });
   });
 
   it("freezes failed job timing when pre-run template validation fails", async () => {
@@ -10663,6 +11186,7 @@ describe("P0 desktop IPC handlers", () => {
       singleRunChapterCount: 2,
       extractionChapterCount: 3,
       overlapChapterCount: 1,
+      templateBatchSize: 1,
       skipAlreadyExtracted: true
     });
     await contract.invoke(handlers, "templates:delete", {
@@ -10696,12 +11220,13 @@ describe("P0 desktop IPC handlers", () => {
     });
   });
 
-  it("marks jobs failed when the mock provider rejects the requested model", async () => {
+  it("keeps jobs running and logs batch retries when the mock provider rejects the requested model", async () => {
     const mockServer = await startMockOpenAiServer({ expectedModel: "mock-model" });
     const contract = createIpcContract();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-p0-mock");
     const handlers = createHandlers({
       credentialStore,
+      templateBatchFailureRetryIntervalMs: 60_000,
       providerStore: createProviderStore(
         createProviderConfig({
           apiKeyRef,
@@ -10725,25 +11250,31 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 2,
         extractionChapterCount: 3,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
-      const failedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
-      if (!failedJob) {
-        throw new Error("jobs:start returned no failed job dto");
-      }
-
-      expect(mockServer.requests).toHaveLength(1);
+      await expect(contract.invoke(handlers, "jobs:start", { jobId: job.id })).resolves.toMatchObject({
+        id: job.id,
+        status: "running"
+      });
+      await vi.waitFor(async () => {
+        expect(mockServer.requests.length).toBeGreaterThanOrEqual(1);
+        const batchLog = await readBatchLogTexts(job.id);
+        expect(batchLog.fullText).toContain("HTTP 400");
+        expect(batchLog.fullText).toContain("下次重试延迟毫秒: 60000");
+      });
       expect(mockServer.requests[0].body).toMatchObject({
         model: "wrong-model"
       });
-      expect(failedJob).toMatchObject({
+      const runtime = await contract.invoke(handlers, "projectRuntime:get", { projectId: "project-a" });
+      const runningJob = requireJobDto(runtime.jobs.find((runtimeJob) => runtimeJob.id === job.id));
+      expect(runningJob).toMatchObject({
         id: job.id,
-        status: "failed",
-        allowedActions: ["resume", "restart", "delete"]
+        status: "running"
       });
-      expect(failedJob.failureReason).toContain("HTTP 400");
       await expect(contract.invoke(handlers, "books:listReports", { bookId: book.bookId })).resolves.toEqual([]);
+      await contract.invoke(handlers, "jobs:delete", { jobId: job.id, confirm: true });
     } finally {
       await mockServer.close();
     }
@@ -11026,6 +11557,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 99,
         extractionChapterCount: 99,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
       const secondJob = await contract.invoke(handlers, "jobs:create", {
@@ -11036,6 +11568,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 99,
         extractionChapterCount: 99,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 
@@ -11099,6 +11632,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 99,
         extractionChapterCount: 99,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       };
       const sameBookFirst = await contract.invoke(handlers, "jobs:create", {
@@ -11170,6 +11704,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 99,
         extractionChapterCount: 99,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       };
       const firstJob = await contract.invoke(handlers, "jobs:create", createInput);
@@ -11233,6 +11768,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 99,
         extractionChapterCount: 99,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       };
       const firstJob = await contract.invoke(handlers, "jobs:create", createInput);
@@ -11321,6 +11857,7 @@ describe("P0 desktop IPC handlers", () => {
         singleRunChapterCount: 99,
         extractionChapterCount: 99,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       };
       const firstJob = await contract.invoke(handlers, "jobs:create", {
@@ -11384,6 +11921,7 @@ describe("P0 desktop IPC handlers", () => {
       singleRunChapterCount: 2,
       extractionChapterCount: 2,
       overlapChapterCount: 1,
+      templateBatchSize: 1,
       skipAlreadyExtracted: true
     });
 
@@ -11424,6 +11962,7 @@ describe("P0 desktop IPC handlers", () => {
       singleRunChapterCount: 2,
       extractionChapterCount: 2,
       overlapChapterCount: 1,
+      templateBatchSize: 1,
       skipAlreadyExtracted: true
     });
 
@@ -11463,9 +12002,10 @@ describe("P0 desktop IPC handlers", () => {
     });
 
     try {
+      const novelPath = await writeTempNovel(tempRoot, "running-pause.txt", 4);
       const book = await contract.invoke(handlers, "books:uploadTxt", {
         projectId: "project-a",
-        filePath: utf8FixturePath,
+        filePath: novelPath,
         displayName: "运行中暂停.txt"
       });
       const job = await contract.invoke(handlers, "jobs:create", {
@@ -11474,8 +12014,9 @@ describe("P0 desktop IPC handlers", () => {
         providerConfigId: "provider-1",
         modelId: "mock-model",
         singleRunChapterCount: 2,
-        extractionChapterCount: 2,
+        extractionChapterCount: 4,
         overlapChapterCount: 1,
+        templateBatchSize: 1,
         skipAlreadyExtracted: true
       });
 

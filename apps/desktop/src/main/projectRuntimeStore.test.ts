@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { getDefaultConfig } from "@novel-extractor/config";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Book, ReportAsset } from "@novel-extractor/domain";
 import type { BookUploadResultDto } from "../shared/ipcTypes";
@@ -49,6 +50,7 @@ function createRunningJob(): ProjectRuntimeJobRecord {
       singleRunChapterCount: 3,
       extractionChapterCount: 9,
       overlapChapterCount: 1,
+      templateBatchSize: 1,
       skipAlreadyExtracted: true
     }
   };
@@ -225,6 +227,91 @@ describe("project runtime store", () => {
       modelSelectionMode: "explicit",
       autoRetryOnFailure: false
     });
+  });
+
+  it("normalizes legacy jobs missing template batch size and rewrites runtime state", async () => {
+    const filePath = path.join(tempRoot, "state", "project-runtime.json");
+    const legacyJob = {
+      ...createRunningJob(),
+      status: "completed"
+    } as ProjectRuntimeJobRecord;
+    delete (legacyJob.input as Partial<ProjectRuntimeJobRecord["input"]>).templateBatchSize;
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(
+      filePath,
+      `${JSON.stringify(
+        {
+          schemaVersion: 1,
+          books: [],
+          jobs: [legacyJob],
+          reports: [],
+          reportPathById: {}
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+
+    const defaultTemplateBatchSize =
+      getDefaultConfig().extractionRuleDefaults.templateBatching.maxTemplatesPerCall;
+    const store = createFileProjectRuntimeStore({ projectRoot: tempRoot });
+    const state = await store.load();
+
+    expect(state.jobs[0].input.templateBatchSize).toBe(defaultTemplateBatchSize);
+
+    const persisted = JSON.parse(await fs.readFile(filePath, "utf8")) as {
+      jobs: ProjectRuntimeJobRecord[];
+    };
+    expect(persisted.jobs[0].input.templateBatchSize).toBe(defaultTemplateBatchSize);
+  });
+
+  it("normalizes persisted invalid template batch sizes and rewrites runtime state", async () => {
+    const filePath = path.join(tempRoot, "state", "project-runtime.json");
+    const invalidTemplateBatchSizes = [0, -1, 1.5];
+    const jobs = invalidTemplateBatchSizes.map(
+      (templateBatchSize, index): ProjectRuntimeJobRecord => ({
+        ...createRunningJob(),
+        id: `job-${index + 1}`,
+        status: "completed",
+        input: {
+          ...createRunningJob().input,
+          templateBatchSize
+        }
+      })
+    );
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(
+      filePath,
+      `${JSON.stringify(
+        {
+          schemaVersion: 1,
+          books: [],
+          jobs,
+          reports: [],
+          reportPathById: {}
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+
+    const defaultTemplateBatchSize =
+      getDefaultConfig().extractionRuleDefaults.templateBatching.maxTemplatesPerCall;
+    const store = createFileProjectRuntimeStore({ projectRoot: tempRoot });
+    const state = await store.load();
+
+    expect(state.jobs.map((job) => job.input.templateBatchSize)).toEqual(
+      invalidTemplateBatchSizes.map(() => defaultTemplateBatchSize)
+    );
+
+    const persisted = JSON.parse(await fs.readFile(filePath, "utf8")) as {
+      jobs: ProjectRuntimeJobRecord[];
+    };
+    expect(persisted.jobs.map((job) => job.input.templateBatchSize)).toEqual(
+      invalidTemplateBatchSizes.map(() => defaultTemplateBatchSize)
+    );
   });
 
   it("returns an empty runtime state when the file is missing or corrupted", async () => {
