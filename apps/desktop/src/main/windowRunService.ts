@@ -60,7 +60,10 @@ import {
   type ReportCoverageIndexStore,
   type ReportCoverageTarget
 } from "./reportCoverageIndex";
-import { classifyLlmFailure } from "./llmFailureClassification";
+import {
+  classifyLlmFailure,
+  isNonRetryableContextLimitFailure
+} from "./llmFailureClassification";
 import { planTemplateBatches } from "./templateBatchPlanner";
 import {
   runTemplateBatchPipelines,
@@ -397,8 +400,73 @@ function createCoverageTarget(input: {
   };
 }
 
-function createWindowLabel(window: RuntimeWindowManifestWindow, totalWindowCount: number): string {
-  return `窗口 ${window.index + 1}/${totalWindowCount}`;
+function formatChapterRangePartForLog(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed === "") {
+    return "未知章节";
+  }
+  if (/^第.+章$/u.test(trimmed)) {
+    return trimmed;
+  }
+  return `第${trimmed.replace(/^第/u, "").replace(/章$/u, "")}章`;
+}
+
+function formatSubmittedChapterRangeForLog(range: string): string {
+  const parts = range
+    .replace(/\s+/gu, "")
+    .split(/(?:-|~|至|—|–)/u)
+    .filter((part) => part !== "");
+  if (parts.length === 0) {
+    return "[未知章节]";
+  }
+  if (parts.length === 1) {
+    return `[${formatChapterRangePartForLog(parts[0])}]`;
+  }
+
+  return `[${formatChapterRangePartForLog(parts[0])}-${formatChapterRangePartForLog(parts[parts.length - 1])}]`;
+}
+
+function createWindowLabel(window: RuntimeWindowManifestWindow, _totalWindowCount: number): string {
+  return formatSubmittedChapterRangeForLog(window.submittedChapterRange);
+}
+
+function createTemplateBriefLabel(templates: readonly TemplateDto[]): string {
+  if (templates.length === 0) {
+    return "未知模板";
+  }
+
+  const firstTemplate = templates[0];
+  const firstLabel = firstTemplate.name.trim() || path.parse(firstTemplate.fileName).name.replace(/^\[报告\]/u, "");
+  const normalizedFirstLabel = /模板$/u.test(firstLabel) ? firstLabel : `${firstLabel}模板`;
+  return templates.length === 1 ? normalizedFirstLabel : `${normalizedFirstLabel}等${templates.length}个模板`;
+}
+
+function createBatchBriefLogValue(input: {
+  batch: TemplateBatchRuntimeBatch;
+  error?: unknown;
+  manifestWindow: RuntimeWindowManifestWindow;
+  nextRetryDelayMs?: number;
+  templates: readonly TemplateDto[];
+  totalWindowCount: number;
+}): Record<string, unknown> {
+  return {
+    批次ID: input.batch.batchId,
+    模板: createTemplateBriefLabel(input.templates),
+    模板数量: input.templates.length,
+    窗口: `${input.manifestWindow.index + 1}/${input.totalWindowCount}`,
+    窗口文件: input.manifestWindow.fileName,
+    章节范围: input.manifestWindow.submittedChapterRange,
+    ...(input.error === undefined ? {} : { 错误: toSafeErrorMessage(input.error) }),
+    ...(input.nextRetryDelayMs === undefined ? {} : { 下次重试延迟毫秒: input.nextRetryDelayMs })
+  };
+}
+
+function isRateLimitError(error: unknown): boolean {
+  if (error instanceof OpenAiCompatibleRequestError) {
+    return error.details.status === 429 || /rate\s*limit|限流|速率限制/u.test(error.message);
+  }
+
+  return /rate\s*limit|限流|速率限制/u.test(toSafeErrorMessage(error));
 }
 
 function createWindowCoverageTargets(input: {
@@ -2512,6 +2580,8 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
     taskLogger?: TaskTextLogger;
     totalWindowCount: number;
     toolLoopRoundReasonCounts: Map<ToolLoopRoundReason, number>;
+    onRequestRetry?(input: { error: unknown; nextRetryDelayMs: number }): Promise<void> | void;
+    waitForRequestRetry?(delayMs: number): Promise<void>;
     windowText: string;
   }): Promise<{ content: string; outcomes: BatchOutcome[]; usage: TokenUsage }> {
     const reportsRoot = toReportsRoot(input.artifacts);
@@ -2671,30 +2741,64 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             windowText: input.windowText
           })
         );
-        const completion = await input.chatClient.chatCompletion({
-          messages,
-          tools: toolDefinitions,
-          onRequestPrepared: async (snapshot) => {
-            const preparedCandidate = input.chatClient.currentCandidate();
-            await input.taskLogger?.append(
-              ["大模型请求", "ProviderBody"],
-              serializeModelRequestForTaskLog({
-                value: {
-                  供应商: preparedCandidate.providerDisplayName,
-                  模型: preparedCandidate.modelId,
-                  协议: snapshot.apiFormat,
-                  请求URL: snapshot.url,
-                  窗口: `${input.manifestWindow.index + 1}/${input.totalWindowCount}`,
-                  批次: `${input.batchIndex + 1}/${input.batchTotal}`,
-                  轮次: currentRoundIndex,
-                  providerBody: snapshot.body
-                },
-                windowFileName: input.manifestWindow.fileName,
-                windowText: input.windowText
-              })
-            );
+        let completion: ChatCompletionResult;
+        while (true) {
+          try {
+            completion = await input.chatClient.chatCompletion({
+              messages,
+              tools: toolDefinitions,
+              onRequestPrepared: async (snapshot) => {
+                const preparedCandidate = input.chatClient.currentCandidate();
+                await input.taskLogger?.append(
+                  ["大模型请求", "ProviderBody"],
+                  serializeModelRequestForTaskLog({
+                    value: {
+                      供应商: preparedCandidate.providerDisplayName,
+                      模型: preparedCandidate.modelId,
+                      协议: snapshot.apiFormat,
+                      请求URL: snapshot.url,
+                      窗口: `${input.manifestWindow.index + 1}/${input.totalWindowCount}`,
+                      批次: `${input.batchIndex + 1}/${input.batchTotal}`,
+                      轮次: currentRoundIndex,
+                      providerBody: snapshot.body
+                    },
+                    windowFileName: input.manifestWindow.fileName,
+                    windowText: input.windowText
+                  })
+                );
+              }
+            });
+            break;
+          } catch (error) {
+            if (
+              !(error instanceof OpenAiCompatibleRequestError) ||
+              isNonRetryableContextLimitFailure(error, DEFAULT_CONFIG.llmFailurePolicyDefaults)
+            ) {
+              throw error;
+            }
+
+            const retryDelayMs =
+              options.templateBatchFailureRetryIntervalMs ??
+              DEFAULT_CONFIG.extractionRuleDefaults.templateBatching.failureRetryIntervalMs;
+            await input.taskLogger?.append(["错误", "批次重试"], {
+              批次ID: `batch-${String(input.batchIndex + 1).padStart(4, "0")}`,
+              窗口ID: input.manifestWindow.windowId,
+              窗口序号: input.manifestWindow.index + 1,
+              窗口: `${input.manifestWindow.index + 1}/${input.totalWindowCount}`,
+              批次: `${input.batchIndex + 1}/${input.batchTotal}`,
+              轮次: currentRoundIndex,
+              错误: toSafeErrorMessage(error, secrets),
+              下次重试延迟毫秒: retryDelayMs,
+              上下文消息数: messages.length
+            });
+            await input.onRequestRetry?.({ error, nextRetryDelayMs: retryDelayMs });
+            if (input.waitForRequestRetry) {
+              await input.waitForRequestRetry(retryDelayMs);
+            } else {
+              await new Promise<void>((resolve) => setTimeout(resolve, retryDelayMs));
+            }
           }
-        });
+        }
         const usageDelta = mapUsage(completion.normalizedUsage);
         usage = addUsage(usage, usageDelta);
 
@@ -3422,18 +3526,21 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
     endWindow(): void;
     runtime: JobRuntime;
     sleep(ms: number): Promise<"elapsed" | "woken">;
+    waitForInWindowRetry(ms: number): Promise<void>;
     waitForRunPermission(): Promise<void>;
     shouldAbort(): TemplateBatchPipelineAbortError | null;
     recordProgress(progress: TemplateBatchPipelineProcessResult): Promise<void>;
     rememberFatalStop(error: unknown): void;
-    wakeControlWaiters(): void;
+    wakeAllWaiters(): void;
   } {
     const eventBus = createEventBus<JobRuntimeEvent>();
     let state: ParallelTemplateBatchRuntimeState | undefined;
     let activeJobId: string | null = null;
     let fatalAbortError: TemplateBatchPipelineAbortError | null = null;
     let activeWindowCount = 0;
+    let inWindowRetryWaitCount = 0;
     const controlWaiters = new Set<() => void>();
+    const retrySleepWaiters = new Set<() => void>();
     let resolveSettled!: () => void;
     const settled = new Promise<void>((resolve) => {
       resolveSettled = resolve;
@@ -3481,12 +3588,25 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
       return state ? toRuntimeState(state) : undefined;
     }
 
-    function wakeControlWaiters(): void {
-      const waiters = [...controlWaiters];
-      controlWaiters.clear();
+    function wakeWaiters(waitersToWake: Set<() => void>): void {
+      const waiters = [...waitersToWake];
+      waitersToWake.clear();
       for (const wake of waiters) {
         wake();
       }
+    }
+
+    function wakeControlWaiters(): void {
+      wakeWaiters(controlWaiters);
+    }
+
+    function wakeRetrySleepWaiters(): void {
+      wakeWaiters(retrySleepWaiters);
+    }
+
+    function wakeAllWaiters(): void {
+      wakeControlWaiters();
+      wakeRetrySleepWaiters();
     }
 
     function shouldAbort(): TemplateBatchPipelineAbortError | null {
@@ -3504,7 +3624,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
 
     function rememberFatalStop(error: unknown): void {
       fatalAbortError ??= new TemplateBatchPipelineAbortError(toSafeErrorMessage(error), "fatal_config");
-      wakeControlWaiters();
+      wakeAllWaiters();
     }
 
     async function sleep(ms: number): Promise<"elapsed" | "woken"> {
@@ -3519,7 +3639,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             return;
           }
           settled = true;
-          controlWaiters.delete(wake);
+          retrySleepWaiters.delete(wake);
           resolve("elapsed");
         }, ms);
         const wake = () => {
@@ -3528,10 +3648,10 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
           }
           settled = true;
           clearTimeout(timer);
-          controlWaiters.delete(wake);
+          retrySleepWaiters.delete(wake);
           resolve("woken");
         };
-        controlWaiters.add(wake);
+        retrySleepWaiters.add(wake);
       });
     }
 
@@ -3575,6 +3695,46 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
           };
           controlWaiters.add(wake);
         });
+      }
+    }
+
+    async function waitForInWindowRetry(ms: number): Promise<void> {
+      inWindowRetryWaitCount += 1;
+      try {
+        await sleep(ms);
+
+        const abortBeforePause = shouldAbort();
+        if (abortBeforePause) {
+          throw abortBeforePause;
+        }
+        if (!state?.pauseRequested) {
+          return;
+        }
+
+        state.status = "paused";
+        state.pauseRequested = false;
+        await saveState();
+        await emit("job.paused", {
+          jobId: input.job.id,
+          completedWindowCount: state.completedTemplateTargetCount
+        });
+
+        while (state.status === "paused" && !shouldAbort()) {
+          await new Promise<void>((resolve) => {
+            const wake = () => {
+              controlWaiters.delete(wake);
+              resolve();
+            };
+            controlWaiters.add(wake);
+          });
+        }
+
+        const abortAfterPause = shouldAbort();
+        if (abortAfterPause) {
+          throw abortAfterPause;
+        }
+      } finally {
+        inWindowRetryWaitCount = Math.max(0, inWindowRetryWaitCount - 1);
       }
     }
 
@@ -3657,7 +3817,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
 
           const message = error instanceof Error ? error.message : "Job failed";
           fatalAbortError ??= new TemplateBatchPipelineAbortError(message, "fatal_config");
-          wakeControlWaiters();
+          wakeAllWaiters();
           await finishTerminal("failed", message);
           return { ok: false, error: { code: "job_failed", message } };
         } finally {
@@ -3675,7 +3835,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         state.pauseRequested = true;
         await saveState();
         await emit("job.pause.requested", { jobId });
-        wakeControlWaiters();
+        wakeAllWaiters();
         return { ok: true };
       },
       async resumeJob(jobId) {
@@ -3688,7 +3848,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         state.status = "running";
         await saveState();
         await emit("job.resume.requested", { jobId });
-        wakeControlWaiters();
+        wakeAllWaiters();
         return { ok: true };
       },
       async cancelJob(jobId) {
@@ -3700,7 +3860,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         }
         state.cancelRequested = true;
         await emit("job.cancel.requested", { jobId });
-        wakeControlWaiters();
+        wakeAllWaiters();
         return { ok: true };
       },
       async deleteJob(jobId) {
@@ -3711,8 +3871,8 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
           return { ok: false, error: { code: "invalid_job_state", currentStatus: state.status } };
         }
         state.deleteRequested = true;
-        wakeControlWaiters();
-        if (activeWindowCount === 0) {
+        wakeAllWaiters();
+        if (activeWindowCount === 0 || activeWindowCount === inWindowRetryWaitCount) {
           await settled;
         }
         return { ok: true };
@@ -3735,6 +3895,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
       },
       runtime,
       sleep,
+      waitForInWindowRetry,
       waitForRunPermission,
       shouldAbort,
       async recordProgress(progress) {
@@ -3757,7 +3918,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         });
       },
       rememberFatalStop,
-      wakeControlWaiters
+      wakeAllWaiters
     };
   }
 
@@ -3910,7 +4071,9 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
     chatClient: RuntimeChatClient;
     job: WindowRunJobInput;
     manifestWindow: RuntimeWindowManifestWindow;
+    onRequestRetry(input: { error: unknown; nextRetryDelayMs: number }): Promise<void> | void;
     totalWindowCount: number;
+    waitForRequestRetry(delayMs: number): Promise<void>;
   }): Promise<TemplateBatchPipelineProcessResult> {
     let secrets: string[] = [];
     const toolLoopRoundReasonCounts = new Map<ToolLoopRoundReason, number>();
@@ -3950,6 +4113,15 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         };
       }
 
+      await options.taskLogger?.append(
+        ["简要流程", "执行中"],
+        createBatchBriefLogValue({
+          batch: input.batch,
+          manifestWindow: input.manifestWindow,
+          templates: coveragePlan.templatesToProcess,
+          totalWindowCount: input.totalWindowCount
+        })
+      );
       const windowText = await readWindowText(input.artifacts.project, input.manifestWindow);
       const templatesByOutputFileName = new Map(
         coveragePlan.templatesToProcess.map((template) => [template.fileName, template])
@@ -3968,6 +4140,8 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         taskLogger: input.batchLogger,
         totalWindowCount: input.totalWindowCount,
         toolLoopRoundReasonCounts,
+        onRequestRetry: input.onRequestRetry,
+        waitForRequestRetry: input.waitForRequestRetry,
         windowText
       });
       let coverageRecordCount = 0;
@@ -4002,19 +4176,35 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         });
       }
 
-      return {
+      const progress = {
         completedTemplateTargetCount: input.batch.templates.length,
         skippedTemplateTargetCount: input.batch.templates.length - coveragePlan.templatesToProcess.length,
         executedTemplateTargetCount: coveragePlan.templatesToProcess.length,
         usage: result.usage
       };
+      await options.taskLogger?.append(
+        ["简要流程", "执行成功"],
+        createBatchBriefLogValue({
+          batch: input.batch,
+          manifestWindow: input.manifestWindow,
+          templates: coveragePlan.templatesToProcess,
+          totalWindowCount: input.totalWindowCount
+        })
+      );
+      return progress;
     } catch (error) {
       try {
         await appendToolLoopRoundReasonSummary();
       } catch {
         // Preserve the original window failure; summary logging is diagnostic only on failure paths.
       }
-      if (error instanceof TemplateBatchPipelineAbortError || error instanceof OpenAiCompatibleRequestError) {
+      if (error instanceof TemplateBatchPipelineAbortError) {
+        throw error;
+      }
+      if (error instanceof OpenAiCompatibleRequestError) {
+        if (isNonRetryableContextLimitFailure(error, DEFAULT_CONFIG.llmFailurePolicyDefaults)) {
+          throw new Error(`上下文超限，无法继续当前窗口：${toSafeErrorMessage(error, secrets)}`);
+        }
         throw error;
       }
       throw new Error(
@@ -4135,7 +4325,21 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
                   chatClient: batchChatClient,
                   job,
                   manifestWindow,
-                  totalWindowCount: runtimeInput.windows.length
+                  onRequestRetry({ error, nextRetryDelayMs }) {
+                    return options.taskLogger?.append(
+                      ["简要流程", isRateLimitError(error) ? "限流" : "执行失败"],
+                      createBatchBriefLogValue({
+                        batch,
+                        error,
+                        manifestWindow,
+                        nextRetryDelayMs,
+                        templates: batch.templates,
+                        totalWindowCount: runtimeInput.windows.length
+                      })
+                    );
+                  },
+                  totalWindowCount: runtimeInput.windows.length,
+                  waitForRequestRetry: runtimeControls.waitForInWindowRetry
                 });
               } catch (error) {
                 if (error instanceof TemplateBatchPipelineAbortError) {
@@ -4144,7 +4348,17 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
                 if (error instanceof OpenAiCompatibleRequestError) {
                   throw error;
                 }
-                runtimeControls.wakeControlWaiters();
+                await options.taskLogger?.append(
+                  ["简要流程", "执行失败"],
+                  createBatchBriefLogValue({
+                    batch,
+                    error,
+                    manifestWindow,
+                    templates: batch.templates,
+                    totalWindowCount: runtimeInput.windows.length
+                  })
+                );
+                runtimeControls.rememberFatalStop(error);
                 throw new TemplateBatchPipelineAbortError(toSafeErrorMessage(error), "fatal_config");
               } finally {
                 runtimeControls.endWindow();
@@ -4160,6 +4374,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             },
             async onBatchFailure({ batch, window, windowIndex, error, nextRetryDelayMs }) {
               const batchLogger = requireBatchValue(batchLoggerById, batch.batchId, "logger");
+              const manifestWindow = getWindowMetadata(window);
               await batchLogger.append(["错误", "批次重试"], {
                 批次ID: batch.batchId,
                 窗口ID: window.windowId,
@@ -4167,13 +4382,17 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
                 错误: toSafeErrorMessage(error),
                 下次重试延迟毫秒: nextRetryDelayMs
               });
-              await options.taskLogger?.append(["错误", "批次重试"], {
-                批次ID: batch.batchId,
-                窗口ID: window.windowId,
-                窗口序号: windowIndex + 1,
-                错误: toSafeErrorMessage(error),
-                下次重试延迟毫秒: nextRetryDelayMs
-              });
+              await options.taskLogger?.append(
+                ["简要流程", isRateLimitError(error) ? "限流" : "执行失败"],
+                createBatchBriefLogValue({
+                  batch,
+                  error,
+                  manifestWindow,
+                  nextRetryDelayMs,
+                  templates: batch.templates,
+                  totalWindowCount: runtimeInput.windows.length
+                })
+              );
             }
           });
         }

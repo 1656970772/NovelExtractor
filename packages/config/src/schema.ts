@@ -217,6 +217,7 @@ export interface JobFailureRetryDefaults {
 }
 
 export interface LlmFailurePolicyDefaults {
+  nonRetryableContextLimitFragments: string[];
   switchableHttpStatuses: number[];
   switchableMessageFragments: string[];
   switchableNetworkErrorFragments: string[];

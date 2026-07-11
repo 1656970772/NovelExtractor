@@ -57,6 +57,18 @@ function stringifyForClassification(value: unknown): string {
   }
 }
 
+export function isNonRetryableContextLimitFailure(
+  error: unknown,
+  defaults: LlmFailurePolicyDefaults
+): boolean {
+  if (!(error instanceof OpenAiCompatibleRequestError)) {
+    return false;
+  }
+
+  const text = `${error.message}\n${stringifyForClassification(error.details.body)}`;
+  return includesFragment(text, defaults.nonRetryableContextLimitFragments) !== undefined;
+}
+
 export function classifyLlmFailure(
   error: unknown,
   defaults: LlmFailurePolicyDefaults

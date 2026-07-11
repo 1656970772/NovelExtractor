@@ -247,6 +247,17 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
     failureRetryIntervalMs: 300000
   },
   llmFailurePolicyDefaults: {
+    nonRetryableContextLimitFragments: [
+      "context_length_exceeded",
+      "maximum context length",
+      "maximum context window",
+      "context window exceeded",
+      "context limit exceeded",
+      "prompt is too long",
+      "上下文长度超限",
+      "上下文窗口超限",
+      "超过模型最大上下文"
+    ],
     switchableHttpStatuses: [408, 409, 425, 429, 500, 502, 503, 504],
     switchableMessageFragments: [
       "rate limit",

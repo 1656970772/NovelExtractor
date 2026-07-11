@@ -253,6 +253,54 @@ describe("task progress log summarizer", () => {
     ).toBe("04:50:02 其他/细节：已记录");
   });
 
+  it("summarizes user-facing parallel batch brief events with concrete chapter ranges", () => {
+    expect(
+      summarizeTaskLogEntry({
+        tags: ["简要流程", "执行中"],
+        timestamp: "2026-07-02T04:51:00.000Z",
+        value: {
+          模板: "人物模板",
+          章节范围: "1-10"
+        }
+      })
+    ).toBe("04:51:00 [执行中]：人物模板的[第1章-第10章]开始分析");
+
+    expect(
+      summarizeTaskLogEntry({
+        tags: ["简要流程", "执行成功"],
+        timestamp: "2026-07-02T04:51:08.000Z",
+        value: {
+          模板: "人物模板",
+          章节范围: "1-10"
+        }
+      })
+    ).toBe("04:51:08 [执行成功]：人物模板的[第1章-第10章]执行成功");
+
+    expect(
+      summarizeTaskLogEntry({
+        tags: ["简要流程", "限流"],
+        timestamp: "2026-07-02T04:51:09.000Z",
+        value: {
+          模板: "人物模板",
+          章节范围: "1-10",
+          下次重试延迟毫秒: 60000
+        }
+      })
+    ).toBe("04:51:09 [限流]：人物模板的[第1章-第10章]执行限流，1分钟后再次尝试");
+
+    expect(
+      summarizeTaskLogEntry({
+        tags: ["简要流程", "执行失败"],
+        timestamp: "2026-07-02T04:51:10.000Z",
+        value: {
+          模板: "人物模板",
+          章节范围: "1-10",
+          原因: "模型返回格式无效"
+        }
+      })
+    ).toBe("04:51:10 [执行失败]：人物模板的[第1章-第10章]执行失败，原因：模型返回格式无效");
+  });
+
   it("summarizes recoverable tool errors with classification without leaking full tool output", () => {
     expect(
       summarizeTaskLogEntry({

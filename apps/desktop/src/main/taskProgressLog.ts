@@ -199,6 +199,89 @@ function numberField(value: unknown, key: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function ensureTemplateLabel(value: string): string {
+  return /模板$/u.test(value) ? value : `${value}模板`;
+}
+
+function formatChapterPart(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed === "") {
+    return "未知章节";
+  }
+  if (/^第.+章$/u.test(trimmed)) {
+    return trimmed;
+  }
+
+  return `第${trimmed.replace(/^第/u, "").replace(/章$/u, "")}章`;
+}
+
+function formatChapterRangeLabel(value: unknown): string {
+  const explicitLabel = stringField(value, "章节范围标签");
+  if (explicitLabel) {
+    return explicitLabel.startsWith("[") && explicitLabel.endsWith("]") ? explicitLabel : `[${explicitLabel}]`;
+  }
+
+  const rawRange = stringField(value, "章节范围") ?? stringField(value, "提交章节范围") ?? stringField(value, "窗口") ?? "未知章节";
+  const trimmed = rawRange.trim();
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+    return trimmed;
+  }
+
+  const parts = trimmed
+    .replace(/\s+/gu, "")
+    .split(/(?:-|~|至|—|–)/u)
+    .filter((part) => part !== "");
+  if (parts.length === 0) {
+    return "[未知章节]";
+  }
+  if (parts.length === 1) {
+    return `[${formatChapterPart(parts[0])}]`;
+  }
+
+  return `[${formatChapterPart(parts[0])}-${formatChapterPart(parts[parts.length - 1])}]`;
+}
+
+function formatBriefRetryDelay(value: unknown): string {
+  const delayMs = numberField(value, "下次重试延迟毫秒");
+  if (delayMs === undefined) {
+    return "稍后";
+  }
+  if (delayMs > 0 && delayMs % 60000 === 0) {
+    return `${delayMs / 60000}分钟`;
+  }
+  if (delayMs > 0 && delayMs % 1000 === 0) {
+    return `${delayMs / 1000}秒`;
+  }
+  return `${delayMs}ms`;
+}
+
+function compactReason(value: unknown): string {
+  const reason = stringField(value, "原因") ?? stringField(value, "错误") ?? asText(value) ?? "未知原因";
+  const compact = reason.replace(/\s+/gu, " ").trim();
+  return compact.length > 120 ? `${compact.slice(0, 117)}...` : compact;
+}
+
+function summarizeBriefEvent(kind: string | undefined, value: unknown): string {
+  const template = ensureTemplateLabel(stringField(value, "模板") ?? stringField(value, "模板名称") ?? "未知");
+  const chapterRange = formatChapterRangeLabel(value);
+  const target = `${template}的${chapterRange}`;
+
+  if (kind === "执行中") {
+    return `[执行中]：${target}开始分析`;
+  }
+  if (kind === "执行成功") {
+    return `[执行成功]：${target}执行成功`;
+  }
+  if (kind === "限流") {
+    return `[限流]：${target}执行限流，${formatBriefRetryDelay(value)}后再次尝试`;
+  }
+  if (kind === "执行失败") {
+    return `[执行失败]：${target}执行失败，原因：${compactReason(value)}`;
+  }
+
+  return fallbackMessage(["简要流程", kind ?? "事件"]);
+}
+
 function firstRecord(value: unknown, keys: readonly string[]): Record<string, unknown> | undefined {
   for (const key of keys) {
     const record = objectField(value, key);
@@ -481,6 +564,8 @@ export function summarizeTaskLogEntry(entry: TaskProgressLogEntry): string {
 
   if (firstTag === "任务信息") {
     message = summarizeTaskInfo(entry.value);
+  } else if (firstTag === "简要流程") {
+    message = summarizeBriefEvent(secondTag, entry.value);
   } else if (firstTag === "上下文" && secondTag === "任务") {
     message = "加载任务上下文：书籍、模板、规则快照和报告目录已准备";
   } else if (firstTag === "上下文" && secondTag === "覆盖索引") {

@@ -1,14 +1,47 @@
 import type { LlmFailurePolicyDefaults } from "@novel-extractor/config";
 import { OpenAiCompatibleRequestError } from "@novel-extractor/llm";
 import { describe, expect, it } from "vitest";
-import { classifyLlmFailure } from "./llmFailureClassification";
+import {
+  classifyLlmFailure,
+  isNonRetryableContextLimitFailure
+} from "./llmFailureClassification";
 
 const defaults: LlmFailurePolicyDefaults = {
+  nonRetryableContextLimitFragments: [
+    "context_length_exceeded",
+    "maximum context length",
+    "上下文长度超限"
+  ],
   switchableHttpStatuses: [429],
   switchableMessageFragments: ["rate limit", "额度不足"],
   switchableNetworkErrorFragments: ["ETIMEDOUT"],
   maxAutoFallbackRoundsPerWindow: 2
 };
+
+describe("isNonRetryableContextLimitFailure", () => {
+  it("recognizes configured context limit fragments in structured provider errors", () => {
+    const error = new OpenAiCompatibleRequestError("HTTP 400 Bad Request", "http", {
+      status: 400,
+      body: {
+        error: {
+          code: "context_length_exceeded",
+          message: "This model's maximum context length is 128000 tokens"
+        }
+      }
+    });
+
+    expect(isNonRetryableContextLimitFailure(error, defaults)).toBe(true);
+  });
+
+  it("keeps other parameter errors retryable by the window request loop", () => {
+    const error = new OpenAiCompatibleRequestError("HTTP 400 Bad Request", "http", {
+      status: 400,
+      body: { error: { code: "invalid_parameter", message: "temperature must be between 0 and 2" } }
+    });
+
+    expect(isNonRetryableContextLimitFailure(error, defaults)).toBe(false);
+  });
+});
 
 describe("classifyLlmFailure", () => {
   it("marks configured HTTP statuses as switchable and retryable", () => {

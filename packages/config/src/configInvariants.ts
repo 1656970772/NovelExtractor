@@ -537,6 +537,14 @@ function assertLlmFailurePolicyDefaults(config: NovelExtractorConfig): void {
   const defaults = config.llmFailurePolicyDefaults;
   assertConfigObject(defaults, "llm failure policy defaults");
 
+  assertNonEmptyStringArray(
+    defaults.nonRetryableContextLimitFragments,
+    "non-retryable context limit fragments"
+  );
+  assertUnique(
+    defaults.nonRetryableContextLimitFragments,
+    "non-retryable context limit fragments"
+  );
   assertHttpStatusArray(defaults.switchableHttpStatuses, "switchable http statuses");
   assertNonEmptyStringArray(
     defaults.switchableMessageFragments,

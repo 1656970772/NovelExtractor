@@ -31,6 +31,7 @@ interface JobFailureRetryDefaultsTestShape {
 }
 
 interface LlmFailurePolicyDefaultsTestShape {
+  nonRetryableContextLimitFragments: string[];
   switchableHttpStatuses: number[];
   switchableMessageFragments: string[];
   switchableNetworkErrorFragments: string[];
@@ -537,6 +538,10 @@ describe("config invariants", () => {
     expectInvariantViolation(missingDefaults, /llm failure policy defaults/i);
 
     expectInvariantViolation(
+      withLlmFailurePolicyDefaults({ nonRetryableContextLimitFragments: [] }),
+      /non-retryable context limit fragments/i
+    );
+    expectInvariantViolation(
       withLlmFailurePolicyDefaults({ switchableHttpStatuses: [] }),
       /switchable http statuses/i
     );
@@ -596,6 +601,7 @@ function withLlmFailurePolicyDefaults(
   const config = getDefaultConfig();
   (config as unknown as { llmFailurePolicyDefaults: LlmFailurePolicyDefaultsTestShape })
     .llmFailurePolicyDefaults = {
+      nonRetryableContextLimitFragments: ["context_length_exceeded", "maximum context length"],
       switchableHttpStatuses: [408, 429, 500],
       switchableMessageFragments: ["rate limit", "quota"],
       switchableNetworkErrorFragments: ["fetch failed", "ECONNRESET"],
