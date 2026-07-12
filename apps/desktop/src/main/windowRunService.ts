@@ -2531,9 +2531,12 @@ function formatModelCandidate(candidate: ModelFallbackCandidate): string {
 
 export function createWindowRunService(options: WindowRunServiceOptions): WindowRunService {
   const monotonicNow = options.monotonicNow ?? (() => performance.now());
-  let activeTokenPlanWaitCount = 0;
-  let tokenPlanWaitStartedAtMs: number | undefined;
-  let completedTokenPlanWaitElapsedMs = 0;
+  type TokenPlanWaitRuntimeState = {
+    activeWaiterCount: number;
+    completedElapsedMs: number;
+    startedAtMs?: number;
+  };
+  const tokenPlanWaitStateByJobId = new Map<string, TokenPlanWaitRuntimeState>();
   const enabledToolNames = options.enabledToolNames ?? DEFAULT_ENABLED_TOOL_NAMES;
   const enabledToolNameSet = new Set<string>(enabledToolNames);
   const toolDefinitions = getEnabledToolDefinitions([...enabledToolNames]).map(toLlmToolDefinition);
@@ -2545,11 +2548,25 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
     }
   };
 
-  function getTokenPlanWaitElapsedMs(nowMs: number = monotonicNow()): number {
+  function getTokenPlanWaitState(jobId: string): TokenPlanWaitRuntimeState {
+    const existing = tokenPlanWaitStateByJobId.get(jobId);
+    if (existing) {
+      return existing;
+    }
+    const created: TokenPlanWaitRuntimeState = { activeWaiterCount: 0, completedElapsedMs: 0 };
+    tokenPlanWaitStateByJobId.set(jobId, created);
+    return created;
+  }
+
+  function getTokenPlanWaitElapsedMs(jobId: string, nowMs: number = monotonicNow()): number {
+    const state = tokenPlanWaitStateByJobId.get(jobId);
+    if (!state) {
+      return 0;
+    }
     return (
-      completedTokenPlanWaitElapsedMs +
-      (activeTokenPlanWaitCount > 0 && tokenPlanWaitStartedAtMs !== undefined
-        ? Math.max(0, nowMs - tokenPlanWaitStartedAtMs)
+      state.completedElapsedMs +
+      (state.activeWaiterCount > 0 && state.startedAtMs !== undefined
+        ? Math.max(0, nowMs - state.startedAtMs)
         : 0)
     );
   }
@@ -2559,10 +2576,11 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
     delayMs: number,
     wait?: (delayMs: number) => Promise<void>
   ): Promise<void> {
-    const isFirstWaiter = activeTokenPlanWaitCount === 0;
-    activeTokenPlanWaitCount += 1;
+    const state = getTokenPlanWaitState(jobId);
+    const isFirstWaiter = state.activeWaiterCount === 0;
+    state.activeWaiterCount += 1;
     if (isFirstWaiter) {
-      tokenPlanWaitStartedAtMs = monotonicNow();
+      state.startedAtMs = monotonicNow();
     }
 
     try {
@@ -2575,13 +2593,13 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
       }
     } finally {
-      activeTokenPlanWaitCount = Math.max(0, activeTokenPlanWaitCount - 1);
-      if (activeTokenPlanWaitCount === 0) {
+      state.activeWaiterCount = Math.max(0, state.activeWaiterCount - 1);
+      if (state.activeWaiterCount === 0) {
         const endedAtMs = monotonicNow();
-        if (tokenPlanWaitStartedAtMs !== undefined) {
-          completedTokenPlanWaitElapsedMs += Math.max(0, endedAtMs - tokenPlanWaitStartedAtMs);
+        if (state.startedAtMs !== undefined) {
+          state.completedElapsedMs += Math.max(0, endedAtMs - state.startedAtMs);
         }
-        tokenPlanWaitStartedAtMs = undefined;
+        state.startedAtMs = undefined;
         await options.onTokenPlanWaitEnded?.({ jobId });
       }
     }
@@ -4432,7 +4450,10 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
               const batchContext = requireBatchValue(batchContextById, batch.batchId, "context");
               const batchChatClient = requireBatchValue(batchChatClientById, batch.batchId, "chat client");
               const windowStartedAt = monotonicNow();
-              const tokenPlanWaitElapsedAtWindowStart = getTokenPlanWaitElapsedMs(windowStartedAt);
+              const tokenPlanWaitElapsedAtWindowStart = getTokenPlanWaitElapsedMs(
+                job.id,
+                windowStartedAt
+              );
 
               runtimeControls.beginWindow();
               try {
@@ -4464,7 +4485,8 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
                 const windowEndedAt = monotonicNow();
                 const tokenPlanWaitElapsedDuringWindow = Math.max(
                   0,
-                  getTokenPlanWaitElapsedMs(windowEndedAt) - tokenPlanWaitElapsedAtWindowStart
+                  getTokenPlanWaitElapsedMs(job.id, windowEndedAt) -
+                    tokenPlanWaitElapsedAtWindowStart
                 );
                 return {
                   ...result,
@@ -4544,7 +4566,11 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
       try {
         return await runtimeControls.runtime.startJob(runtimeInput);
       } finally {
-        await options.onRuntimeSettled?.({ jobId: job.id, runtime: runtimeControls.runtime });
+        try {
+          await options.onRuntimeSettled?.({ jobId: job.id, runtime: runtimeControls.runtime });
+        } finally {
+          tokenPlanWaitStateByJobId.delete(job.id);
+        }
       }
     }
   };

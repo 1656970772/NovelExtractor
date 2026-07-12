@@ -24,6 +24,7 @@ export interface ProjectRuntimeJobTimingRecord {
   completedAt?: string;
   tokenPlanWaitStartedAt?: string;
   tokenPlanWaitElapsedMs?: number;
+  tokenPlanWaitFrozenElapsedMs?: number;
   initialWindowEstimateMs?: number;
   effectiveTotalWindowCount?: number;
   executedWindowElapsedMs?: number;
@@ -201,6 +202,8 @@ function isJobTiming(value: unknown): value is ProjectRuntimeJobTimingRecord {
     (value.completedAt === undefined || typeof value.completedAt === "string") &&
     (value.tokenPlanWaitStartedAt === undefined || typeof value.tokenPlanWaitStartedAt === "string") &&
     (value.tokenPlanWaitElapsedMs === undefined || typeof value.tokenPlanWaitElapsedMs === "number") &&
+    (value.tokenPlanWaitFrozenElapsedMs === undefined ||
+      typeof value.tokenPlanWaitFrozenElapsedMs === "number") &&
     (value.initialWindowEstimateMs === undefined || typeof value.initialWindowEstimateMs === "number") &&
     (value.effectiveTotalWindowCount === undefined || typeof value.effectiveTotalWindowCount === "number") &&
     (value.executedWindowElapsedMs === undefined || typeof value.executedWindowElapsedMs === "number") &&

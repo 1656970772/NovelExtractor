@@ -11330,6 +11330,7 @@ describe("P0 desktop IPC handlers", () => {
   it("freezes active elapsed time while waiting for Token Plan reset", async () => {
     const contract = createIpcContract();
     let now = "2026-07-02T10:00:00.000Z";
+    const quotaFailureResponse = createDeferred<Response>();
     const { credentialStore, apiKeyRef } = createCredentialFixture("sk-token-plan-wait");
     const tokenPlanWaitGate = {
       getRemainingDelayMs: vi.fn(() => undefined),
@@ -11338,12 +11339,7 @@ describe("P0 desktop IPC handlers", () => {
     const handlers = createHandlers({
       clock: { now: () => now },
       credentialStore,
-      fetch: vi.fn(async () =>
-        new Response(JSON.stringify({ error: { message: "已达到 Token Plan 用量上限" } }), {
-          headers: { "Content-Type": "application/json" },
-          status: 500
-        })
-      ),
+      fetch: vi.fn(() => quotaFailureResponse.promise),
       providerStore: createProviderStore(
         createProviderConfig({
           apiKeyRef,
@@ -11370,6 +11366,13 @@ describe("P0 desktop IPC handlers", () => {
     });
 
     await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+    now = "2026-07-02T10:00:04.000Z";
+    quotaFailureResponse.resolve(
+      new Response(JSON.stringify({ error: { message: "已达到 Token Plan 用量上限" } }), {
+        headers: { "Content-Type": "application/json" },
+        status: 500
+      })
+    );
     await vi.waitFor(async () => {
       const runtime = await contract.invoke(handlers, "projectRuntime:get", {
         projectId: "project-a"
@@ -11384,7 +11387,8 @@ describe("P0 desktop IPC handlers", () => {
     });
     const waitingJob = requireJobDto(runtime.jobs.find((candidate) => candidate.id === job.id));
     expect(waitingJob.timing).toMatchObject({
-      elapsedMs: 0,
+      elapsedMs: 4_000,
+      elapsedUpdatedAt: "2026-07-02T10:00:04.000Z",
       elapsedTimerState: "waiting_token_plan"
     });
     expect(tokenPlanWaitGate.recordFailure).toHaveBeenCalledOnce();

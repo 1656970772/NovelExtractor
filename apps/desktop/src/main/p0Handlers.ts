@@ -697,6 +697,20 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     return Math.max(0, endedAtMs - startedAtMs);
   }
 
+  function calculateActiveElapsedMs(
+    timing: ProjectRuntimeJobTimingRecord,
+    endedAt: string
+  ): number | undefined {
+    if (!timing.startedAt) {
+      return undefined;
+    }
+
+    const rawElapsedMs = calculateElapsedMs(timing.startedAt, endedAt);
+    return rawElapsedMs === undefined
+      ? undefined
+      : Math.max(0, rawElapsedMs - Math.max(0, timing.tokenPlanWaitElapsedMs ?? 0));
+  }
+
   function toJobTimingDto(job: P0JobRecord, nowIso: string): JobTimingDto | undefined {
     const timing = job.timing;
     if (!timing?.startedAt) {
@@ -704,18 +718,10 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     }
 
     const elapsedEndAt = timing.completedAt ?? nowIso;
-    const rawElapsedMs = calculateElapsedMs(timing.startedAt, elapsedEndAt);
-    const completedTokenPlanWaitElapsedMs = Math.max(0, timing.tokenPlanWaitElapsedMs ?? 0);
-    const activeTokenPlanWaitElapsedMs = timing.tokenPlanWaitStartedAt
-      ? (calculateElapsedMs(timing.tokenPlanWaitStartedAt, elapsedEndAt) ?? 0)
-      : 0;
-    const elapsedMs =
-      rawElapsedMs === undefined
-        ? undefined
-        : Math.max(
-            0,
-            rawElapsedMs - completedTokenPlanWaitElapsedMs - activeTokenPlanWaitElapsedMs
-          );
+    const elapsedMs = timing.tokenPlanWaitStartedAt
+      ? (timing.tokenPlanWaitFrozenElapsedMs ??
+        calculateActiveElapsedMs(timing, timing.tokenPlanWaitStartedAt))
+      : calculateActiveElapsedMs(timing, elapsedEndAt);
     const estimatedTotalMs = timing.estimatedTotalMs;
     const hasEstimatedTotal = estimatedTotalMs !== undefined;
     const estimateState: JobTimingDto["estimateState"] =
@@ -728,7 +734,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
             : "unknown";
     const dto: JobTimingDto = {
       startedAt: timing.startedAt,
-      elapsedUpdatedAt: nowIso,
+      elapsedUpdatedAt: timing.tokenPlanWaitStartedAt ?? nowIso,
       elapsedTimerState: timing.tokenPlanWaitStartedAt ? "waiting_token_plan" : "running",
       estimateState
     };
@@ -1587,6 +1593,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
         startedAt: runningStartedAt,
         completedAt: undefined,
         tokenPlanWaitStartedAt: undefined,
+        tokenPlanWaitFrozenElapsedMs: undefined,
         tokenPlanWaitElapsedMs: shouldStartNewVisibleTimer
           ? 0
           : (job.timing?.tokenPlanWaitElapsedMs ?? 0),
@@ -1715,10 +1722,14 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
           if (!currentJob || currentJob.timing?.tokenPlanWaitStartedAt) {
             return;
           }
+          const waitStartedAt = clock.now();
           await updateJob(currentJob, {
             timing: {
               ...currentJob.timing,
-              tokenPlanWaitStartedAt: clock.now()
+              tokenPlanWaitStartedAt: waitStartedAt,
+              tokenPlanWaitFrozenElapsedMs: currentJob.timing
+                ? calculateActiveElapsedMs(currentJob.timing, waitStartedAt)
+                : undefined
             }
           });
         },
@@ -1734,6 +1745,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
             timing: {
               ...currentJob.timing,
               tokenPlanWaitStartedAt: undefined,
+              tokenPlanWaitFrozenElapsedMs: undefined,
               tokenPlanWaitElapsedMs:
                 Math.max(0, currentJob.timing?.tokenPlanWaitElapsedMs ?? 0) + waitElapsedMs
             }

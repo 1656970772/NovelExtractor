@@ -302,6 +302,18 @@ describe("task progress log summarizer", () => {
 
     expect(
       summarizeTaskLogEntry({
+        tags: ["简要流程", "限流"],
+        timestamp: "2026-07-02T04:51:09.000Z",
+        value: {
+          模板: "人物模板",
+          章节范围: "1-10",
+          下次重试延迟毫秒: 1_411_324
+        }
+      })
+    ).toBe("04:51:09 [限流]：人物模板的[第1章-第10章]执行限流，23分32秒后再次尝试");
+
+    expect(
+      summarizeTaskLogEntry({
         tags: ["简要流程", "执行失败"],
         timestamp: "2026-07-02T04:51:10.000Z",
         value: {

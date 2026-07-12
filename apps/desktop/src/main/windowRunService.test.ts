@@ -1328,6 +1328,74 @@ describe("window run parallel template batches", () => {
     expect(runtimeStates.at(-1)?.executedWindowElapsedMs).toBe(0);
   }, 20000);
 
+  it("freezes each job independently when concurrent jobs wait for Token Plan reset", async () => {
+    const projectRoots = await Promise.all([
+      fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-token-plan-job-a-")),
+      fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-token-plan-job-b-"))
+    ]);
+    scratchDirs.push(...projectRoots);
+    await Promise.all(projectRoots.map(writeSingleWindowText));
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+    let requestCount = 0;
+    const fetch = vi.fn(async () => {
+      requestCount += 1;
+      if (requestCount <= 2) {
+        return new Response(
+          JSON.stringify({ error: { message: "已达到 Token Plan 用量上限" } }),
+          { headers: { "Content-Type": "application/json" }, status: 500 }
+        );
+      }
+      return new Response(JSON.stringify(createChatCompletionResponse({ content: "NO_UPDATE" })), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      });
+    });
+    const startedJobIds: string[] = [];
+    const endedJobIds: string[] = [];
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      credentialStore,
+      fetch,
+      findExistingReport: () => undefined,
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeState: async () => {},
+      onTokenPlanWaitStarted: ({ jobId }) => {
+        startedJobIds.push(jobId);
+      },
+      onTokenPlanWaitEnded: ({ jobId }) => {
+        endedJobIds.push(jobId);
+      },
+      providerStore: createProviderStore(createProviderConfig(apiKeyRef)),
+      registerReport: () => {},
+      tokenPlanWaitGate: {
+        getRemainingDelayMs: vi.fn(() => undefined),
+        recordFailure: vi.fn(async () => 200)
+      }
+    });
+
+    await Promise.all(
+      projectRoots.map((projectRoot, index) =>
+        service.runJobWindows({
+          artifacts: createWindowArtifacts({
+            projectRoot,
+            templates: [createTemplate({ id: "template-1", name: "人物", fileName: "人物.md" })]
+          }),
+          job: {
+            ...createWindowRunJob({ templateIds: ["template-1"] }),
+            id: `job-${index + 1}`
+          }
+        })
+      )
+    );
+
+    expect(startedJobIds.sort()).toEqual(["job-1", "job-2"]);
+    expect(endedJobIds.sort()).toEqual(["job-1", "job-2"]);
+  }, 20000);
+
   it("writes separate batch coverage indexes and batch log files while preserving the global coverage index", async () => {
     const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-batch-artifacts-"));
     scratchDirs.push(projectRoot);
@@ -1471,7 +1539,7 @@ describe("window run parallel template batches", () => {
     const jobSimpleLog = await fs.readFile(taskLogger.simpleAbsolutePath, "utf8");
     expect(jobSimpleLog).toContain("覆盖索引预检：1 个窗口，0 个已覆盖，1 个待处理（[第1章-第10章]）");
     expect(jobSimpleLog).toContain("[执行中]：人物模板的[第1章-第10章]开始分析");
-    expect(jobSimpleLog).toContain("[限流]：人物模板的[第1章-第10章]执行限流，10ms后再次尝试");
+    expect(jobSimpleLog).toContain("[限流]：人物模板的[第1章-第10章]执行限流，1秒后再次尝试");
     expect(jobSimpleLog).toContain("[执行成功]：人物模板的[第1章-第10章]执行成功");
     expect(jobSimpleLog).not.toContain("请求模型：窗口");
     expect(jobSimpleLog).not.toContain("模型返回");

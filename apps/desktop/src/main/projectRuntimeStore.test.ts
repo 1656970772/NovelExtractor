@@ -80,6 +80,7 @@ describe("project runtime store", () => {
         startedAt: "2026-07-02T11:00:00.000Z",
         tokenPlanWaitStartedAt: "2026-07-02T11:02:07.000Z",
         tokenPlanWaitElapsedMs: 60000,
+        tokenPlanWaitFrozenElapsedMs: 67000,
         estimatedTotalMs: 180000,
         estimateFrozenAt: "2026-07-02T11:20:00.000Z"
       }
@@ -120,6 +121,7 @@ describe("project runtime store", () => {
       startedAt: "2026-07-02T11:00:00.000Z",
       tokenPlanWaitStartedAt: "2026-07-02T11:02:07.000Z",
       tokenPlanWaitElapsedMs: 60000,
+      tokenPlanWaitFrozenElapsedMs: 67000,
       estimatedTotalMs: 180000,
       estimateFrozenAt: "2026-07-02T11:20:00.000Z"
     });
