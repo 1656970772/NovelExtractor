@@ -22,9 +22,13 @@ export interface ProjectRuntimeJobProgressRecord {
 export interface ProjectRuntimeJobTimingRecord {
   startedAt?: string;
   completedAt?: string;
+  tokenPlanWaitStartedAt?: string;
+  tokenPlanWaitElapsedMs?: number;
   initialWindowEstimateMs?: number;
   effectiveTotalWindowCount?: number;
   executedWindowElapsedMs?: number;
+  estimateBaselineExecutedWindowCount?: number;
+  estimateBaselineExecutedWindowElapsedMs?: number;
   estimatedTotalMs?: number;
   estimatedRemainingMs?: number;
   estimateFrozenAt?: string;
@@ -195,9 +199,15 @@ function isJobTiming(value: unknown): value is ProjectRuntimeJobTimingRecord {
     isPlainRecord(value) &&
     (value.startedAt === undefined || typeof value.startedAt === "string") &&
     (value.completedAt === undefined || typeof value.completedAt === "string") &&
+    (value.tokenPlanWaitStartedAt === undefined || typeof value.tokenPlanWaitStartedAt === "string") &&
+    (value.tokenPlanWaitElapsedMs === undefined || typeof value.tokenPlanWaitElapsedMs === "number") &&
     (value.initialWindowEstimateMs === undefined || typeof value.initialWindowEstimateMs === "number") &&
     (value.effectiveTotalWindowCount === undefined || typeof value.effectiveTotalWindowCount === "number") &&
     (value.executedWindowElapsedMs === undefined || typeof value.executedWindowElapsedMs === "number") &&
+    (value.estimateBaselineExecutedWindowCount === undefined ||
+      typeof value.estimateBaselineExecutedWindowCount === "number") &&
+    (value.estimateBaselineExecutedWindowElapsedMs === undefined ||
+      typeof value.estimateBaselineExecutedWindowElapsedMs === "number") &&
     (value.estimatedTotalMs === undefined || typeof value.estimatedTotalMs === "number") &&
     (value.estimatedRemainingMs === undefined || typeof value.estimatedRemainingMs === "number") &&
     (value.estimateFrozenAt === undefined || typeof value.estimateFrozenAt === "string")

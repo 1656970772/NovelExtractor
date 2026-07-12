@@ -19,6 +19,7 @@ export interface TemplateBatchPipelineProcessResult {
   completedTemplateTargetCount: number;
   skippedTemplateTargetCount: number;
   executedTemplateTargetCount: number;
+  executedWindowElapsedMs?: number;
   usage: TokenUsage;
 }
 
@@ -41,6 +42,7 @@ export interface RunTemplateBatchPipelinesInput<
     completedTemplateTargetCount: number;
     skippedTemplateTargetCount: number;
     executedTemplateTargetCount: number;
+    executedWindowElapsedMs?: number;
     usage: TokenUsage;
   }): Promise<void> | void;
   onBatchFailure(input: {
@@ -137,6 +139,7 @@ export async function runTemplateBatchPipelines<
             completedTemplateTargetCount: result.completedTemplateTargetCount,
             skippedTemplateTargetCount: result.skippedTemplateTargetCount,
             executedTemplateTargetCount: result.executedTemplateTargetCount,
+            executedWindowElapsedMs: result.executedWindowElapsedMs,
             usage: result.usage
           });
           throwIfStopped();

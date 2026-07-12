@@ -541,6 +541,108 @@ describe("P0 desktop IPC handlers", () => {
     });
   });
 
+  it("starts a new remaining-window estimate stage when an active runtime resumes", () => {
+    const buildPatch = (p0HandlersModule as {
+      toJobPatchFromRuntimeState?: (
+        state: JobRuntimeState,
+        previousJob: ProjectRuntimeJobRecord,
+        clock: { now(): string },
+        options?: { createInitialWindowEstimateMs(): number }
+      ) => Partial<ProjectRuntimeJobRecord>;
+    }).toJobPatchFromRuntimeState;
+    if (!buildPatch) {
+      throw new Error("toJobPatchFromRuntimeState helper is not exported");
+    }
+    const createInitialWindowEstimateMs = vi.fn(() => 120000);
+    const previousJob = {
+      id: "job-resume-estimate",
+      bookId: "book-1",
+      status: "paused",
+      progressText: "进度：4/10 模板窗口",
+      tokenText: "Token 100 / 缓存命中率 0.00%",
+      createdAt: "2026-07-02T10:00:00.000Z",
+      updatedAt: "2026-07-02T10:10:00.000Z",
+      input: {
+        bookId: "book-1",
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 3,
+        extractionChapterCount: 30,
+        overlapChapterCount: 1,
+        templateBatchSize: 1,
+        skipAlreadyExtracted: true
+      },
+      progress: {
+        completedWindowCount: 4,
+        totalWindowCount: 10,
+        skippedWindowCount: 0,
+        executedWindowCount: 4
+      },
+      timing: {
+        startedAt: "2026-07-02T10:00:00.000Z",
+        initialWindowEstimateMs: 100000,
+        effectiveTotalWindowCount: 10,
+        executedWindowElapsedMs: 400000,
+        estimatedTotalMs: 1000000,
+        estimateFrozenAt: "2026-07-02T10:10:00.000Z"
+      }
+    } as ProjectRuntimeJobRecord;
+    const resumedState = {
+      jobId: previousJob.id,
+      status: "running",
+      completedWindowCount: 4,
+      totalWindowCount: 10,
+      skippedWindowCount: 0,
+      executedWindowCount: 4,
+      executedWindowElapsedMs: 400000,
+      usage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        cacheHitTokens: 0,
+        cacheMissTokens: 0
+      },
+      fee: null
+    } as JobRuntimeState;
+
+    const resumedPatch = buildPatch(
+      resumedState,
+      previousJob,
+      { now: () => "2026-07-02T10:11:00.000Z" },
+      { createInitialWindowEstimateMs }
+    );
+
+    expect(createInitialWindowEstimateMs).toHaveBeenCalledTimes(1);
+    expect(resumedPatch.timing).toMatchObject({
+      initialWindowEstimateMs: 120000,
+      effectiveTotalWindowCount: 6,
+      estimateBaselineExecutedWindowCount: 4,
+      estimateBaselineExecutedWindowElapsedMs: 400000,
+      estimatedTotalMs: 720000
+    });
+
+    const nextPatch = buildPatch(
+      {
+        ...resumedState,
+        completedWindowCount: 5,
+        executedWindowCount: 5,
+        executedWindowElapsedMs: 550000
+      },
+      {
+        ...previousJob,
+        status: "running",
+        progress: resumedPatch.progress,
+        timing: resumedPatch.timing
+      } as ProjectRuntimeJobRecord,
+      { now: () => "2026-07-02T10:13:30.000Z" },
+      { createInitialWindowEstimateMs }
+    );
+
+    expect(createInitialWindowEstimateMs).toHaveBeenCalledTimes(1);
+    expect(nextPatch.timing?.estimatedTotalMs).toBe(900000);
+  });
+
   it("estimates total runtime from the average completed window duration", () => {
     const buildPatch = (p0HandlersModule as {
       toJobPatchFromRuntimeState?: (
@@ -759,7 +861,73 @@ describe("P0 desktop IPC handlers", () => {
     expect(patch.timing?.estimateFrozenAt).toBeUndefined();
   });
 
-  it("subtracts skipped windows from the seeded total estimate before real execution completes", () => {
+  it("keeps the seeded estimate when an executed-window duration sample is zero", () => {
+    const buildPatch = (p0HandlersModule as {
+      toJobPatchFromRuntimeState?: (
+        state: JobRuntimeState,
+        previousJob: ProjectRuntimeJobRecord,
+        clock: { now(): string },
+        options?: { createInitialWindowEstimateMs(): number }
+      ) => Partial<ProjectRuntimeJobRecord>;
+    }).toJobPatchFromRuntimeState;
+    if (!buildPatch) {
+      throw new Error("toJobPatchFromRuntimeState helper is not exported");
+    }
+    const previousJob = {
+      id: "job-zero-duration",
+      bookId: "book-1",
+      status: "running",
+      progressText: "进度：0/10 模板窗口",
+      tokenText: "Token 0 / 缓存命中率 0.00%",
+      createdAt: "2026-07-02T10:00:00.000Z",
+      updatedAt: "2026-07-02T10:00:00.000Z",
+      input: {
+        bookId: "book-1",
+        templateIds: ["pill-analysis"],
+        providerConfigId: "provider-1",
+        modelId: "mock-model",
+        singleRunChapterCount: 3,
+        extractionChapterCount: 30,
+        overlapChapterCount: 1,
+        templateBatchSize: 1,
+        skipAlreadyExtracted: true
+      },
+      timing: {
+        startedAt: "2026-07-02T10:00:00.000Z",
+        initialWindowEstimateMs: 90000,
+        effectiveTotalWindowCount: 10,
+        estimateBaselineExecutedWindowCount: 0,
+        estimateBaselineExecutedWindowElapsedMs: 0,
+        estimatedTotalMs: 900000
+      }
+    } as ProjectRuntimeJobRecord;
+
+    const patch = buildPatch(
+      {
+        jobId: previousJob.id,
+        status: "running",
+        completedWindowCount: 1,
+        totalWindowCount: 10,
+        skippedWindowCount: 0,
+        executedWindowCount: 1,
+        executedWindowElapsedMs: 0,
+        usage: {
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          cacheHitTokens: 0,
+          cacheMissTokens: 0
+        },
+        fee: null
+      } as JobRuntimeState,
+      previousJob,
+      { now: () => "2026-07-02T10:01:00.000Z" }
+    );
+
+    expect(patch.timing?.estimatedTotalMs).toBe(900000);
+  });
+
+  it("keeps the full stage target when windows are skipped before real execution completes", () => {
     const buildPatch = (p0HandlersModule as {
       toJobPatchFromRuntimeState?: (
         state: JobRuntimeState,
@@ -841,8 +1009,8 @@ describe("P0 desktop IPC handlers", () => {
       timing: {
         startedAt: "2026-07-02T10:00:00.000Z",
         initialWindowEstimateMs: 165000,
-        effectiveTotalWindowCount: 9,
-        estimatedTotalMs: 1485000
+        effectiveTotalWindowCount: 10,
+        estimatedTotalMs: 1650000
       }
     });
   });
@@ -5513,7 +5681,7 @@ describe("P0 desktop IPC handlers", () => {
         timing: {
           startedAt: fixedNow,
           elapsedMs: 0,
-          estimatedTotalMs: 660000,
+          estimatedTotalMs: 405000,
           estimateState: "available"
         }
       });
@@ -5616,7 +5784,7 @@ describe("P0 desktop IPC handlers", () => {
         timing: {
           startedAt: fixedNow,
           elapsedMs: 0,
-          estimatedTotalMs: 660000,
+          estimatedTotalMs: 405000,
           estimateState: "available"
         }
       });
@@ -11156,6 +11324,71 @@ describe("P0 desktop IPC handlers", () => {
     });
     expect(JSON.stringify(runningJob)).not.toContain("sk-p0-mock");
     await expect(contract.invoke(handlers, "books:listReports", { bookId: book.bookId })).resolves.toEqual([]);
+    await contract.invoke(handlers, "jobs:delete", { jobId: job.id, confirm: true });
+  });
+
+  it("freezes active elapsed time while waiting for Token Plan reset", async () => {
+    const contract = createIpcContract();
+    let now = "2026-07-02T10:00:00.000Z";
+    const { credentialStore, apiKeyRef } = createCredentialFixture("sk-token-plan-wait");
+    const tokenPlanWaitGate = {
+      getRemainingDelayMs: vi.fn(() => undefined),
+      recordFailure: vi.fn(async () => 60_000)
+    };
+    const handlers = createHandlers({
+      clock: { now: () => now },
+      credentialStore,
+      fetch: vi.fn(async () =>
+        new Response(JSON.stringify({ error: { message: "已达到 Token Plan 用量上限" } }), {
+          headers: { "Content-Type": "application/json" },
+          status: 500
+        })
+      ),
+      providerStore: createProviderStore(
+        createProviderConfig({
+          apiKeyRef,
+          baseUrl: "https://minimax.test/v1"
+        })
+      ),
+      tokenPlanWaitGate
+    });
+    const book = await contract.invoke(handlers, "books:uploadTxt", {
+      projectId: "project-a",
+      filePath: utf8FixturePath,
+      displayName: "凡人修仙传.txt"
+    });
+    const job = await contract.invoke(handlers, "jobs:create", {
+      bookId: book.bookId,
+      templateIds: ["pill-analysis"],
+      providerConfigId: "provider-1",
+      modelId: "mock-model",
+      singleRunChapterCount: 2,
+      extractionChapterCount: 3,
+      overlapChapterCount: 1,
+      templateBatchSize: 1,
+      skipAlreadyExtracted: true
+    });
+
+    await contract.invoke(handlers, "jobs:start", { jobId: job.id });
+    await vi.waitFor(async () => {
+      const runtime = await contract.invoke(handlers, "projectRuntime:get", {
+        projectId: "project-a"
+      });
+      const waitingJob = requireJobDto(runtime.jobs.find((candidate) => candidate.id === job.id));
+      expect(waitingJob.timing?.elapsedTimerState).toBe("waiting_token_plan");
+    });
+
+    now = "2026-07-02T13:16:00.000Z";
+    const runtime = await contract.invoke(handlers, "projectRuntime:get", {
+      projectId: "project-a"
+    });
+    const waitingJob = requireJobDto(runtime.jobs.find((candidate) => candidate.id === job.id));
+    expect(waitingJob.timing).toMatchObject({
+      elapsedMs: 0,
+      elapsedTimerState: "waiting_token_plan"
+    });
+    expect(tokenPlanWaitGate.recordFailure).toHaveBeenCalledOnce();
+
     await contract.invoke(handlers, "jobs:delete", { jobId: job.id, confirm: true });
   });
 

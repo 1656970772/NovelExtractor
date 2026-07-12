@@ -82,23 +82,6 @@ describe("jobQueueViewModel", () => {
     expect(card.completedAtText).toBe("2026-07-02 18:12:48");
   });
 
-  it("shows automatic retry policy text for enabled jobs", () => {
-    expect(
-      getJobCardViewModel({
-        id: "failed-retry",
-        status: "failed",
-        autoRetryOnFailure: true
-      }).retryPolicyText
-    ).toBe("自动续跑已开启");
-    expect(
-      getJobCardViewModel({
-        id: "running-retry",
-        status: "running",
-        autoRetryOnFailure: true
-      }).retryPolicyText
-    ).toBe("失败后自动续跑");
-  });
-
   it("uses the current clock for running elapsed time without changing the total estimate", () => {
     const card = getJobCardViewModel(
       {
@@ -135,6 +118,27 @@ describe("jobQueueViewModel", () => {
 
     expect(card.elapsedText).toBe("00:00:12");
     expect(card.estimatedTotalText).toBe("00:04:00");
+  });
+
+  it("freezes elapsed time while the job is waiting for Token Plan reset", () => {
+    const card = getJobCardViewModel(
+      {
+        id: "token-plan-waiting",
+        status: "running",
+        timing: {
+          startedAt: "2026-07-02T10:00:00.000Z",
+          elapsedMs: 127_000,
+          elapsedTimerState: "waiting_token_plan",
+          elapsedUpdatedAt: "2026-07-02T10:02:07.000Z",
+          estimatedTotalMs: 3_190_000,
+          estimateState: "available"
+        } as ExtractionJob["timing"]
+      },
+      { nowMs: Date.parse("2026-07-02T13:18:07.000Z") }
+    );
+
+    expect(card.elapsedText).toBe("00:02:07");
+    expect(card.estimatedTotalText).toBe("00:53:10");
   });
 
   it("formats timestamps without depending on locale settings", () => {

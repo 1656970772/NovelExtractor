@@ -78,6 +78,8 @@ describe("project runtime store", () => {
       },
       timing: {
         startedAt: "2026-07-02T11:00:00.000Z",
+        tokenPlanWaitStartedAt: "2026-07-02T11:02:07.000Z",
+        tokenPlanWaitElapsedMs: 60000,
         estimatedTotalMs: 180000,
         estimateFrozenAt: "2026-07-02T11:20:00.000Z"
       }
@@ -116,6 +118,8 @@ describe("project runtime store", () => {
     });
     expect(state.jobs[0].timing).toEqual({
       startedAt: "2026-07-02T11:00:00.000Z",
+      tokenPlanWaitStartedAt: "2026-07-02T11:02:07.000Z",
+      tokenPlanWaitElapsedMs: 60000,
       estimatedTotalMs: 180000,
       estimateFrozenAt: "2026-07-02T11:20:00.000Z"
     });

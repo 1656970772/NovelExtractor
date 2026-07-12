@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ApiKeyRef, ProviderConfig } from "@novel-extractor/domain";
-import type { JobRuntime } from "@novel-extractor/jobs";
+import type { JobRuntime, JobRuntimeState } from "@novel-extractor/jobs";
 import { reasonixToolOrder } from "@novel-extractor/tools";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMemoryCredentialStore } from "./credentials";
@@ -1250,6 +1250,84 @@ describe("window run parallel template batches", () => {
     await expect(runPromise).resolves.toMatchObject({ ok: true });
   }, 20000);
 
+  it("uses the Token Plan reset delay instead of the fixed batch retry interval", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-token-plan-retry-"));
+    scratchDirs.push(projectRoot);
+    await writeSingleWindowText(projectRoot);
+    const credentialStore = createMemoryCredentialStore({ idFactory: () => "api-key-1" });
+    const apiKeyRef = credentialStore.saveApiKey({
+      providerConfigId: "provider-1",
+      apiKey: "sk-window-loop"
+    });
+    let requestCount = 0;
+    let loggedRetryDelayMs: unknown;
+    const fetch = vi.fn(async () => {
+      requestCount += 1;
+      if (requestCount === 1) {
+        return new Response(
+          JSON.stringify({ error: { message: "已达到 Token Plan 用量上限" } }),
+          { headers: { "Content-Type": "application/json" }, status: 500 }
+        );
+      }
+      return new Response(JSON.stringify(createChatCompletionResponse({ content: "NO_UPDATE" })), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      });
+    });
+    const tokenPlanWaitGate = {
+      getRemainingDelayMs: vi.fn(() => undefined),
+      recordFailure: vi.fn(async () => 75)
+    };
+    let monotonicMs = 0;
+    const runtimeStates: JobRuntimeState[] = [];
+    const onTokenPlanWaitStarted = vi.fn(() => {
+      monotonicMs = 75;
+    });
+    const onTokenPlanWaitEnded = vi.fn();
+    const service = createWindowRunService({
+      clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      monotonicNow: () => monotonicMs,
+      credentialStore,
+      fetch,
+      findExistingReport: () => undefined,
+      idGenerator: { createId: (prefix: string) => `${prefix}-1` },
+      onRuntimeState: async (state) => {
+        runtimeStates.push(structuredClone(state));
+      },
+      onTokenPlanWaitStarted,
+      onTokenPlanWaitEnded,
+      providerStore: createProviderStore(createProviderConfig(apiKeyRef)),
+      registerReport: () => {},
+      taskLogger: {
+        append: vi.fn(async (sections: string[], entry?: Record<string, unknown>) => {
+          if (sections.includes("批次重试")) {
+            loggedRetryDelayMs = entry?.下次重试延迟毫秒;
+          }
+        }),
+        setSecrets: vi.fn()
+      } as any,
+      templateBatchFailureRetryIntervalMs: 10,
+      tokenPlanWaitGate
+    });
+
+    await expect(
+      service.runJobWindows({
+        artifacts: createWindowArtifacts({
+          projectRoot,
+          templates: [createTemplate({ id: "template-1", name: "人物", fileName: "人物.md" })]
+        }),
+        job: createWindowRunJob({ templateIds: ["template-1"] })
+      })
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(tokenPlanWaitGate.recordFailure).toHaveBeenCalledTimes(1);
+    expect(onTokenPlanWaitStarted).toHaveBeenCalledOnce();
+    expect(onTokenPlanWaitEnded).toHaveBeenCalledOnce();
+    expect(loggedRetryDelayMs).toBe(75);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(runtimeStates.at(-1)?.executedWindowElapsedMs).toBe(0);
+  }, 20000);
+
   it("writes separate batch coverage indexes and batch log files while preserving the global coverage index", async () => {
     const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "novel-extractor-window-batch-artifacts-"));
     scratchDirs.push(projectRoot);
@@ -1420,6 +1498,8 @@ describe("window run Runtime facade controls", () => {
     });
     const firstWindowCanFinish = createDeferred<void>();
     const startedPrompts: string[] = [];
+    const runtimeStates: JobRuntimeState[] = [];
+    let monotonicMs = 0;
     let runtime!: JobRuntime;
     const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
@@ -1431,6 +1511,8 @@ describe("window run Runtime facade controls", () => {
         startedPrompts.push(windowLabel);
         if (windowLabel === "window-1") {
           await firstWindowCanFinish.promise;
+        } else {
+          monotonicMs += 120000;
         }
         return new Response(JSON.stringify(createChatCompletionResponse({ content: "NO_UPDATE" })), {
           headers: { "Content-Type": "application/json" },
@@ -1444,6 +1526,7 @@ describe("window run Runtime facade controls", () => {
     });
     const service = createWindowRunService({
       clock: { now: () => "2026-07-01T00:00:00.000Z" },
+      monotonicNow: () => monotonicMs,
       credentialStore,
       fetch,
       findExistingReport: () => undefined,
@@ -1451,7 +1534,9 @@ describe("window run Runtime facade controls", () => {
       onRuntimeCreated: ({ runtime: createdRuntime }) => {
         runtime = createdRuntime;
       },
-      onRuntimeState: async () => {},
+      onRuntimeState: async (state) => {
+        runtimeStates.push(state);
+      },
       providerStore: createProviderStore(createProviderConfig(apiKeyRef)),
       registerReport: () => {}
     });
@@ -1466,13 +1551,19 @@ describe("window run Runtime facade controls", () => {
 
     await vi.waitFor(() => expect(startedPrompts).toEqual(["window-1"]));
     await expect(runtime.pauseJob("job-1")).resolves.toEqual({ ok: true });
+    monotonicMs = 90000;
     firstWindowCanFinish.resolve();
     await vi.waitFor(() => expect(runtime.getJobState("job-1")?.status).toBe("paused"));
     expect(startedPrompts).toEqual(["window-1"]);
 
+    monotonicMs = 1000000;
     await expect(runtime.resumeJob("job-1")).resolves.toEqual({ ok: true });
     await expect(runPromise).resolves.toMatchObject({ ok: true });
     expect(startedPrompts).toEqual(["window-1", "window-2"]);
+    expect(runtimeStates.at(-1)).toMatchObject({
+      executedWindowCount: 2,
+      executedWindowElapsedMs: 210000
+    });
   }, 20000);
 
   it("defers delete terminal state until all parallel batch windows drain", async () => {

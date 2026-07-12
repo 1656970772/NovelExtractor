@@ -243,8 +243,24 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
     queuedByGlobalLimitText: "等待可用运行槽",
     queuedByBookLimitText: "等待同书任务完成"
   },
+  jobTimingDefaults: {
+    initialWindowEstimateMinMs: 90000,
+    initialWindowEstimateMaxMs: 120000
+  },
   jobFailureRetryDefaults: {
     failureRetryIntervalMs: 300000
+  },
+  minimaxTokenPlanWaitDefaults: {
+    enabled: true,
+    providerPresetIds: ["minimax", "minimax-en"],
+    quotaEndpointPath: "/v1/token_plan/remains",
+    exhaustedMessageFragments: [
+      "Token Plan 用量上限",
+      "Token Plan usage limit",
+      "Token Plan quota"
+    ],
+    textQuotaModelNamePatterns: ["^general$", "^MiniMax-M"],
+    retrySafetyBufferMs: 30000
   },
   llmFailurePolicyDefaults: {
     nonRetryableContextLimitFragments: [

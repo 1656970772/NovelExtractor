@@ -212,8 +212,22 @@ export interface JobSchedulerDefaults {
   queuedByBookLimitText: string;
 }
 
+export interface JobTimingDefaults {
+  initialWindowEstimateMinMs: number;
+  initialWindowEstimateMaxMs: number;
+}
+
 export interface JobFailureRetryDefaults {
   failureRetryIntervalMs: number;
+}
+
+export interface MiniMaxTokenPlanWaitDefaults {
+  enabled: boolean;
+  providerPresetIds: string[];
+  quotaEndpointPath: string;
+  exhaustedMessageFragments: string[];
+  textQuotaModelNamePatterns: string[];
+  retrySafetyBufferMs: number;
 }
 
 export interface LlmFailurePolicyDefaults {
@@ -337,7 +351,9 @@ export interface NovelExtractorConfig {
   ruleLayerDefaults: RuleLayerDefaults;
   quantityPolicyDefaults: QuantityPolicyDefaults;
   jobSchedulerDefaults: JobSchedulerDefaults;
+  jobTimingDefaults: JobTimingDefaults;
   jobFailureRetryDefaults: JobFailureRetryDefaults;
+  minimaxTokenPlanWaitDefaults: MiniMaxTokenPlanWaitDefaults;
   llmFailurePolicyDefaults: LlmFailurePolicyDefaults;
   taskActions: TaskActionConfig;
   taskStatus: TaskStatusConfig;

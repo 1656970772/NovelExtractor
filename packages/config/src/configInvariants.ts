@@ -523,6 +523,19 @@ function assertJobSchedulerDefaults(config: NovelExtractorConfig): void {
   }
 }
 
+function assertJobTimingDefaults(config: NovelExtractorConfig): void {
+  const defaults = config.jobTimingDefaults;
+  assertConfigObject(defaults, "job timing defaults");
+  assertPositiveInteger(defaults.initialWindowEstimateMinMs, "initial window estimate minimum");
+  assertPositiveInteger(defaults.initialWindowEstimateMaxMs, "initial window estimate maximum");
+
+  if (defaults.initialWindowEstimateMinMs > defaults.initialWindowEstimateMaxMs) {
+    throw new ConfigInvariantError(
+      "initial window estimate minimum must not exceed initial window estimate maximum."
+    );
+  }
+}
+
 function assertJobFailureRetryDefaults(config: NovelExtractorConfig): void {
   const defaults = config.jobFailureRetryDefaults;
   assertConfigObject(defaults, "job failure retry defaults");
@@ -531,6 +544,45 @@ function assertJobFailureRetryDefaults(config: NovelExtractorConfig): void {
     throw new ConfigInvariantError("failure retry interval must be a positive integer.");
   }
   assertPositiveInteger(defaults.failureRetryIntervalMs, "failure retry interval");
+}
+
+function assertMiniMaxTokenPlanWaitDefaults(config: NovelExtractorConfig): void {
+  const defaults = config.minimaxTokenPlanWaitDefaults;
+  assertConfigObject(defaults, "MiniMax Token Plan wait defaults");
+  assertBoolean(defaults.enabled, "MiniMax Token Plan wait enabled");
+  assertNonEmptyStringArray(defaults.providerPresetIds, "MiniMax Token Plan provider preset ids");
+  assertUnique(defaults.providerPresetIds, "MiniMax Token Plan provider preset ids");
+  assertNonEmpty(defaults.quotaEndpointPath, "MiniMax Token Plan quota endpoint path");
+  assertNonEmptyStringArray(
+    defaults.exhaustedMessageFragments,
+    "MiniMax Token Plan exhausted message fragments"
+  );
+  assertUnique(
+    defaults.exhaustedMessageFragments,
+    "MiniMax Token Plan exhausted message fragments"
+  );
+  assertNonEmptyStringArray(
+    defaults.textQuotaModelNamePatterns,
+    "MiniMax Token Plan text quota model name patterns"
+  );
+  assertUnique(
+    defaults.textQuotaModelNamePatterns,
+    "MiniMax Token Plan text quota model name patterns"
+  );
+  assertNonNegativeInteger(
+    defaults.retrySafetyBufferMs,
+    "MiniMax Token Plan retry safety buffer"
+  );
+
+  for (const pattern of defaults.textQuotaModelNamePatterns) {
+    try {
+      new RegExp(pattern, "iu");
+    } catch {
+      throw new ConfigInvariantError(
+        `MiniMax Token Plan text quota model name pattern is invalid: ${pattern}`
+      );
+    }
+  }
 }
 
 function assertLlmFailurePolicyDefaults(config: NovelExtractorConfig): void {
@@ -683,7 +735,9 @@ export function assertValidConfigInvariants(config: NovelExtractorConfig): void 
   assertRuleLayerDefaults(config);
   assertQuantityPolicyDefaults(config);
   assertJobSchedulerDefaults(config);
+  assertJobTimingDefaults(config);
   assertJobFailureRetryDefaults(config);
+  assertMiniMaxTokenPlanWaitDefaults(config);
   assertLlmFailurePolicyDefaults(config);
 
   assertUnique(

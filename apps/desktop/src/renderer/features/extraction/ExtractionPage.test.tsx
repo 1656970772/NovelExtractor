@@ -700,6 +700,47 @@ describe("ExtractionPage", () => {
     expect(screen.getByText("预计总耗时：00:01:20")).toBeInTheDocument();
   });
 
+  it("keeps elapsed time frozen while a running job waits for Token Plan reset", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-02T13:18:07.000Z"));
+
+    render(
+      <ExtractionPage
+        providerOptions={providerOptionsForTest}
+        books={[]}
+        jobs={[
+          {
+            id: "job-token-plan-waiting",
+            status: "running",
+            progressText: "等待 Token Plan 重置",
+            progress: { completedWindowCount: 1, totalWindowCount: 4, percent: 25 },
+            timing: {
+              startedAt: "2026-07-02T10:00:00.000Z",
+              elapsedMs: 127_000,
+              elapsedUpdatedAt: "2026-07-02T10:02:07.000Z",
+              elapsedTimerState: "waiting_token_plan",
+              estimatedTotalMs: 3_190_000,
+              estimateState: "available"
+            } as never,
+            inputSummary: {
+              bookDisplayName: "额度等待小说",
+              templateNames: [],
+              modelId: "MiniMax-M3"
+            }
+          }
+        ]}
+        state="ready"
+      />
+    );
+
+    expect(screen.getByText("已用时：00:02:07")).toBeInTheDocument();
+    await act(async () => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(screen.getByText("已用时：00:02:07")).toBeInTheDocument();
+    expect(screen.getByText("预计总耗时：00:53:10")).toBeInTheDocument();
+  });
+
   it("only renders output directory action for completed jobs", () => {
     render(
       <ExtractionPage
@@ -924,6 +965,28 @@ describe("ExtractionPage", () => {
     expect(onRetryPolicyChange).toHaveBeenCalledWith("job-retry", true);
   });
 
+  it("keeps the automatic retry toggle editable while a task is running", () => {
+    render(
+      <ExtractionPage
+        providerOptions={providerOptionsForTest}
+        books={[]}
+        jobs={[
+          {
+            id: "job-running-retry",
+            status: "running",
+            progressText: "1/3",
+            autoRetryOnFailure: true
+          }
+        ]}
+        state="ready"
+        onRetryPolicyChange={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+
+    expect(screen.getByRole("checkbox", { name: "失败后自动续跑" })).toBeEnabled();
+    expect(screen.getAllByText("失败后自动续跑")).toHaveLength(1);
+  });
+
   it("shows automatic retry state and disables the toggle after completion", () => {
     render(
       <ExtractionPage
@@ -941,7 +1004,7 @@ describe("ExtractionPage", () => {
       />
     );
 
-    expect(screen.getAllByText("失败后自动续跑").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("失败后自动续跑")).toHaveLength(1);
     expect(screen.getByRole("checkbox", { name: "失败后自动续跑" })).toBeDisabled();
   });
 

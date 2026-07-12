@@ -982,7 +982,15 @@ p {
 }
 
 .job-card__footer > .job-log-panel {
-  flex: 1 1 220px;
+  display: contents;
+}
+
+.job-card__footer > .job-log-panel > .job-log-actions {
+  margin-left: auto;
+}
+
+.job-card__footer > .job-log-panel > .job-log-content {
+  flex: 1 0 100%;
 }
 
 .state-banner {

@@ -211,6 +211,8 @@ export interface JobTimingDto {
   startedAt?: string;
   completedAt?: string;
   elapsedMs?: number;
+  elapsedUpdatedAt?: string;
+  elapsedTimerState?: "running" | "waiting_token_plan";
   estimatedTotalMs?: number;
   estimatedRemainingMs?: number;
   estimateState: "unknown" | "calculating" | "available" | "frozen";

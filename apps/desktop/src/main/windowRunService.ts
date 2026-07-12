@@ -54,6 +54,10 @@ import {
   createModelFallbackPlan,
   type ModelFallbackCandidate
 } from "./modelFallbackPlan";
+import type {
+  MiniMaxTokenPlanWaitContext,
+  MiniMaxTokenPlanWaitGate
+} from "./minimaxTokenPlanWaitGate";
 import type { MainProviderStore } from "./providerStore";
 import {
   loadReportCoverageIndex,
@@ -117,6 +121,7 @@ export interface WindowRunArtifacts {
 
 export interface WindowRunServiceOptions {
   clock: Clock;
+  monotonicNow?: () => number;
   credentialStore: MemoryCredentialStore;
   createRulesSemanticHash?: (templates: readonly TemplateDto[]) => string;
   fetch?: FetchLike;
@@ -125,12 +130,15 @@ export interface WindowRunServiceOptions {
   onRuntimeCreated?(input: { jobId: string; runtime: JobRuntime }): Promise<void> | void;
   onRuntimeSettled?(input: { jobId: string; runtime: JobRuntime }): Promise<void> | void;
   onModelCandidateChanged?(input: { jobId: string; candidate: ModelFallbackCandidate }): Promise<void> | void;
+  onTokenPlanWaitStarted?(input: { jobId: string }): Promise<void> | void;
+  onTokenPlanWaitEnded?(input: { jobId: string }): Promise<void> | void;
   onRuntimeState(state: JobRuntimeState): Promise<void> | void;
   providerStore: MainProviderStore;
   registerReport(input: { path: string; report: ReportAsset }): Promise<void> | void;
   taskLogger?: TaskTextLogger;
   enabledToolNames?: readonly string[];
   templateBatchFailureRetryIntervalMs?: number;
+  tokenPlanWaitGate?: MiniMaxTokenPlanWaitGate;
 }
 
 export interface WindowRunService {
@@ -274,8 +282,11 @@ interface RuntimeChatClient {
     messages: ChatCompletionMessage[];
     tools: ToolDefinition[];
     onRequestPrepared?: (snapshot: PreparedChatCompletionRequest) => void | Promise<void>;
+    onTokenPlanWait?: (delayMs: number) => void | Promise<void>;
+    waitForTokenPlan?: (delayMs: number) => Promise<void>;
   }): Promise<ChatCompletionResult>;
   currentCandidate(): ModelFallbackCandidate;
+  resolveTokenPlanRetryDelay(error: unknown): Promise<number | undefined>;
 }
 
 function getWindowMetadata(window: JobWindowInput): RuntimeWindowManifestWindow {
@@ -463,10 +474,13 @@ function createBatchBriefLogValue(input: {
 
 function isRateLimitError(error: unknown): boolean {
   if (error instanceof OpenAiCompatibleRequestError) {
-    return error.details.status === 429 || /rate\s*limit|限流|速率限制/u.test(error.message);
+    return (
+      error.details.status === 429 ||
+      /rate\s*limit|限流|速率限制|用量上限|quota/iu.test(error.message)
+    );
   }
 
-  return /rate\s*limit|限流|速率限制/u.test(toSafeErrorMessage(error));
+  return /rate\s*limit|限流|速率限制|用量上限|quota/iu.test(toSafeErrorMessage(error));
 }
 
 function createWindowCoverageTargets(input: {
@@ -2516,6 +2530,10 @@ function formatModelCandidate(candidate: ModelFallbackCandidate): string {
 }
 
 export function createWindowRunService(options: WindowRunServiceOptions): WindowRunService {
+  const monotonicNow = options.monotonicNow ?? (() => performance.now());
+  let activeTokenPlanWaitCount = 0;
+  let tokenPlanWaitStartedAtMs: number | undefined;
+  let completedTokenPlanWaitElapsedMs = 0;
   const enabledToolNames = options.enabledToolNames ?? DEFAULT_ENABLED_TOOL_NAMES;
   const enabledToolNameSet = new Set<string>(enabledToolNames);
   const toolDefinitions = getEnabledToolDefinitions([...enabledToolNames]).map(toLlmToolDefinition);
@@ -2526,6 +2544,48 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
       return options.credentialStore.readApiKey(ref) ?? null;
     }
   };
+
+  function getTokenPlanWaitElapsedMs(nowMs: number = monotonicNow()): number {
+    return (
+      completedTokenPlanWaitElapsedMs +
+      (activeTokenPlanWaitCount > 0 && tokenPlanWaitStartedAtMs !== undefined
+        ? Math.max(0, nowMs - tokenPlanWaitStartedAtMs)
+        : 0)
+    );
+  }
+
+  async function waitForTokenPlanReset(
+    jobId: string,
+    delayMs: number,
+    wait?: (delayMs: number) => Promise<void>
+  ): Promise<void> {
+    const isFirstWaiter = activeTokenPlanWaitCount === 0;
+    activeTokenPlanWaitCount += 1;
+    if (isFirstWaiter) {
+      tokenPlanWaitStartedAtMs = monotonicNow();
+    }
+
+    try {
+      if (isFirstWaiter) {
+        await options.onTokenPlanWaitStarted?.({ jobId });
+      }
+      if (wait) {
+        await wait(delayMs);
+      } else {
+        await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+      }
+    } finally {
+      activeTokenPlanWaitCount = Math.max(0, activeTokenPlanWaitCount - 1);
+      if (activeTokenPlanWaitCount === 0) {
+        const endedAtMs = monotonicNow();
+        if (tokenPlanWaitStartedAtMs !== undefined) {
+          completedTokenPlanWaitElapsedMs += Math.max(0, endedAtMs - tokenPlanWaitStartedAtMs);
+        }
+        tokenPlanWaitStartedAtMs = undefined;
+        await options.onTokenPlanWaitEnded?.({ jobId });
+      }
+    }
+  }
 
   async function readWindowText(project: Project, manifestWindow: RuntimeWindowManifestWindow): Promise<string> {
     return fs.readFile(path.join(project.rootPath, manifestWindow.textPath), "utf8");
@@ -2747,6 +2807,21 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
             completion = await input.chatClient.chatCompletion({
               messages,
               tools: toolDefinitions,
+              onTokenPlanWait: async (nextRetryDelayMs) => {
+                const error = new Error("MiniMax Token Plan 额度已用尽，等待额度窗口重置");
+                await input.taskLogger?.append(["错误", "批次重试"], {
+                  批次ID: `batch-${String(input.batchIndex + 1).padStart(4, "0")}`,
+                  窗口ID: input.manifestWindow.windowId,
+                  窗口序号: input.manifestWindow.index + 1,
+                  窗口: `${input.manifestWindow.index + 1}/${input.totalWindowCount}`,
+                  批次: `${input.batchIndex + 1}/${input.batchTotal}`,
+                  轮次: currentRoundIndex,
+                  错误: error.message,
+                  下次重试延迟毫秒: nextRetryDelayMs,
+                  上下文消息数: messages.length
+                });
+                await input.onRequestRetry?.({ error, nextRetryDelayMs });
+              },
               onRequestPrepared: async (snapshot) => {
                 const preparedCandidate = input.chatClient.currentCandidate();
                 await input.taskLogger?.append(
@@ -2766,7 +2841,9 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
                     windowText: input.windowText
                   })
                 );
-              }
+              },
+              waitForTokenPlan: (delayMs) =>
+                waitForTokenPlanReset(input.job.id, delayMs, input.waitForRequestRetry)
             });
             break;
           } catch (error) {
@@ -2777,7 +2854,10 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
               throw error;
             }
 
+            const tokenPlanRetryDelayMs =
+              await input.chatClient.resolveTokenPlanRetryDelay(error);
             const retryDelayMs =
+              tokenPlanRetryDelayMs ??
               options.templateBatchFailureRetryIntervalMs ??
               DEFAULT_CONFIG.extractionRuleDefaults.templateBatching.failureRetryIntervalMs;
             await input.taskLogger?.append(["错误", "批次重试"], {
@@ -2792,7 +2872,13 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
               上下文消息数: messages.length
             });
             await input.onRequestRetry?.({ error, nextRetryDelayMs: retryDelayMs });
-            if (input.waitForRequestRetry) {
+            if (tokenPlanRetryDelayMs !== undefined) {
+              await waitForTokenPlanReset(
+                input.job.id,
+                tokenPlanRetryDelayMs,
+                input.waitForRequestRetry
+              );
+            } else if (input.waitForRequestRetry) {
               await input.waitForRequestRetry(retryDelayMs);
             } else {
               await new Promise<void>((resolve) => setTimeout(resolve, retryDelayMs));
@@ -3242,6 +3328,19 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
     let client = createClientForCandidate(currentCandidate);
     const maxSwitches = maxAutoFallbackSwitches(fallbackPlan?.candidateCount() ?? 0);
 
+    function currentTokenPlanWaitContext(): MiniMaxTokenPlanWaitContext {
+      const { provider } = registry.resolveModelRef(
+        `${currentCandidate.providerConfigId}/${currentCandidate.modelId}`
+      );
+      return {
+        apiKeyRef: provider.apiKeyRef,
+        baseUrl: provider.baseUrl,
+        modelId: currentCandidate.modelId,
+        presetId: provider.presetId,
+        providerConfigId: currentCandidate.providerConfigId
+      };
+    }
+
     function createClientForCandidate(candidate: ModelFallbackCandidate): OpenAiCompatibleClient {
       const { provider } = registry.resolveModelRef(`${candidate.providerConfigId}/${candidate.modelId}`);
 
@@ -3254,9 +3353,27 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
       currentCandidate() {
         return currentCandidate;
       },
+      async resolveTokenPlanRetryDelay(error) {
+        return options.tokenPlanWaitGate?.recordFailure(
+          currentTokenPlanWaitContext(),
+          error
+        );
+      },
       async chatCompletion(chatInput) {
         let switchCount = 0;
         for (;;) {
+          const tokenPlanWaitDelayMs = options.tokenPlanWaitGate?.getRemainingDelayMs(
+            currentTokenPlanWaitContext()
+          );
+          if (tokenPlanWaitDelayMs !== undefined) {
+            await chatInput.onTokenPlanWait?.(tokenPlanWaitDelayMs);
+            if (chatInput.waitForTokenPlan) {
+              await chatInput.waitForTokenPlan(tokenPlanWaitDelayMs);
+            } else {
+              await new Promise<void>((resolve) => setTimeout(resolve, tokenPlanWaitDelayMs));
+            }
+            continue;
+          }
           try {
             return await client.chatCompletion({
               providerId: currentCandidate.providerConfigId,
@@ -3905,6 +4022,7 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
         state.completedTemplateTargetCount += progress.completedTemplateTargetCount;
         state.skippedTemplateTargetCount += progress.skippedTemplateTargetCount;
         state.executedTemplateTargetCount += progress.executedTemplateTargetCount;
+        state.executedWindowElapsedMs += Math.max(0, progress.executedWindowElapsedMs ?? 0);
         state.usage = addUsage(state.usage, progress.usage);
         await saveState();
         await emit("job.window.completed", {
@@ -4313,10 +4431,12 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
               const batchLogger = requireBatchValue(batchLoggerById, batch.batchId, "logger");
               const batchContext = requireBatchValue(batchContextById, batch.batchId, "context");
               const batchChatClient = requireBatchValue(batchChatClientById, batch.batchId, "chat client");
+              const windowStartedAt = monotonicNow();
+              const tokenPlanWaitElapsedAtWindowStart = getTokenPlanWaitElapsedMs(windowStartedAt);
 
               runtimeControls.beginWindow();
               try {
-                return await runManifestWindowTemplateBatch({
+                const result = await runManifestWindowTemplateBatch({
                   artifacts: batchArtifacts,
                   batch,
                   batchContext,
@@ -4341,6 +4461,21 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
                   totalWindowCount: runtimeInput.windows.length,
                   waitForRequestRetry: runtimeControls.waitForInWindowRetry
                 });
+                const windowEndedAt = monotonicNow();
+                const tokenPlanWaitElapsedDuringWindow = Math.max(
+                  0,
+                  getTokenPlanWaitElapsedMs(windowEndedAt) - tokenPlanWaitElapsedAtWindowStart
+                );
+                return {
+                  ...result,
+                  executedWindowElapsedMs:
+                    result.executedTemplateTargetCount > 0
+                      ? Math.max(
+                          0,
+                          windowEndedAt - windowStartedAt - tokenPlanWaitElapsedDuringWindow
+                        )
+                      : 0
+                };
               } catch (error) {
                 if (error instanceof TemplateBatchPipelineAbortError) {
                   throw error;
@@ -4364,11 +4499,18 @@ export function createWindowRunService(options: WindowRunServiceOptions): Window
                 runtimeControls.endWindow();
               }
             },
-            async onProgress({ completedTemplateTargetCount, skippedTemplateTargetCount, executedTemplateTargetCount, usage }) {
+            async onProgress({
+              completedTemplateTargetCount,
+              skippedTemplateTargetCount,
+              executedTemplateTargetCount,
+              executedWindowElapsedMs,
+              usage
+            }) {
               await runtimeControls.recordProgress({
                 completedTemplateTargetCount,
                 skippedTemplateTargetCount,
                 executedTemplateTargetCount,
+                executedWindowElapsedMs,
                 usage
               });
             },

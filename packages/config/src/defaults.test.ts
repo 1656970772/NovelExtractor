@@ -337,6 +337,13 @@ describe("default config", () => {
     });
   });
 
+  it("provides initial window timing estimate bounds", () => {
+    expect(getDefaultConfig().jobTimingDefaults).toEqual({
+      initialWindowEstimateMinMs: 90000,
+      initialWindowEstimateMaxMs: 120000
+    });
+  });
+
   it("provides retry policy defaults for failed jobs and LLM fallback switching", () => {
     expect(getDefaultConfig().jobFailureRetryDefaults).toEqual({
       failureRetryIntervalMs: 300000

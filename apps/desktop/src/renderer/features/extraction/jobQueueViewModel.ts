@@ -26,7 +26,6 @@ export interface JobCardViewModel {
   estimatedTotalText: string;
   completedAtText: string;
   failedAtText: string;
-  retryPolicyText?: string;
 }
 
 export interface JobCardViewModelOptions {
@@ -174,6 +173,17 @@ function getRunningElapsedMs(job: ExtractionJob, nowMs: number | undefined): num
     return job.timing?.elapsedMs;
   }
 
+  if (job.timing.elapsedTimerState === "waiting_token_plan") {
+    return job.timing.elapsedMs;
+  }
+
+  if (job.timing.elapsedUpdatedAt && job.timing.elapsedMs !== undefined) {
+    const elapsedUpdatedAtMs = Date.parse(job.timing.elapsedUpdatedAt);
+    if (!Number.isNaN(elapsedUpdatedAtMs) && Number.isFinite(nowMs)) {
+      return Math.max(0, job.timing.elapsedMs + Math.max(0, nowMs - elapsedUpdatedAtMs));
+    }
+  }
+
   const startedAtMs = Date.parse(job.timing.startedAt);
   if (Number.isNaN(startedAtMs) || !Number.isFinite(nowMs)) {
     return job.timing.elapsedMs;
@@ -199,11 +209,6 @@ export function getJobCardViewModel(
     elapsedText: formatCardDuration(getRunningElapsedMs(job, options.nowMs)),
     estimatedTotalText: getCardEstimatedTotalTimeLabel(job),
     completedAtText: formatTimestamp(job.timing?.completedAt),
-    failedAtText: formatTimestamp(job.timing?.completedAt),
-    retryPolicyText: job.autoRetryOnFailure
-      ? job.status === "failed"
-        ? "自动续跑已开启"
-        : "失败后自动续跑"
-      : undefined
+    failedAtText: formatTimestamp(job.timing?.completedAt)
   };
 }

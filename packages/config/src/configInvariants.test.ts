@@ -517,6 +517,30 @@ describe("config invariants", () => {
     expectInvariantViolation(withJobSchedulerDefaults({ queuedByBookLimitText: "" }), /book limit queue text/i);
   });
 
+  it("requires MiniMax Token Plan quota matching rules to be valid", () => {
+    const duplicateProvider = getDefaultConfig();
+    duplicateProvider.minimaxTokenPlanWaitDefaults.providerPresetIds.push("minimax");
+    expectInvariantViolation(duplicateProvider, /MiniMax Token Plan provider preset ids/i);
+
+    const invalidModelPattern = getDefaultConfig();
+    invalidModelPattern.minimaxTokenPlanWaitDefaults.textQuotaModelNamePatterns = ["["];
+    expectInvariantViolation(invalidModelPattern, /text quota model name pattern is invalid/i);
+  });
+
+  it("requires valid initial window timing estimate bounds", () => {
+    const zeroMinimum = getDefaultConfig();
+    zeroMinimum.jobTimingDefaults.initialWindowEstimateMinMs = 0;
+    expectInvariantViolation(zeroMinimum, /initial window estimate minimum/i);
+
+    const fractionalMaximum = getDefaultConfig();
+    fractionalMaximum.jobTimingDefaults.initialWindowEstimateMaxMs = 120000.5;
+    expectInvariantViolation(fractionalMaximum, /initial window estimate maximum/i);
+
+    const reversedBounds = getDefaultConfig();
+    reversedBounds.jobTimingDefaults.initialWindowEstimateMinMs = 120001;
+    expectInvariantViolation(reversedBounds, /must not exceed/i);
+  });
+
   it("requires failed job retry defaults to be configured with a positive interval", () => {
     const missingDefaults = getDefaultConfig();
     delete (missingDefaults as unknown as Record<string, unknown>).jobFailureRetryDefaults;

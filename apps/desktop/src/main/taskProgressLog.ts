@@ -246,6 +246,17 @@ function formatBriefRetryDelay(value: unknown): string {
   if (delayMs === undefined) {
     return "稍后";
   }
+  if (delayMs >= 3600000) {
+    const totalSeconds = Math.ceil(delayMs / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    return [
+      `${hours}小时`,
+      ...(minutes > 0 ? [`${minutes}分`] : []),
+      ...(seconds > 0 ? [`${seconds}秒`] : [])
+    ].join("");
+  }
   if (delayMs > 0 && delayMs % 60000 === 0) {
     return `${delayMs / 60000}分钟`;
   }
