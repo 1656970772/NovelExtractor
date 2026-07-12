@@ -2045,6 +2045,28 @@ p {
   min-width: 0;
 }
 
+.provider-form__heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--app-color-border);
+}
+
+.provider-form__heading span {
+  color: var(--app-color-ink);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.provider-form__heading p {
+  margin: 4px 0 0;
+  color: var(--app-color-ink-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .provider-form__presets {
   display: grid;
   gap: 8px;

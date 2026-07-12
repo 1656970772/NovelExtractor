@@ -16,6 +16,7 @@ export interface ProviderFormProps {
   onChange: (state: ProviderFormState) => void;
   onCancel: () => void;
   onFetchModels: () => void;
+  onStartNew: () => void;
   onSubmit: () => void;
 }
 
@@ -29,6 +30,7 @@ export function ProviderForm({
   onChange,
   onCancel,
   onFetchModels,
+  onStartNew,
   onSubmit
 }: ProviderFormProps) {
   const selectedPreset = PROVIDER_PRESETS.find((preset) => preset.id === formState.presetId);
@@ -55,8 +57,29 @@ export function ProviderForm({
 
   return (
     <form className="provider-form" onSubmit={handleSubmit}>
+      <div className="provider-form__heading">
+        <div>
+          <span>{formState.providerId ? "编辑已保存配置" : "新建配置"}</span>
+          <p>
+            {formState.providerId
+              ? "仅保存到当前选中的配置；切换模型服务会转为新建配置。"
+              : "选择模型服务只会初始化新配置，不会修改右侧已保存配置。"}
+          </p>
+        </div>
+        {formState.providerId ? (
+          <button
+            className="button button--secondary button--compact"
+            disabled={isSaving}
+            onClick={onStartNew}
+            type="button"
+          >
+            新建配置
+          </button>
+        ) : null}
+      </div>
+
       <fieldset className="provider-form__presets" disabled={isSaving}>
-        <legend>服务模式</legend>
+        <legend>选择模型服务</legend>
         {PROVIDER_PRESETS.map((preset) => (
           <label className="provider-form__radio" key={preset.id}>
             <input

@@ -196,18 +196,11 @@ export function createProviderFormState(
 }
 
 export function selectProviderPreset(
-  state: ProviderFormState,
+  _state: ProviderFormState,
   presetId: ProviderPresetId,
   presets = getProviderPresets()
 ): ProviderFormState {
-  const nextState = createProviderFormState(presetId, presets);
-
-  return {
-    ...nextState,
-    providerId: state.presetId === presetId ? state.providerId : undefined,
-    defaultModel: state.defaultModel,
-    enabled: state.enabled
-  };
+  return createProviderFormState(presetId, presets);
 }
 
 export function createProviderFormStateFromSavedProvider(

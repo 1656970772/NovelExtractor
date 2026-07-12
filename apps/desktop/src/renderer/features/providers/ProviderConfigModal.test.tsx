@@ -91,7 +91,10 @@ describe("ProviderConfigModal and UserMenu", () => {
     expect(within(dialog).getByRole("radio", { name: "Kimi" })).toBeInTheDocument();
     expect(within(dialog).getByRole("radio", { name: "MiniMax" })).toBeInTheDocument();
     expect(within(dialog).getByRole("radio", { name: "Xiaomi MiMo" })).toBeInTheDocument();
-    expect(within(screen.getByRole("group", { name: "服务模式" })).getAllByRole("radio")).toHaveLength(11);
+    expect(
+      within(screen.getByRole("group", { name: "选择模型服务" })).getAllByRole("radio")
+    ).toHaveLength(11);
+    expect(screen.getByText("选择模型服务只会初始化新配置，不会修改右侧已保存配置。")).toBeInTheDocument();
   });
 
   it("closes the provider config dialog from the header action", async () => {
@@ -203,6 +206,30 @@ describe("ProviderConfigModal and UserMenu", () => {
             isDefault: true
           })
         ]
+      })
+    );
+  });
+
+  it("starts a separate config from an edited provider without carrying its provider id", async () => {
+    const user = userEvent.setup();
+    const { onSaveProvider } = renderModal();
+
+    await user.click(screen.getByRole("button", { name: "编辑 DeepSeek" }));
+    expect(screen.getByText("编辑已保存配置")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "新建配置" }));
+    expect(screen.getByText("新建配置")).toBeInTheDocument();
+    expect(screen.getByLabelText("配置名称")).toHaveValue("DeepSeek");
+
+    await user.type(screen.getByLabelText("API key"), "sk-new-deepseek");
+    await user.click(screen.getByRole("button", { name: "保存配置" }));
+
+    expect(onSaveProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: undefined,
+        presetId: "deepseek",
+        displayName: "DeepSeek",
+        apiKey: "sk-new-deepseek"
       })
     );
   });

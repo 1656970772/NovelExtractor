@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { getProviderPresets } from "@novel-extractor/config";
 import type {
@@ -51,6 +51,12 @@ export function ProviderConfigModal({
   const [formState, setFormState] = useState<ProviderFormState>(() =>
     createProviderFormState("deepseek")
   );
+
+  useEffect(() => {
+    if (!open) {
+      setFormState(createProviderFormState("deepseek"));
+    }
+  }, [open]);
 
   if (!open) {
     return null;
@@ -156,6 +162,7 @@ export function ProviderConfigModal({
             onSubmit={() => {
               void handleSaveProvider();
             }}
+            onStartNew={() => setFormState(createProviderFormState(formState.presetId))}
             saveError={saveError}
             saveState={saveState}
           />

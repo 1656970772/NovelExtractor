@@ -250,6 +250,26 @@ describe("providerViewModel", () => {
     });
   });
 
+  it("clears provider id when selecting the current preset for a new config", () => {
+    const state = {
+      ...createProviderFormState("deepseek"),
+      providerId: "provider-deepseek",
+      displayName: "已保存的 DeepSeek",
+      defaultModel: false,
+      enabled: false
+    };
+
+    const newConfigState = selectProviderPreset(state, "deepseek");
+
+    expect(buildSaveProviderDto(newConfigState)).toMatchObject({
+      presetId: "deepseek",
+      providerId: undefined,
+      displayName: "DeepSeek",
+      defaultModel: true,
+      enabled: true
+    });
+  });
+
   it("merges fetched models while enabling the current default model", () => {
     const state = {
       ...createProviderFormState("deepseek"),

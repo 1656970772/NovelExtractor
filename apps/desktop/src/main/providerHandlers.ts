@@ -129,14 +129,12 @@ export function createProviderIpcHandlers(
     providers: ProviderConfig[],
     input: SaveProviderDto
   ): ProviderConfig | undefined {
-    if (input.providerId) {
-      const providerById = providers.find((provider) => provider.id === input.providerId);
-      if (providerById?.presetId === input.presetId) {
-        return providerById;
-      }
+    if (!input.providerId) {
+      return undefined;
     }
 
-    return providers.find((provider) => provider.presetId === input.presetId);
+    const providerById = providers.find((provider) => provider.id === input.providerId);
+    return providerById?.presetId === input.presetId ? providerById : undefined;
   }
 
   return {

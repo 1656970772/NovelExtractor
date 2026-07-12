@@ -96,6 +96,108 @@ describe("provider IPC handlers", () => {
     expect(JSON.stringify(await providerStore.listProviderConfigs())).not.toContain("sk-shared-store");
   });
 
+  it("creates independent configs when saving the same preset without a provider id", async () => {
+    const providerStore = createMemoryProviderStore();
+    const providerIds = ["provider-deepseek-one", "provider-deepseek-two"];
+    const contract = createIpcContract();
+    const handlers = {
+      ...createNotImplementedIpcHandlers(),
+      ...createProviderIpcHandlers({
+        providerIdFactory: () => providerIds.shift() ?? "provider-fallback",
+        providerStore
+      })
+    };
+
+    await contract.invoke(handlers, "providers:save", {
+      presetId: "deepseek",
+      displayName: "DeepSeek 主配置",
+      kind: "openai-compatible",
+      baseUrl: "https://api.deepseek.com",
+      apiKey: "sk-deepseek-one",
+      modelName: "deepseek-v4-flash",
+      defaultModel: true,
+      enabled: true
+    });
+    await contract.invoke(handlers, "providers:save", {
+      presetId: "deepseek",
+      displayName: "DeepSeek 备用配置",
+      kind: "openai-compatible",
+      baseUrl: "https://api.deepseek.com",
+      apiKey: "sk-deepseek-two",
+      modelName: "deepseek-v4-pro",
+      defaultModel: true,
+      enabled: true
+    });
+
+    expect(await providerStore.listProviderConfigs()).toMatchObject([
+      {
+        id: "provider-deepseek-one",
+        presetId: "deepseek",
+        displayName: "DeepSeek 主配置"
+      },
+      {
+        id: "provider-deepseek-two",
+        presetId: "deepseek",
+        displayName: "DeepSeek 备用配置"
+      }
+    ]);
+  });
+
+  it("creates independent custom configs and only updates one by explicit provider id", async () => {
+    const providerStore = createMemoryProviderStore();
+    const providerIds = ["provider-custom-one", "provider-custom-two"];
+    const contract = createIpcContract();
+    const handlers = {
+      ...createNotImplementedIpcHandlers(),
+      ...createProviderIpcHandlers({
+        providerIdFactory: () => providerIds.shift() ?? "provider-fallback",
+        providerStore
+      })
+    };
+
+    for (const [displayName, baseUrl, apiKey, modelName] of [
+      ["自定义一", "https://one.example.test/v1", "sk-custom-one", "model-one"],
+      ["自定义二", "https://two.example.test/v1", "sk-custom-two", "model-two"]
+    ] as const) {
+      await contract.invoke(handlers, "providers:save", {
+        presetId: "custom-openai-compatible",
+        displayName,
+        kind: "openai-compatible",
+        baseUrl,
+        apiKey,
+        modelName,
+        defaultModel: true,
+        enabled: true
+      });
+    }
+
+    await contract.invoke(handlers, "providers:save", {
+      providerId: "provider-custom-one",
+      presetId: "custom-openai-compatible",
+      displayName: "自定义一（已编辑）",
+      kind: "openai-compatible",
+      baseUrl: "https://one-updated.example.test/v1",
+      modelName: "model-one-updated",
+      defaultModel: true,
+      enabled: true
+    });
+
+    expect(await providerStore.listProviderConfigs()).toMatchObject([
+      {
+        id: "provider-custom-one",
+        displayName: "自定义一（已编辑）",
+        baseUrl: "https://one-updated.example.test/v1",
+        apiKeyRef: expect.any(Object)
+      },
+      {
+        id: "provider-custom-two",
+        displayName: "自定义二",
+        baseUrl: "https://two.example.test/v1",
+        apiKeyRef: expect.any(Object)
+      }
+    ]);
+  });
+
   it("saves every official preset model and marks the selected model as default", async () => {
     let savedConfigs: ProviderConfig[] = [];
     const providerStore = {
