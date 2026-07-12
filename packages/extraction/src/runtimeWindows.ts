@@ -2,10 +2,11 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { ChapterParseError, parseChapters, type ParsedChapter } from "./chapterParser";
+import { decodeNovelText } from "./textEncoding";
 import { ChapterWindowPlanningError, planChapterWindows } from "./windowPlanner";
 
 const DEFAULT_SPLITTER_VERSION = "ts-window-planner-v1";
-const CHAPTER_PARSER_VERSION = "builtin-heading-v1";
+const CHAPTER_PARSER_VERSION = "builtin-heading-v2";
 
 export type RuntimeWindowGenerationErrorCode = "INVALID_INPUT" | "NO_CHAPTERS" | "SOURCE_OUTSIDE_PROJECT";
 
@@ -64,7 +65,8 @@ export interface GenerateRuntimeWindowsResult {
 
 export async function generateRuntimeWindows(input: GenerateRuntimeWindowsInput): Promise<GenerateRuntimeWindowsResult> {
   const normalizedInput = normalizeInput(input);
-  const sourceText = await readFile(normalizedInput.sourceTextAbsolutePath, "utf8");
+  const sourceBuffer = await readFile(normalizedInput.sourceTextAbsolutePath);
+  const sourceText = decodeNovelText(sourceBuffer).text;
   const sourceTextHash = sha256(sourceText);
   const splitConfigHash = hashSplitConfig(normalizedInput);
   const manifestPath = path.join(normalizedInput.windowsRoot, "manifest.json");

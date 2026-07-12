@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import iconv from "iconv-lite";
 import { afterEach, describe, expect, it } from "vitest";
 import { generateRuntimeWindows, RuntimeWindowGenerationError } from "./runtimeWindows";
 
@@ -13,6 +14,39 @@ afterEach(async () => {
 });
 
 describe("generateRuntimeWindows", () => {
+  it("decodes a GBK source with section headings before planning runtime windows", async () => {
+    const projectRoot = await createTempProject();
+    const sourceTextPath = path.join(projectRoot, "books/source.txt");
+    await mkdir(path.dirname(sourceTextPath), { recursive: true });
+    await writeFile(
+      sourceTextPath,
+      iconv.encode(
+        ["正文", "第一节 《小云雨诀》", "正文一", "第二节 玉简", "正文二"].join("\n"),
+        "gbk"
+      )
+    );
+
+    const result = await generateRuntimeWindows({
+      projectRoot,
+      jobId: "job-gbk-sections",
+      bookId: "book-xiuzhen",
+      sourceTextPath,
+      singleRunChapterCount: 2,
+      overlapChapterCount: 0,
+      extractionChapterCount: 2,
+      generatedAt: "2026-07-12T00:00:00.000Z"
+    });
+
+    expect(result.manifest.totalDetectedChapterCount).toBe(2);
+    expect(result.manifest.windows[0]?.contextChapterTitles).toEqual([
+      "第一节 《小云雨诀》",
+      "第二节 玉简"
+    ]);
+    await expect(readFile(path.join(result.windowsRoot, "window-0001.txt"), "utf8")).resolves.toContain(
+      "# 第一节 《小云雨诀》"
+    );
+  });
+
   it("writes CLI-aligned runtime windows and a manifest for an 81 chapter source", async () => {
     const projectRoot = await createTempProject();
     const sourceTextPath = await writeSource(projectRoot, "books/source.txt", buildChapters(81));
