@@ -789,7 +789,13 @@ describe("ExtractionPage", () => {
           {
             id: "job-failed",
             status: "failed",
-            progressText: "窗口 3/5",
+            progressText: "任务失败，5 分钟后自动续跑",
+            progress: {
+              completedWindowCount: 3,
+              totalWindowCount: 5,
+              percent: 60
+            },
+            autoRetryOnFailure: true,
             failureReason: "模型返回格式无效",
             timing: {
               completedAt: "2026-07-02T09:40:30.000Z",
@@ -814,6 +820,7 @@ describe("ExtractionPage", () => {
     expect(screen.getByRole("heading", { name: "失败的书" })).toBeInTheDocument();
     expect(screen.getByText("模型返回格式无效")).toBeInTheDocument();
     expect(screen.getByText("失败时间：2026-07-02 17:40:30")).toBeInTheDocument();
+    expect(screen.getByText("任务失败，5 分钟后自动续跑")).toBeInTheDocument();
   });
 
   it("marks job cards with status-specific classes for visual state colors", () => {

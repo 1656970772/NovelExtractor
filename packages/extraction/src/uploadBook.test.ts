@@ -82,6 +82,27 @@ describe("uploadBook", () => {
     expect(repository.savedUploads).toHaveLength(1);
   });
 
+  it("uploads a GBK novel whose numbered headings use 节 instead of 章", async () => {
+    const { project, sourcePath } = await createProjectWithSource(
+      "修真世界.txt",
+      iconv.encode("正文\n第一节 《小云雨诀》\n正文一\n第二节 玉简\n正文二", "gbk")
+    );
+    const repository = createFakeUploadedBookRepository();
+
+    const result = await uploadBook({
+      project,
+      sourcePath,
+      repository,
+      idGenerator: createSequentialIdGenerator(["book-xiuzhen", "source-xiuzhen"])
+    });
+
+    expect(result.encoding).toBe("gbk");
+    expect(result.book).toMatchObject({
+      displayName: "修真世界",
+      chapterCount: 2
+    });
+  });
+
   it("does not create book metadata or assets when decoding fails", async () => {
     const { project, sourcePath } = await createProjectWithSource(
       "broken.txt",

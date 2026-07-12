@@ -333,7 +333,7 @@ function cloneJson<T>(value: T): T {
 
 function createProjectRuntimeStoreFixture(input: {
   failRunningJobSaveOnce?: boolean;
-} = {}): ProjectRuntimeStore {
+} = {}): ProjectRuntimeStore & { readState(): ProjectRuntimeState } {
   const state: ProjectRuntimeState = {
     schemaVersion: 1,
     books: [],
@@ -344,6 +344,9 @@ function createProjectRuntimeStoreFixture(input: {
   let shouldFailRunningJobSave = input.failRunningJobSaveOnce ?? false;
 
   return {
+    readState() {
+      return cloneJson(state);
+    },
     async load() {
       return cloneJson(state);
     },
@@ -1933,10 +1936,11 @@ describe("P0 desktop IPC handlers", () => {
       const failedJob = await startJobAndWaitForTerminal(contract, handlers, job.id);
       expect(failedJob.status).toBe("failed");
 
-      await contract.invoke(handlers, "jobs:updateRetryPolicy", {
+      const retryEnabledJob = await contract.invoke(handlers, "jobs:updateRetryPolicy", {
         jobId: job.id,
         autoRetryOnFailure: true
       });
+      expect(retryEnabledJob.progressText).toBe("任务失败，50ms 后自动续跑");
       const retryDisabledJob = await contract.invoke(handlers, "jobs:updateRetryPolicy", {
         jobId: job.id,
         autoRetryOnFailure: false
@@ -1945,6 +1949,7 @@ describe("P0 desktop IPC handlers", () => {
       await new Promise((resolve) => setTimeout(resolve, 80));
 
       expect(retryDisabledJob.autoRetryOnFailure).toBe(false);
+      expect(retryDisabledJob.progressText).toBe("任务失败");
       expect(mockServer.requests).toHaveLength(1);
     } finally {
       await mockServer.close();
@@ -2018,7 +2023,10 @@ describe("P0 desktop IPC handlers", () => {
       });
 
       const failedJob = await startJobAndWaitForTerminal(contract, handlers, retryJob.id);
-      expect(failedJob.status).toBe("failed");
+      expect(failedJob).toMatchObject({
+        status: "failed",
+        progressText: "任务失败，100ms 后自动续跑"
+      });
       expect(mockServer.requests).toHaveLength(1);
 
       await expect(contract.invoke(handlers, "jobs:start", { jobId: blockingJob.id })).resolves.toMatchObject({
@@ -2503,6 +2511,63 @@ describe("P0 desktop IPC handlers", () => {
       })
     ]);
   });
+
+  it.each(["任务失败", "窗口 28/108"])(
+    "normalizes stale failed-job progress after restart: %s",
+    async (staleProgressText) => {
+      vi.useFakeTimers();
+      try {
+        const contract = createIpcContract();
+        const runtimeStore = createProjectRuntimeStoreFixture();
+        const handlerOptions = {
+          failureRetryIntervalMs: 5 * 60_000,
+          projectRuntimeStoreFactory: () => runtimeStore
+        };
+        const handlers = createHandlers(handlerOptions);
+        const book = await contract.invoke(handlers, "books:uploadTxt", {
+          projectId: "project-a",
+          filePath: utf8FixturePath,
+          displayName: "自动续跑持久化小说.txt"
+        });
+        const job = await contract.invoke(handlers, "jobs:create", {
+          bookId: book.bookId,
+          templateIds: ["pill-analysis"],
+          providerConfigId: "provider-1",
+          modelId: "mock-model",
+          autoRetryOnFailure: true,
+          singleRunChapterCount: 2,
+          extractionChapterCount: 2,
+          overlapChapterCount: 1,
+          templateBatchSize: 1,
+          skipAlreadyExtracted: true
+        });
+        const storedJob = runtimeStore.readState().jobs.find((candidate) => candidate.id === job.id);
+        expect(storedJob).toBeDefined();
+        await runtimeStore.saveJob({
+          ...(storedJob as ProjectRuntimeJobRecord),
+          status: "failed",
+          progressText: staleProgressText,
+          failureReason: "旧版本持久化失败"
+        });
+
+        const restartedHandlers = createHandlers(handlerOptions);
+        const runtime = await contract.invoke(restartedHandlers, "projectRuntime:get", {
+          projectId: "project-a"
+        });
+
+        expect(runtime.jobs).toEqual([
+          expect.objectContaining({
+            id: job.id,
+            status: "failed",
+            autoRetryOnFailure: true,
+            progressText: "任务失败，5 分钟后自动续跑"
+          })
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
 
   it("loads persisted jobs when their selected project template was deleted later", async () => {
     const contract = createIpcContract();

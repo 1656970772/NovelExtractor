@@ -111,7 +111,7 @@ function isPrintableTextCharacter(character: string): boolean {
 }
 
 function hasLegacyNovelTextSignal(text: string): boolean {
-  const hasChapterHeading = text.split("\n").some(isChapterHeading);
+  const hasChapterHeading = text.split("\n").some((line) => isChapterHeading(line));
   const characters = Array.from(text.trim());
   const cjkCharacters = characters.filter(isCjkCharacter);
   if (cjkCharacters.length / characters.length < LEGACY_MIN_CJK_RATIO) {

@@ -226,6 +226,9 @@ export function JobList({
                     </>
                   ) : null}
                   {job.status === "failed" ? <span>失败时间：{card.failedAtText}</span> : null}
+                  {job.status === "failed" && job.autoRetryOnFailure && card.hasStructuredProgress ? (
+                    <span className="job-card__retry-status">{card.progressText}</span>
+                  ) : null}
                   {isRuntimeActiveJobStatus(job.status) || job.status === "paused" ? (
                     <>
                       <span>已用时：{card.elapsedText}</span>

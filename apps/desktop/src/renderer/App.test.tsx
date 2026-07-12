@@ -762,7 +762,7 @@ describe("desktop workbench shell", () => {
       id: "job-failed",
       bookId: "book-1",
       status: "failed",
-      progressText: "进度：0/2",
+      progressText: "任务失败，5 分钟后自动续跑",
       inputSummary: {
         bookDisplayName: "凡人修仙传",
         templateNames: ["丹药分析模板"],
@@ -783,7 +783,7 @@ describe("desktop workbench shell", () => {
       jobId: "job-failed",
       autoRetryOnFailure: true
     });
-    expect(await screen.findByText("自动续跑已开启")).toBeInTheDocument();
+    expect(await screen.findByText("任务失败，5 分钟后自动续跑")).toBeInTheDocument();
   });
 
   it("shows an extraction error when opening the job output directory fails", async () => {

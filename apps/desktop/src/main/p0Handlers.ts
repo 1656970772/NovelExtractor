@@ -653,6 +653,10 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     }
 
     for (const job of state.jobs) {
+      const isFirstHydration = !jobsById.has(job.id);
+      if (isFirstHydration && job.status === "failed" && job.input.autoRetryOnFailure) {
+        job.progressText = formatFailedJobProgressText(true);
+      }
       jobsById.set(job.id, job);
       syncFailureRetrySchedule(job);
     }
@@ -1282,6 +1286,16 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
     return `${ms}ms`;
   }
 
+  function formatFailedJobProgressText(autoRetryOnFailure: boolean | undefined): string {
+    if (!autoRetryOnFailure) {
+      return "任务失败";
+    }
+
+    const intervalText = formatFailureRetryInterval(failureRetryIntervalMs);
+    const afterSeparator = /(?:分钟|秒)$/u.test(intervalText) ? "" : " ";
+    return `任务失败，${intervalText}${afterSeparator}后自动续跑`;
+  }
+
   async function appendExistingJobLogEntry(
     job: P0JobRecord,
     tags: readonly string[],
@@ -1538,6 +1552,9 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
   ): Partial<P0JobRecord> {
     return {
       status: "failed",
+      progressText: job.input.autoRetryOnFailure
+        ? formatFailedJobProgressText(true)
+        : job.progressText,
       failureReason,
       timing: {
         ...job.timing,
@@ -1806,7 +1823,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       return await buildJobDto(
         await updateJob(latestJob, {
           ...toTerminalFailurePatch(latestJob, getFailureReason(error)),
-          progressText: "任务失败"
+          progressText: formatFailedJobProgressText(latestJob.input.autoRetryOnFailure)
         })
       );
     }
@@ -1939,7 +1956,7 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
       const latestJob = withRunOptions(existingJob, runOptions);
       const failedJob = await updateJob(latestJob, {
         ...toTerminalFailurePatch(latestJob, getFailureReason(error)),
-        progressText: "任务失败"
+        progressText: formatFailedJobProgressText(latestJob.input.autoRetryOnFailure)
       });
       return await buildJobDto(failedJob);
     }
@@ -2182,6 +2199,10 @@ export function createP0IpcHandlers(options: P0IpcHandlersOptions = {}): P0Handl
         pendingAutoRetryRunLogsByJobId.delete(job.id);
       }
       const updatedJob = await updateJob(job, {
+        progressText:
+          job.status === "failed"
+            ? formatFailedJobProgressText(input.autoRetryOnFailure)
+            : job.progressText,
         input: {
           ...job.input,
           templateIds: [...job.input.templateIds],
