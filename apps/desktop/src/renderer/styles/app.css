@@ -1398,6 +1398,8 @@ p {
 }
 
 .job-row__failure {
+  grid-column: 1 / -1;
+  width: 100%;
   max-width: 100%;
   margin: 0;
   overflow-wrap: anywhere;

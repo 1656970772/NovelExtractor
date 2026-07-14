@@ -143,6 +143,16 @@ describe("default config", () => {
     expect(windowInstructions).toContain("不要写成无卡片或无字段名的连续正文");
   });
 
+  it("requires neutral summaries for sensitive fictional content in window system prompts", () => {
+    const windowInstructions = getDefaultConfig().toolLoopDefaults.windowInstructionLines.join("\n");
+
+    expect(windowInstructions).toContain("涉及性化描写、未成年人、服毒、自伤或暴力");
+    expect(windowInstructions).toContain("只保留与当前模板字段直接相关的中性事实");
+    expect(windowInstructions).toContain("与当前模板无关的敏感内容直接忽略");
+    expect(windowInstructions).toContain("不得输出露骨身体描写、敏感行为过程或煽情措辞");
+    expect(windowInstructions).toContain("简短、客观、非图像化");
+  });
+
   it("provides raw window report naming defaults", () => {
     expect(getDefaultConfig().rawWindowReportDefaults).toEqual({
       fileNamePrefix: "raw-window",

@@ -66,7 +66,7 @@ export interface GenerateRuntimeWindowsResult {
 export async function generateRuntimeWindows(input: GenerateRuntimeWindowsInput): Promise<GenerateRuntimeWindowsResult> {
   const normalizedInput = normalizeInput(input);
   const sourceBuffer = await readFile(normalizedInput.sourceTextAbsolutePath);
-  const sourceText = decodeNovelText(sourceBuffer).text;
+  const sourceText = decodeNovelText(sourceBuffer, { preserveLineEndings: true }).text;
   const sourceTextHash = sha256(sourceText);
   const splitConfigHash = hashSplitConfig(normalizedInput);
   const manifestPath = path.join(normalizedInput.windowsRoot, "manifest.json");

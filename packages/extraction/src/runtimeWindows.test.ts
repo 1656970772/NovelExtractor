@@ -14,6 +14,43 @@ afterEach(async () => {
 });
 
 describe("generateRuntimeWindows", () => {
+  it("preserves legacy UTF-8 CRLF window hashes when decoding the source", async () => {
+    const projectRoot = await createTempProject();
+    const sourceText = [
+      "第1章 标题1",
+      "正文第一行",
+      "正文第二行",
+      "第2章 标题2",
+      "正文"
+    ].join("\r\n");
+    const sourceTextPath = await writeSource(
+      projectRoot,
+      "books/source.txt",
+      sourceText
+    );
+    const expectedWindowText = [
+      "# 第1章 标题1\n\n正文第一行\r\n正文第二行",
+      "# 第2章 标题2\n\n正文"
+    ].join("\n\n");
+
+    const result = await generateRuntimeWindows({
+      projectRoot,
+      jobId: "job-legacy-crlf",
+      bookId: "book-legacy",
+      sourceTextPath,
+      singleRunChapterCount: 2,
+      overlapChapterCount: 0,
+      extractionChapterCount: 2,
+      generatedAt: "2026-07-12T00:00:00.000Z"
+    });
+
+    expect(result.manifest.sourceTextHash).toBe(sha256(sourceText));
+    expect(result.manifest.windows[0]?.windowHash).toBe(sha256(expectedWindowText));
+    await expect(readFile(path.join(result.windowsRoot, "window-0001.txt"), "utf8")).resolves.toBe(
+      expectedWindowText
+    );
+  });
+
   it("decodes a GBK source with section headings before planning runtime windows", async () => {
     const projectRoot = await createTempProject();
     const sourceTextPath = path.join(projectRoot, "books/source.txt");

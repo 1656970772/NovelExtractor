@@ -67,6 +67,8 @@ const PUBLIC_REPORT_METADATA_RULE =
   "正式报告中的资料来源、参考范围等公开元数据只能写窗口编号、章节范围、章节名或原文范围；不得暴露内部运行路径、项目路径、窗口文件名或流程性状态。";
 const TEMPLATE_EXAMPLE_EVIDENCE_RULE =
   "模板示例、字段说明、示例事件链和通用术语只作为格式参考；只有当前窗口原文或已读取既有报告明确证实时才可写入正式报告，未证实的分析结论必须写原文未说明或不写。";
+const SENSITIVE_CONTENT_NEUTRALIZATION_RULE =
+  "这是小说资料整理任务。涉及性化描写、未成年人、服毒、自伤或暴力的内容时，不复述原文细节，只保留与当前模板字段直接相关的中性事实；与当前模板无关的敏感内容直接忽略；不得输出露骨身体描写、敏感行为过程或煽情措辞，统一使用简短、客观、非图像化的语言归纳。";
 const TOOL_ERROR_FORMAT_EXAMPLES =
   "正确格式示例：read_file 参数 {\"path\":\"[报告]NPC性格与代表事件.md\"}；" +
   "write_file 参数 {\"path\":\"[报告]NPC性格与代表事件.md\",\"content\":\"# NPC性格与代表事件\\n\\n### 韩立\\n\\n- 核心性格：谨慎行事。\"}；" +
@@ -174,6 +176,7 @@ const DEFAULT_CONFIG_SOURCE = defineNovelExtractorConfig({
       "正式报告正文必须按模板案例的卡片样式组织：每张卡片用 `### 卡片名` 开头，卡片内字段统一写成 `- 字段名：内容说明`；必要子项缩进写在对应字段下，不要写成无卡片或无字段名的连续正文。",
       NO_WHOLE_BOOK_PRIOR_KNOWLEDGE_RULE,
       TEMPLATE_EXAMPLE_EVIDENCE_RULE,
+      SENSITIVE_CONTENT_NEUTRALIZATION_RULE,
       "待创建报告有可写入信息时，直接用 write_file 创建并写入完整报告正文；不要先创建空文件或模板占位正文。",
       "修改已有报告必须遵循固定流程：grep 定位关键词/字段 -> read_file offset/limit 读取命中附近上下文 -> edit_file / multi_edit 精确替换；old_string 必须来自已读取原文且唯一匹配。",
       "不要调用 read_report_excerpt 或 upsert_report_section；本轮默认使用通用文件读写工具。",

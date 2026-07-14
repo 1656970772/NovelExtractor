@@ -10,6 +10,7 @@ export interface DecodedNovelText {
 
 export interface DecodeNovelTextOptions {
   legacyEncoding?: Extract<NovelTextEncoding, "gbk" | "cp936">;
+  preserveLineEndings?: boolean;
 }
 
 export class TextDecodingError extends Error {
@@ -40,15 +41,17 @@ export function decodeNovelText(
   const buffer = Buffer.isBuffer(input) ? input : Buffer.from(input);
 
   if (hasUtf8Bom(buffer)) {
-    const text = normalizeLineEndings(decodeUtf8Strict(buffer.subarray(UTF8_BOM.length)));
-    assertReadableText(text);
-    return { text, encoding: "utf-8-bom" };
+    const decodedText = decodeUtf8Strict(buffer.subarray(UTF8_BOM.length));
+    const normalizedText = normalizeLineEndings(decodedText);
+    assertReadableText(normalizedText);
+    return { text: selectDecodedText(decodedText, normalizedText, options), encoding: "utf-8-bom" };
   }
 
   try {
-    const text = normalizeLineEndings(decodeUtf8Strict(buffer));
-    assertReadableText(text);
-    return { text, encoding: "utf-8" };
+    const decodedText = decodeUtf8Strict(buffer);
+    const normalizedText = normalizeLineEndings(decodedText);
+    assertReadableText(normalizedText);
+    return { text: selectDecodedText(decodedText, normalizedText, options), encoding: "utf-8" };
   } catch (error) {
     if (!(error instanceof TextDecodingError)) {
       throw error;
@@ -56,11 +59,23 @@ export function decodeNovelText(
   }
 
   const legacyEncoding = options.legacyEncoding ?? "gbk";
-  const text = normalizeLineEndings(iconv.decode(buffer, legacyEncoding));
-  assertReadableText(text);
-  assertReadableLegacyNovelText(text);
+  const decodedText = iconv.decode(buffer, legacyEncoding);
+  const normalizedText = normalizeLineEndings(decodedText);
+  assertReadableText(normalizedText);
+  assertReadableLegacyNovelText(normalizedText);
 
-  return { text, encoding: legacyEncoding };
+  return {
+    text: selectDecodedText(decodedText, normalizedText, options),
+    encoding: legacyEncoding
+  };
+}
+
+function selectDecodedText(
+  decodedText: string,
+  normalizedText: string,
+  options: DecodeNovelTextOptions
+): string {
+  return options.preserveLineEndings ? decodedText : normalizedText;
 }
 
 function hasUtf8Bom(buffer: Buffer): boolean {

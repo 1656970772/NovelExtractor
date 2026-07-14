@@ -160,6 +160,14 @@ describe("app css template modal layout", () => {
     expect(tokenRule).toContain("grid-column: 1 / -1");
   });
 
+  it("lets failed job reasons use the full details width", () => {
+    const failureRule = getRuleBody(".job-row__failure");
+
+    expect(failureRule).toContain("grid-column: 1 / -1");
+    expect(failureRule).toContain("width: 100%");
+    expect(failureRule).toContain("overflow-wrap: anywhere");
+  });
+
   it("keeps the template library scrollable with readable two-column rows", () => {
     const modalRule = getRuleBody(".template-modal");
     const scrollRule = getRuleBody(".template-modal__scroll");

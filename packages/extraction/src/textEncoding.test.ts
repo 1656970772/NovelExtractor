@@ -83,6 +83,14 @@ describe("decodeNovelText", () => {
 
     expect(result.text).toBe("第一章\n正文\n第二章");
   });
+
+  it("preserves source line endings when requested for legacy window hash compatibility", () => {
+    const result = decodeNovelText(Buffer.from("第一章\r\n正文\r第二章", "utf8"), {
+      preserveLineEndings: true
+    });
+
+    expect(result.text).toBe("第一章\r\n正文\r第二章");
+  });
 });
 
 function createGbkCompatibleNoise(seed: number): Buffer {
